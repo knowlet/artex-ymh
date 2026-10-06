@@ -36,6 +36,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -752,6 +753,55 @@ func (sh *reverseShell) Close(ctx context.Context) error {
 	return nil
 }
 
+// isOrphanPenelopeCmdline 判定一条 /proc cmdline 是否为本平台的孤儿 penelope:
+// 双特征防误杀——必须同时含本平台 penelope 脚本路径(dataDir 特征,别的部署/别的
+// dataDir 不命中)与 --mcp 标志(平台受管拉起形态;用户手工跑的交互式 penelope 不
+// 带 --mcp,不命中)。纯函数,可测。
+func isOrphanPenelopeCmdline(cmdline, binPath string) bool {
+	return binPath != "" && strings.Contains(cmdline, binPath) && strings.Contains(cmdline, "--mcp")
+}
+
+// reapOrphanPenelope 收割平台孤儿 penelope(上期进程崩溃/被 kill -9 时 close 没机会
+// 跑的残留):仅 Linux;遍历 /proc,命中双特征(见 isOrphanPenelopeCmdline)的进程
+// kill 并打日志。调用时机是 initReverse——本进程 handler 尚未启动,凡命中者必为
+// 上期孤儿(本进程台账为空,天然满足"不在本进程台账")。
+func (h *PenelopeHandler) reapOrphanPenelope() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return
+	}
+	self := os.Getpid()
+	reaped := 0
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid == self {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+		if err != nil {
+			continue // 进程已退出/无权限,跳过
+		}
+		cl := strings.ReplaceAll(string(data), "\x00", " ")
+		if !isOrphanPenelopeCmdline(cl, h.binPath) {
+			continue
+		}
+		if proc, err := os.FindProcess(pid); err == nil {
+			if err := proc.Kill(); err != nil {
+				log.Printf("[reverse] 孤儿 penelope(pid %d)收割失败: %v(cmdline: %s)", pid, err, strings.TrimSpace(cl))
+				continue
+			}
+			reaped++
+			log.Printf("[reverse] 收割孤儿 penelope pid %d(cmdline 含 %s + --mcp,系上期平台进程残留)", pid, h.binPath)
+		}
+	}
+	if reaped > 0 {
+		log.Printf("[reverse] 启动孤儿收割完成:共 %d 个上期 penelope 进程被回收", reaped)
+	}
+}
+
 // --- init/seed/工具装配 ---
 
 // initReverse 建反弹 handler(单例,懒起进程)。平台重启 = 上期 penelope 的 MCP
@@ -779,6 +829,9 @@ func (s *Server) initReverse(dataDir string) {
 		}
 	}
 	s.reverse = newPenelopeHandler(s.ctx, dataDir, s.sessStore, s.sessReg)
+	// 孤儿收割(资源生命周期专项):上期平台进程异常退出时 penelope 可能残留,
+	// 启动时对 /proc 按双特征(本平台脚本路径 + --mcp)对账收割,宁可漏不可误杀。
+	s.reverse.reapOrphanPenelope()
 	go func() { <-s.ctx.Done(); s.reverse.close() }()
 }
 

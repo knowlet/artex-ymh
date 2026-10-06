@@ -266,6 +266,14 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 	default:
 		log.Printf("[deadline] task %s 收尾时已是终态,保留原状态", t.ID)
 	}
+
+	// 落终态后回收任务级受管资源(对齐删除路径 StopTask):任务级 MITM 实例 +
+	// 该任务名下全部隧道。终态任务不再产生流量/不再需要隧道,留着就是孤儿。
+	// best-effort,幂等;终态落定失败也照常回收(超时预算已到,资源没理由续命)。
+	if taskIDInt, perr := strconv.ParseInt(t.ID, 10, 64); perr == nil {
+		e.m.CloseTaskProxy(taskIDInt)
+		e.m.CleanupTaskTunnels(taskIDInt)
+	}
 }
 
 // runFinalPlannerRound drives exactly ONE terminal planner round with the

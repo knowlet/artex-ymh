@@ -270,3 +270,51 @@ func TestInvalidNameRejected(t *testing.T) {
 		t.Fatalf("file should land inside stage dir: %v", err)
 	}
 }
+
+// 任务删除联动(P2):DeleteByTask 只清该任务的条目(含落盘文件),别的任务不受影响;
+// TTL 白嫖窗口归零——不再等自然过期。
+func TestDeleteByTask(t *testing.T) {
+	m := newTestManager(t)
+	e1, err := m.PutContent("a.sh", []byte("x"), PutOpts{TaskID: "42"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2, err := m.PutContent("b.sh", []byte("y"), PutOpts{TaskID: "42"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := m.PutContent("c.sh", []byte("z"), PutOpts{TaskID: "7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noTask, err := m.PutContent("d.sh", []byte("w"), PutOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n := m.DeleteByTask("42"); n != 2 {
+		t.Fatalf("DeleteByTask(42) = %d, want 2", n)
+	}
+	for _, e := range []*Entry{e1, e2} {
+		if _, err := os.Stat(filepath.Join(m.dir, e.Token)); !os.IsNotExist(err) {
+			t.Fatalf("条目 %s 的落盘目录应已删除: %v", e.Token, err)
+		}
+	}
+	// 别的任务与无任务条目不受影响。
+	list := m.List()
+	if len(list) != 2 {
+		t.Fatalf("剩余条目 = %d, want 2", len(list))
+	}
+	for _, e := range list {
+		if e.Token != other.Token && e.Token != noTask.Token {
+			t.Fatalf("误删条目: %+v", e)
+		}
+	}
+	// 幂等 + 空 taskID 防御。
+	if n := m.DeleteByTask("42"); n != 0 {
+		t.Fatalf("重复 DeleteByTask = %d, want 0", n)
+	}
+	if n := m.DeleteByTask(""); n != 0 {
+		t.Fatalf("空 taskID = %d, want 0", n)
+	}
+}

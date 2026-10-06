@@ -251,6 +251,26 @@ func (m *Manager) Delete(token string) bool {
 	return e != nil
 }
 
+// DeleteByTask 销毁某任务的全部暂存条目（任务删除联动：任务没了，它的 TTL
+// 白嫖窗口立即归零，不再等自然过期）。返回销毁条数。
+func (m *Manager) DeleteByTask(taskID string) int {
+	if taskID == "" {
+		return 0
+	}
+	m.mu.Lock()
+	var tokens []string
+	for token, e := range m.entries {
+		if e.TaskID == taskID {
+			tokens = append(tokens, token)
+		}
+	}
+	m.mu.Unlock()
+	for _, token := range tokens {
+		m.remove(token, EventDestroy)
+	}
+	return len(tokens)
+}
+
 // Download 服务一次下载（挂载在 GET /s/{token}/{name}）。防枚举要点：
 // token 不存在 / name 不匹配 / 已过期 / 命中限速——全部返回同一个未命中响应
 // （默认一致性 404；MissWriter 注入时按注入方，见字段注释）。

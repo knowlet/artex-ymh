@@ -63,6 +63,9 @@ func (s *Server) initTunnels(dataDir string) {
 	// 期 3b:隧道状态变化(新增/死亡/重拉/teardown)→ 热切换该任务 MITM 实例上游。
 	mgr.OnStateChange = s.m.RefreshTaskProxy
 	s.tunnels = mgr
+	// 受管资源回收接线(资源生命周期专项):任务停止/删除/超时落终态按任务回收,
+	// 进程退出全量回收——此前 Cleanup 存在但零调用方(港 VPS 孤儿监听器事故同款缺口)。
+	s.m.SetTunnelHooks(mgr.Cleanup, mgr.Close)
 	mgr.MarkOrphansError(s.ctx) // 平台重启 = server 进程全灭，诚实标 error，巡检按 deploy_params 重拉
 	mgr.StartHealth(s.ctx)
 	log.Printf("[tunnel] 多层代理隧道子系统已就绪（端口池 %s，巡检 %v)", config.TunnelPortRange(), tunnel.HealthInterval)

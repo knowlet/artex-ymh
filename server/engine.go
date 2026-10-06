@@ -296,9 +296,12 @@ func (e *Engine) StopTask(taskID string) {
 	e.deleteMu.Unlock()
 
 	// 期 3b:任务删除/归档连带销毁其 MITM 实例(端口注销;CA/录制树保留)。
+	// 受管资源联动回收:该任务名下的隧道也一并 Teardown(隧道是长寿命受管资源,
+	// 任务没了不许裸奔;只收本任务, Cleanup 按 taskID 过滤台账)。
 	if e.m != nil {
 		if id, err := strconv.ParseInt(taskID, 10, 64); err == nil {
 			e.m.CloseTaskProxy(id)
+			e.m.CleanupTaskTunnels(id)
 		}
 	}
 }

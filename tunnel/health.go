@@ -251,6 +251,30 @@ func (m *Manager) Cleanup(ctx context.Context, taskID int64) {
 	}
 }
 
+// Close 进程退出时回收全部在管隧道：杀平台侧 server 进程（本进程台账句柄优先，
+// 否则按现有 pid + /proc cmdline 校验防误杀）、台账全部未终结行标 stopped。
+// 与 Cleanup(ctx,0) 的区别：不做远端会话清理与 stage/authfile 清账——进程退出时
+// 会话注册表已不可用，远端残留由 Teardown/下次启动的人工处置负责。best-effort，
+// 单条失败只记日志。幂等。
+func (m *Manager) Close(ctx context.Context) {
+	recs, err := m.store.ListActive(ctx)
+	if err != nil {
+		log.Printf("[tunnel] Close 读台账失败: %v", err)
+		return
+	}
+	for _, r := range recs {
+		if r.State == db.TunnelStopped {
+			continue
+		}
+		var p Plan
+		_ = json.Unmarshal(r.DeployParams, &p)
+		m.killServer(r.ID, &p)
+		if err := m.store.UpdateState(ctx, r.ID, db.TunnelStopped, "平台进程退出回收"); err != nil {
+			log.Printf("[tunnel] Close 隧道 %d 标 stopped 失败: %v", r.ID, err)
+		}
+	}
+}
+
 // MarkOrphansError 平台重启后调用：所有 alive/deploying 台账行的平台侧进程已随
 // 重启消亡，诚实标 error（不装活）；健康巡检会按 deploy_params 自动重拉。
 func (m *Manager) MarkOrphansError(ctx context.Context) {

@@ -257,6 +257,35 @@ type Manager struct {
 	// taskProxy 期 3b 按任务 MITM 实例管理器(见 taskproxy.go);nil = 关闭
 	// (ARTEX_TASK_PROXY=off 或端口池非法)。worker 流量经任务实例 → 任务隧道。
 	taskProxy *taskProxyManager
+	// 隧道子系统回收钩子(server.initTunnels 注入 tunnel.Manager;nil = 隧道子系统
+	// 未启用)。任务停止/删除/超时落终态时按任务回收(Cleanup),进程退出时全量回收
+	// (Close)——隧道是长寿命受管资源,生命周期必须跟任务/进程走,不许没人收。
+	tunnelsCleanup func(ctx context.Context, taskID int64)
+	tunnelsClose   func(ctx context.Context)
+}
+
+// SetTunnelHooks 注入隧道子系统的回收钩子(server.initTunnels 在隧道 Manager
+// 就绪后调用一次)。
+func (m *Manager) SetTunnelHooks(cleanup func(ctx context.Context, taskID int64), closeAll func(ctx context.Context)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tunnelsCleanup = cleanup
+	m.tunnelsClose = closeAll
+}
+
+// CleanupTaskTunnels 回收某任务名下的全部隧道(任务停止/删除/超时落终态时调用)。
+// best-effort:tunnel.Cleanup 单条失败只记日志。独立短超时 context,不被调用方
+// (可能已取消的)任务 ctx 拖累。
+func (m *Manager) CleanupTaskTunnels(taskID int64) {
+	m.mu.RLock()
+	cleanup := m.tunnelsCleanup
+	m.mu.RUnlock()
+	if cleanup == nil || taskID <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cleanup(ctx, taskID)
 }
 
 // Settings keys the UI toggles at runtime.
@@ -1031,6 +1060,16 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 
 func (m *Manager) Close() error {
 	m.mu.Lock()
+	tunnelsClose := m.tunnelsClose
+	m.mu.Unlock()
+	// 隧道全量回收放在 m.mu 外:隧道 kill/台账写不依赖本锁,持锁做 IO 会阻塞整个
+	// Manager。nil = 隧道子系统未启用。
+	if tunnelsClose != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		tunnelsClose(ctx)
+		cancel()
+	}
+	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.taskProxy != nil {
 		m.taskProxy.Close()
@@ -1770,6 +1809,9 @@ func (m *Manager) DeleteTask(id string, opts DeleteTaskOptions) (DeleteTaskResul
 		}
 	}
 	m.forgetTask(id, n)
+	// 受管资源联动回收:该任务名下的隧道全部 Teardown(只收本任务,台账
+	// ListByTask 过滤;单条失败只记日志)。幂等——后续 engine.StopTask 还会再收一次。
+	m.CleanupTaskTunnels(n)
 	if err := errors.Join(finalizeErrs...); err != nil {
 		return result, &taskDeleteCommittedError{err: err}
 	}

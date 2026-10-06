@@ -1,6 +1,7 @@
 package server
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -59,5 +60,77 @@ func TestKnownManagedPortsCoversPlatform(t *testing.T) {
 	}
 	if known[9999] {
 		t.Fatal("9999 should NOT be on the ledger")
+	}
+}
+
+// portAuditClassify 两级处置:首次 WARN、连续两轮仍在升级一次、消失即清零重计。
+func TestPortAuditClassify(t *testing.T) {
+	seen := map[string]int{}
+	esc := map[string]bool{}
+
+	// 轮 1:首次发现 → WARN,不升级。
+	warned, escalated := portAuditClassify(seen, esc, []string{"0.0.0.0:8000"})
+	if !reflect.DeepEqual(warned, []string{"0.0.0.0:8000"}) || len(escalated) != 0 {
+		t.Fatalf("轮1: warned=%v escalated=%v", warned, escalated)
+	}
+
+	// 轮 2:仍在 → 升级(且不再 WARN)。
+	warned, escalated = portAuditClassify(seen, esc, []string{"0.0.0.0:8000"})
+	if len(warned) != 0 || !reflect.DeepEqual(escalated, []string{"0.0.0.0:8000"}) {
+		t.Fatalf("轮2: warned=%v escalated=%v", warned, escalated)
+	}
+
+	// 轮 3:仍在 → 不重复升级(hint 不刷屏)。
+	warned, escalated = portAuditClassify(seen, esc, []string{"0.0.0.0:8000"})
+	if len(warned) != 0 || len(escalated) != 0 {
+		t.Fatalf("轮3: warned=%v escalated=%v", warned, escalated)
+	}
+
+	// 轮 4:消失 → 清零;轮 5 复活 → 重新走两级(先 WARN)。
+	if warned, escalated = portAuditClassify(seen, esc, nil); len(warned) != 0 || len(escalated) != 0 {
+		t.Fatalf("轮4: warned=%v escalated=%v", warned, escalated)
+	}
+	warned, escalated = portAuditClassify(seen, esc, []string{"0.0.0.0:8000"})
+	if !reflect.DeepEqual(warned, []string{"0.0.0.0:8000"}) || len(escalated) != 0 {
+		t.Fatalf("轮5(复活): warned=%v escalated=%v", warned, escalated)
+	}
+
+	// 多个监听者各自独立计轮。
+	warned, escalated = portAuditClassify(seen, esc, []string{"0.0.0.0:8000", "10.0.0.2:9999"})
+	if len(warned) != 1 || warned[0] != "10.0.0.2:9999" { // 8000 是第二轮,9999 是首轮
+		t.Fatalf("多监听者: warned=%v", warned)
+	}
+	if !reflect.DeepEqual(escalated, []string{"0.0.0.0:8000"}) {
+		t.Fatalf("多监听者: escalated=%v", escalated)
+	}
+}
+
+// isOrphanPenelopeCmdline 双特征防误杀:本平台脚本路径 + --mcp 缺一不可。
+func TestIsOrphanPenelopeCmdline(t *testing.T) {
+	const bin = "/opt/artex/data/tools/penelope.py"
+	hits := []string{
+		"python3 /opt/artex/data/tools/penelope.py --mcp --mcp-host 127.0.0.1 --mcp-port 21001 --mcp-token ab -p 4444 -i 127.0.0.1 -C ",
+		"/usr/bin/python3 /opt/artex/data/tools/penelope.py --mcp -p 20001 -i 0.0.0.0 -C ",
+	}
+	misses := []string{
+		"", // 空
+		"python3 /opt/artex/data/tools/penelope.py -p 4444",        // 无 --mcp(用户手工交互式)
+		"python3 /other/deploy/tools/penelope.py --mcp -p 4444 -C", // 别的部署(别的 dataDir)
+		"python3 /opt/artex/data/tools/other.py --mcp",             // 同目录别的脚本
+		"grep penelope",                                            // 诊断命令
+	}
+	for _, cl := range hits {
+		if !isOrphanPenelopeCmdline(cl, bin) {
+			t.Errorf("应判孤儿但未判: %q", cl)
+		}
+	}
+	for _, cl := range misses {
+		if isOrphanPenelopeCmdline(cl, bin) {
+			t.Errorf("误杀风险(判成孤儿): %q", cl)
+		}
+	}
+	// binPath 为空时一律不判(无特征可核对,宁可漏)。
+	if isOrphanPenelopeCmdline(hits[0], "") {
+		t.Error("binPath 为空时不应判定")
 	}
 }

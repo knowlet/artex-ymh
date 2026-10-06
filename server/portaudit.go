@@ -10,12 +10,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Autumn-27/artex/db"
 )
 
-// 台账外监听端口审计(F13 轻量版,只观测不处置):worker 的 Bash 能起任意监听
-// (python -m http.server 之类的孤儿服务是通病),平台每 5 分钟扫一次本机监听,
-// 凡不在平台台账、且绑在非 loopback 的监听者打 WARN。不自动 kill——先只观测,
-// 误杀平台不知道的正当服务比漏报更糟。
+// 台账外监听端口审计(F13 两级版,只观测+提示不处置):worker 的 Bash 能起任意监听
+// (python -m http.server 之类的孤儿服务是通病,港 VPS 实证任务死后存活两周),平台每
+// 5 分钟扫一次本机监听,凡不在平台台账、且绑在非 loopback 的监听者按两级处置:
+// 首轮 WARN(日志 + 活动流通知卡),连续两轮(10 分钟)仍在 → 升级,写 hint 节点提示
+// planner/人处置。不自动 kill——误杀平台不知道的正当服务比漏报更糟。
 
 // knownManagedPorts 是平台台账内的监听端口:主服务(8787,stage 下载复用该端口)、
 // 流量录制代理(8788)、SSH(22),外加动态登记的受管端口(隧道 server 监听口等,
@@ -57,9 +60,17 @@ func (m *Manager) startPortAudit() {
 	if runtime.GOOS != "linux" {
 		return
 	}
+	seen := map[string]int{}   // 监听者 → 连续命中轮数
+	escalated := map[string]bool{} // 已升级(写 hint)的监听者,防重复刷 hint
 	audit := func() {
-		for _, w := range scanUnmanagedListeners() {
+		warned, esc := portAuditClassify(seen, escalated, scanUnmanagedListeners())
+		for _, w := range warned {
 			log.Printf("[portaudit] WARN 台账外监听者: %s (非 loopback,不在平台端口台账;若为遗忘的临时服务请处置)", w)
+			m.notifyUnmanagedListener(w)
+		}
+		for _, w := range esc {
+			log.Printf("[portaudit] WARN 台账外监听者升级: %s 连续两轮仍在,疑似孤儿服务,已写 hint 提示处置(平台不自动 kill,防误杀)", w)
+			m.hintUnmanagedListener(w)
 		}
 	}
 	audit()
@@ -70,6 +81,68 @@ func (m *Manager) startPortAudit() {
 			audit()
 		}
 	}()
+}
+
+// portAuditClassify 两级处置的纯逻辑(可测):found 是本轮扫描到的台账外非回环监听,
+// seen(连续轮数)/escalated(已升级标记)是跨轮状态,由调用方持有。返回(本轮首次
+// 告警列表, 本轮新升级列表)。连续两轮仍在才升级;某轮消失即清零重计(同时清升级
+// 标记,复活后重新走两级)。
+func portAuditClassify(seen map[string]int, escalated map[string]bool, found []string) (warned, escalatedNow []string) {
+	next := make(map[string]int, len(found))
+	for _, desc := range found {
+		n := seen[desc] + 1
+		next[desc] = n
+		switch {
+		case n == 1:
+			warned = append(warned, desc)
+		case !escalated[desc]:
+			escalated[desc] = true
+			escalatedNow = append(escalatedNow, desc)
+		}
+	}
+	for k := range seen {
+		delete(seen, k)
+	}
+	for k, v := range next {
+		seen[k] = v
+	}
+	for k := range escalated {
+		if next[k] == 0 {
+			delete(escalated, k)
+		}
+	}
+	return warned, escalatedNow
+}
+
+// notifyUnmanagedListener 首次发现台账外监听:往当前活动任务的活动流写一张通知卡
+// (无活动任务时只留 WARN 日志——告警不因为没任务而捏造归属)。
+func (m *Manager) notifyUnmanagedListener(desc string) {
+	t := m.ActiveTask()
+	if t == nil || t.Store == nil {
+		return
+	}
+	if _, err := t.Store.AppendActivity(db.Activity{Worker: "system", Kind: "text",
+		Summary: fmt.Sprintf("端口审计告警:发现台账外监听者 %s(非 loopback,不在平台端口台账);若为遗忘的临时服务请处置,连续两轮仍在将升级提示", desc)}); err != nil {
+		log.Printf("[portaudit] 活动流告警写入失败: %v", err)
+	}
+}
+
+// hintUnmanagedListener 升级处置:写 hint 节点进活动任务的探索图(planner 每轮
+// graph overview 必读 hints,与 tarpit 熔断/P0 巡检同一通道),提示 planner/人处置。
+// 不自动 kill——防误杀平台不知道的正当服务。
+func (m *Manager) hintUnmanagedListener(desc string) {
+	t := m.ActiveTask()
+	if t == nil || t.Store == nil {
+		return
+	}
+	if _, err := t.Store.AddNode(db.KindHint, map[string]any{
+		"text": fmt.Sprintf("【台账外监听升级】%s 已连续两轮端口审计仍在监听(非 loopback、不在平台台账),疑似裸起的孤儿服务(如遗忘的 python -m http.server)。请人工处置:确认来源后 kill,或确属受管则登记进端口台账。平台不自动 kill,防误杀正当服务。", desc),
+		"kind": "portaudit", "listener": desc,
+	}, 0, "active", "portaudit", nil); err != nil {
+		log.Printf("[portaudit] hint 写入失败: %v", err)
+		return
+	}
+	t.Notify() // 唤醒 planner,让 hint 在下一轮规划被看到
 }
 
 // scanUnmanagedListeners 读取 /proc/net/tcp{,6},返回所有「非台账端口 + 非 loopback」

@@ -311,6 +311,10 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedDefaultInterceptRulesV8(); err != nil {
 		return fmt.Errorf("seed intercept rules v8: %w", err)
 	}
+	// V9:守护化/起监听底线规则(资源生命周期专项:setsid/nohup/disown 逃逸进程组清理)。
+	if err := d.seedDefaultInterceptRulesV9(); err != nil {
+		return fmt.Errorf("seed intercept rules v9: %w", err)
+	}
 	if err := d.seedDefaultAssetInterceptRules(); err != nil {
 		return fmt.Errorf("seed asset intercept rules: %w", err)
 	}
@@ -857,4 +861,49 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 		return fmt.Errorf("rule %q: %w", name, err)
 	}
 	return d.SetSetting("intercept_default_rules_v8", "done")
+}
+
+// daemonizeHint 是守护化/起监听拦截规则的统一人工审批提示(文案即「guard 的提示」:
+// 命中 ask 时随审批卡片与 tool_result 一起给到人/模型)。
+const daemonizeHint = "检测到起监听/守护化进程模式(setsid / nohup / disown / 后台守护)。" +
+	"worker 的 Bash 退出时平台按进程组清理,守护化进程会逃逸清理、任务结束后成为无人回收的孤儿" +
+	"(实证:裸起的 python 监听器在任务死后存活两周)。起监听/守护进程需要人工确认;" +
+	"受管替代:反弹监听用 reverse_listen、文件投递用 stage_share、隧道用 tunnel_deploy。" +
+	"确属授权场景可人工放行一次。"
+
+// builtinDaemonizeRules 堵「守护化逃逸进程组清理」(资源生命周期专项,港 VPS 孤儿
+// 监听器事故):命令经 setsid/nohup/disown 脱离进程组后,平台在任务结束时的进程组
+// 清理杀不到它。平台底线规则:builtin=true,action=ask——守护化有正当场景(如隧道
+// 部署远端拉起,平台自己 tunnel_deploy 走 Go exec 不过 tool_input 拦截,天然豁免),
+// 放行交给人工。
+//
+// 起临时 HTTP 服务(python -m http.server / php -S 等)已由 V3 规则覆盖,这里不重复。
+var builtinDaemonizeRules = []struct {
+	name    string
+	pattern string
+}{
+	{
+		name: "[内置] 起监听/守护化进程(需人工确认): setsid/nohup/disown",
+		// 只拦"作为命令使用"(行首/管道/分号/与或/空白/引号之后 + 后跟空白或结尾),
+		// 不拦文本中提及该词(echo 说明文字、grep 结果诊断)。disown 是 shell 内建,
+		// 词边界即可。
+		pattern: "(?i)(?:^|[|;&\\s'\"`])(?:setsid|nohup)(?:\\s|$)|\\bdisown\\b",
+	},
+}
+
+// seedDefaultInterceptRulesV9 落地守护化底线规则。独立种子标记位,已有实例升级后也会拿到。
+func (d *DB) seedDefaultInterceptRulesV9() error {
+	if v, _, _ := d.GetSetting("intercept_default_rules_v9"); v == "done" {
+		return nil
+	}
+	for _, r := range builtinDaemonizeRules {
+		if _, err := d.Exec(`
+INSERT INTO intercept_rules(name, enabled, priority, match_target, match_type, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action, builtin)
+VALUES ($1, true, 86, 'tool_input', 'regex', $2, 'ask', $3, false, 60, 'deny', true)
+ON CONFLICT DO NOTHING`,
+			r.name, r.pattern, daemonizeHint); err != nil {
+			return fmt.Errorf("rule %q: %w", r.name, err)
+		}
+	}
+	return d.SetSetting("intercept_default_rules_v9", "done")
 }

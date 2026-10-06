@@ -173,6 +173,7 @@ func (s *Server) pgDeleteTask(w http.ResponseWriter, r *http.Request) {
 			// PostgreSQL is already gone. Complete runtime teardown and return the
 			// auditable counts together with the post-commit cleanup warning.
 			s.engine.StopTask(id)
+			s.deleteTaskStageEntries(id)
 			s.taskAgentMu.Lock()
 			delete(s.taskAgents, id)
 			s.taskAgentMu.Unlock()
@@ -187,6 +188,7 @@ func (s *Server) pgDeleteTask(w http.ResponseWriter, r *http.Request) {
 	// resolve it. Now stop and join every task-owned Engine goroutine and clear its
 	// lifecycle maps before releasing the delete barrier.
 	s.engine.StopTask(id)
+	s.deleteTaskStageEntries(id)
 	s.taskAgentMu.Lock()
 	delete(s.taskAgents, id)
 	s.taskAgentMu.Unlock()
@@ -197,6 +199,17 @@ func (s *Server) pgDeleteTask(w http.ResponseWriter, r *http.Request) {
 func writeCommittedTaskDelete(w http.ResponseWriter, result DeleteTaskResult, err error) {
 	result.CleanupWarning = err.Error()
 	writeJSON(w, http.StatusOK, result)
+}
+
+// deleteTaskStageEntries 任务删除联动清 stage:该任务的暂存条目立即销毁(记账
+// EventDestroy),TTL 白嫖窗口归零——不再等自然过期。stage 未启用时为空操作。
+func (s *Server) deleteTaskStageEntries(taskID string) {
+	if s.stage == nil {
+		return
+	}
+	if n := s.stage.DeleteByTask(taskID); n > 0 {
+		log.Printf("[stage] 任务 %s 删除,联动销毁 %d 条暂存条目", taskID, n)
+	}
 }
 
 func (s *Server) waitTaskQuiescent(ctx context.Context, taskID string) error {
