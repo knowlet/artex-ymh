@@ -21,6 +21,9 @@ services:
       context: .
       dockerfile: Dockerfile.source
     image: artex-ymh:local
+    # 本地构建镜像,永不向 registry 拉取(国内镜像站对不存在的镜像名会 403,
+    # docker compose pull 会误把本地镜像名往 Docker Hub 拉)
+    pull_policy: never
     depends_on:
       postgres:
         condition: service_healthy
