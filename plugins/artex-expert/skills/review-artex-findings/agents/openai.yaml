@@ -1,0 +1,4 @@
+interface:
+  display_name: "ARTEX 證據與報告"
+  short_description: "交叉驗證漏洞證據、區分誤報與未知，產出可複測的演練報告"
+  default_prompt: "使用 $review-artex-findings，檢查我的 ARTEX 結果並整理證據與修補優先序。"

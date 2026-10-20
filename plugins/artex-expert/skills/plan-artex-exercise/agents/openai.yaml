@@ -1,0 +1,4 @@
+interface:
+  display_name: "ARTEX 演練規劃"
+  short_description: "將演練目標、授權範圍、證據標準與停止條件轉為可執行計畫"
+  default_prompt: "使用 $plan-artex-exercise，替我的測試環境設計紅隊與紫隊演練計畫。"

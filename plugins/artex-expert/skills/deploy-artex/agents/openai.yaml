@@ -1,0 +1,4 @@
+interface:
+  display_name: "ARTEX 部署診斷"
+  short_description: "核對二開版本、資料庫、容器、LLM 與工具依賴並診斷故障"
+  default_prompt: "使用 $deploy-artex，檢查 ARTEX 部署需求、版本與啟動問題。"

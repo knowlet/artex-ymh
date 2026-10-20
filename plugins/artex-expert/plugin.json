@@ -1,0 +1,40 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "artex-expert",
+  "version": "0.1.0",
+  "description": "以 knowlet/artex-ymh 原始碼為依據的繁體中文紅隊演練專家，支援演練規劃、部署診斷、任務操作指引、證據驗證與報告。",
+  "author": {
+    "name": "knowlet"
+  },
+  "homepage": "https://github.com/knowlet/artex-ymh",
+  "repository": "https://github.com/knowlet/artex-ymh",
+  "license": "AGPL-3.0-only",
+  "keywords": [
+    "ARTEX",
+    "red-team",
+    "purple-team",
+    "security",
+    "pentest",
+    "zh-TW"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "ARTEX 紅隊演練專家",
+        "shortDescription": "演練規劃、部署診斷與證據驗證",
+        "longDescription": "以 knowlet/artex-ymh 的實際原始碼建立四個專家工作流程：規劃紅隊與紫隊演練、診斷 ARTEX 部署、檢查並操作已連線的任務，以及驗證發現與產出複測報告。內含版本化的架構、API 與操作注意事項。本外掛提供技能及參考資料；不包含已部署的 ARTEX 服務或遠端 MCP 執行器。",
+        "developerName": "knowlet",
+        "category": "Developer Tools",
+        "capabilities": [],
+        "logo": "./assets/artex.svg",
+        "composerIcon": "./assets/artex.svg",
+        "defaultPrompt": [
+          "幫我規劃一場 ARTEX 紅隊演練，整理範圍、測試假設、證據與停止條件。",
+          "檢查 ARTEX 的部署環境、版本與啟動問題。",
+          "分析這份 ARTEX 結果，區分已確認漏洞、誤報與待驗證項目。"
+        ]
+      }
+    }
+  }
+}
+
