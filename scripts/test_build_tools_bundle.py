@@ -114,7 +114,7 @@ class BundleTests(unittest.TestCase):
 
     def test_unapproved_urls(self):
         for url in ('http://github.com/x', 'file:///etc/passwd', 'https://evil.invalid/x',
-                    'https://github.com/github.com.evil.invalid/x' if False else 'https://github.com.evil.invalid/x', 'https://user:pass@github.com/x', 'https://github.com:80/x'):
+                    'https://github.com.evil.invalid/x', 'https://user:pass@github.com/x', 'https://github.com:80/x'):
             with self.subTest(url=url), self.assertRaises(b.BundleError):
                 b.checked_url(url)
 
