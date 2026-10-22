@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -152,4 +154,130 @@ func TestSecurityPGResetRevokesAndRollsBack(t *testing.T) {
 	if after != before {
 		t.Error("password changed despite revocation failure; transaction did not roll back")
 	}
+}
+
+// Exercise the actual PostgreSQL DELETE RETURNING and session issuance path,
+// not the in-memory authKV implementation. No HTTP listener is needed.
+func TestSecurityPGConcurrentRefreshHasOneWinner(t *testing.T) {
+	s, _ := authSecurityPG(t)
+	kv := s.m.pg
+	const callers = 8
+	kv.SetMaxOpenConns(callers)
+	kv.SetMaxIdleConns(callers)
+	// Warm distinct connections so the concurrent requests are not accidentally
+	// serialized behind opening the pool's first connection.
+	connections := make([]*sql.Conn, 0, callers)
+	for range callers {
+		conn, err := kv.Conn(t.Context())
+		if err != nil {
+			for _, opened := range connections {
+				opened.Close()
+			}
+			t.Fatal(err)
+		}
+		connections = append(connections, conn)
+	}
+	for _, conn := range connections {
+		if err := conn.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original, err := issueRefreshToken(kv, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresh := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/auth/refresh", nil)
+		request.AddCookie(cookieFor(original))
+		recorder := httptest.NewRecorder()
+		s.authRefresh(recorder, request)
+		return recorder
+	}
+	start := make(chan struct{})
+	results := make(chan *httptest.ResponseRecorder, callers)
+	var ready sync.WaitGroup
+	ready.Add(callers)
+	for range callers {
+		go func() { ready.Done(); <-start; results <- refresh() }()
+	}
+	ready.Wait()
+	close(start)
+	// Drain every request before assertions can terminate the test and remove
+	// its schema, including when a regression makes several requests succeed.
+	responses := make([]*httptest.ResponseRecorder, 0, callers)
+	for range callers {
+		responses = append(responses, <-results)
+	}
+	winners, rejected := 0, 0
+	successor := ""
+	for _, response := range responses {
+		var body struct {
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatalf("invalid response JSON: %v", err)
+		}
+		switch response.Code {
+		case http.StatusOK:
+			winners++
+			if body.Token == "" || !s.validAccessToken(body.Token) {
+				t.Error("winner did not receive a valid access token")
+			}
+			issued := 0
+			for _, cookie := range response.Result().Cookies() {
+				if cookie.Name == refreshCookieName && cookie.Value != "" && cookie.MaxAge >= 0 {
+					issued++
+					successor = cookie.Value
+				}
+			}
+			if issued != 1 {
+				t.Errorf("winner issued %d refresh credentials, want one", issued)
+			}
+		case http.StatusUnauthorized:
+			rejected++
+			if body.Token != "" {
+				t.Error("rejected refresh issued an access token")
+			}
+			for _, cookie := range response.Result().Cookies() {
+				if cookie.Name == refreshCookieName && cookie.Value != "" {
+					t.Error("rejected refresh issued a successor cookie")
+				}
+			}
+		default:
+			t.Errorf("unexpected refresh status %d: %s", response.Code, response.Body.String())
+		}
+	}
+	if winners != 1 || rejected != callers-1 {
+		t.Fatalf("concurrent refresh winners=%d rejected=%d; want 1 and %d", winners, rejected, callers-1)
+	}
+	if successor == "" || successor == original {
+		t.Fatal("refresh successor missing or reused original credential")
+	}
+	if _, ok, err := kv.GetSetting(refreshSettingKey(hashRefreshToken(original))); err != nil || ok {
+		t.Fatalf("original credential still stored: present=%v err=%v", ok, err)
+	}
+	if _, ok := validateRefreshToken(kv, successor, 0); !ok {
+		t.Fatal("successor credential is not valid in PostgreSQL")
+	}
+	assertOneSuccessor := func() {
+		t.Helper()
+		var count int
+		if err := kv.QueryRow(`SELECT count(*) FROM settings WHERE key LIKE 'auth.refresh.%'`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("stored refresh successors=%d, want exactly one", count)
+		}
+	}
+	assertOneSuccessor()
+	replay := refresh()
+	if replay.Code != http.StatusUnauthorized {
+		t.Fatalf("consumed credential replay returned %d", replay.Code)
+	}
+	for _, cookie := range replay.Result().Cookies() {
+		if cookie.Name == refreshCookieName && cookie.Value != "" {
+			t.Error("replay issued a successor cookie")
+		}
+	}
+	assertOneSuccessor()
 }

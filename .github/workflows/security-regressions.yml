@@ -83,6 +83,7 @@ jobs:
               (module + '/server', 'TestSecurityPGBootstrapOneWinner'),
               (module + '/server', 'TestSecurityPGAuthBodyLimit'),
               (module + '/server', 'TestSecurityPGResetRevokesAndRollsBack'),
+              (module + '/server', 'TestSecurityPGConcurrentRefreshHasOneWinner'),
           }
           if not required_pg <= expected:
               sys.exit('Required PostgreSQL regression tests are missing from selection')
