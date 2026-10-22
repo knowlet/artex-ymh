@@ -1,0 +1,120 @@
+name: security-regressions
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-regressions-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: artex_test
+          POSTGRES_PASSWORD: disposable_test_password
+          POSTGRES_DB: artex_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U artex_test -d artex_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Disposable service only; never point either variable at a deployed DB.
+      ARTEX_PG_DSN: postgres://artex_test:disposable_test_password@localhost:5432/artex_test?sslmode=disable
+      ARTEX_AUTH_TEST_DSN: postgres://artex_test:disposable_test_password@localhost:5432/artex_test?sslmode=disable
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Official refs verified through the GitHub API; no persisted git token.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify local test dependencies
+        run: |
+          set -euo pipefail
+          if ! command -v psql >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes postgresql-client
+          fi
+          command -v psql
+          command -v bash
+          command -v curl
+          command -v python3
+          psql "$ARTEX_AUTH_TEST_DSN" -v ON_ERROR_STOP=1 -c 'SELECT 1'
+      - name: Focused security regressions (require execution, report skips)
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import re
+          import subprocess
+          import sys
+
+          files = sorted(set(pathlib.Path('.').glob('**/*security*_test.go')) | {
+              pathlib.Path('server/auth_test.go'),
+          })
+          module = re.search(r'^module\s+(\S+)', pathlib.Path('go.mod').read_text(), re.M)[1]
+          expected = set()
+          packages = set()
+          for path in files:
+              names = re.findall(r'^func (Test\w+)\(t \*testing\.T\)', path.read_text(), re.M)
+              if not names:
+                  sys.exit(f'No test names found in {path}')
+              package = str(path.parent)
+              packages.add('./' + package)
+              expected.update((module + '/' + package, name) for name in names)
+          required_pg = {
+              (module + '/server', 'TestSecurityPGBootstrapOneWinner'),
+              (module + '/server', 'TestSecurityPGAuthBodyLimit'),
+              (module + '/server', 'TestSecurityPGResetRevokesAndRollsBack'),
+          }
+          if not required_pg <= expected:
+              sys.exit('Required PostgreSQL regression tests are missing from selection')
+          pattern = '^(' + '|'.join(sorted({name for _, name in expected})) + ')$'
+          # Serial packages prevent shared disposable-DB fixtures racing each other.
+          cmd = ['go', 'test', '-json', '-count=1', '-p=1', '-timeout=10m',
+                 '-run', pattern, *sorted(packages)]
+          print('Running:', ' '.join(cmd), flush=True)
+          passed, skipped = set(), []
+          process = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
+          for line in process.stdout:
+              print(line, end='', flush=True)
+              event = json.loads(line)
+              if event.get('Action') == 'pass' and event.get('Test'):
+                  passed.add((event['Package'], event['Test']))
+              if event.get('Action') == 'skip':
+                  skipped.append((event['Package'], event.get('Test', '<package>')))
+          status = process.wait()
+          missing = sorted(expected - passed)
+          print('Skipped tests/packages:', skipped)
+          print('Selected tests without a PASS event:', missing)
+          print('Required PostgreSQL tests passed:', sorted(required_pg & passed))
+          sys.exit(1 if status or missing or skipped else 0)
+          PY
+      - name: Full Go regression and vet gates (baseline failures remain failures)
+        run: |
+          set +e
+          go vet ./...
+          vet_status=$?
+          go test -count=1 -p=1 -timeout=15m ./...
+          test_status=$?
+          echo "go vet exit: $vet_status; full go test exit: $test_status"
+          if (( vet_status != 0 || test_status != 0 )); then
+            exit 1
+          fi
