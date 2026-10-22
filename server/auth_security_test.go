@@ -3,6 +3,9 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -121,5 +124,46 @@ func TestSecurityAuthDecodeBoundsAndDeadline(t *testing.T) {
 		if len(w.deadlines) != 2 || w.deadlines[0].IsZero() || !w.deadlines[1].IsZero() {
 			t.Fatalf("read deadline not set then cleared: %v", w.deadlines)
 		}
+	}
+}
+
+// Exercise both script dispatch paths without connecting to a database. Actual
+// transaction/revocation semantics are covered by the opt-in PostgreSQL test.
+func TestSecurityResetScriptSQLContract(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash unavailable")
+	}
+	for _, mode := range []string{"local", "docker"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			capture := filepath.Join(dir, "sql")
+			for _, name := range []string{"psql", "docker"} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\ncat > \"$ARTEX_TEST_SQL_CAPTURE\"\n"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command(bash, "../reset-password.sh", "-m", mode, "--exec", "docker", "-U", "fixture", "-d", "fixture", "-p", "synthetic-test-password", "-y")
+			cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "ARTEX_TEST_SQL_CAPTURE="+capture)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("script: %v: %s", err, output)
+			}
+			raw, err := os.ReadFile(capture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sql := string(raw)
+			prior := -1
+			for _, part := range []string{"BEGIN;", "VALUES ('auth.password_hash'", "VALUES ('auth.key_version', '1')", "DELETE FROM settings WHERE key LIKE 'auth.refresh.%';", "COMMIT;"} {
+				at := strings.Index(sql, part)
+				if at < 0 || at <= prior {
+					t.Fatalf("reset SQL missing/out of order %q", part)
+				}
+				prior = at
+			}
+			if !strings.Contains(sql, `\set ON_ERROR_STOP on`) {
+				t.Fatal("script does not stop on SQL errors")
+			}
+		})
 	}
 }
