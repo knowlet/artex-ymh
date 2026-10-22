@@ -38,6 +38,15 @@ def zip_bytes(members):
     return out.getvalue()
 
 
+def pe_bytes(machine=0x8664, offset=64):
+    data = bytearray(offset + 24)
+    data[:2] = b'MZ'
+    struct.pack_into('<I', data, 60, offset)
+    data[offset:offset + 4] = b'PE\0\0'
+    struct.pack_into('<H', data, offset + 4, machine)
+    return bytes(data)
+
+
 def fixture():
     payload = b'#!/bin/sh\nexit 0\n'
     license_text = b'Fixture license\n'
@@ -105,6 +114,11 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(len(lock['bundled']), 14)
         self.assertEqual(set(lock['external']), {'impacket', 'pypykatz', 'nxc'})
         self.assertTrue(all('/latest/' not in x['url'] for x in lock['downloads']))
+        self.assertEqual({output['path']: output.get('check')
+                          for spec in lock['downloads'] for output in spec['files']
+                          if output['path'].endswith('.exe')},
+                         {'mimikatz.exe': 'pe-amd64', 'laZagne.exe': 'pe-amd64',
+                          'peass/winPEASx64.exe': 'pe-amd64'})
 
     def test_missing_coverage(self):
         del self.lock['external']['python-tool']
@@ -339,13 +353,72 @@ class BundleTests(unittest.TestCase):
         struct.pack_into('<H', elf, 18, 183)
         with self.assertRaises(b.BundleError):
             b.check_format(elf, 'elf-amd64')
-        pe = bytearray(128)
-        pe[:2] = b'MZ'
-        struct.pack_into('<I', pe, 60, 64)
-        pe[64:68] = b'PE\0\0'
-        b.check_format(pe, 'pe')
+        b.check_format(pe_bytes(), 'pe-amd64')
+        b.check_format(pe_bytes(offset=288), 'pe-amd64')
         with self.assertRaises(b.BundleError):
-            b.check_format(b'<html>error</html>', 'pe')
+            b.check_format(b'<html>error</html>', 'pe-amd64')
+
+    def test_pe_wrong_machine_rejected(self):
+        for machine in (0x014c, 0xaa64, 0x0000, 0xffff):
+            with self.subTest(machine=hex(machine)), self.assertRaisesRegex(
+                    b.BundleError, 'expected Windows amd64 PE'):
+                b.check_format(pe_bytes(machine), 'pe-amd64')
+
+    def test_pe_truncated_and_invalid_headers_rejected(self):
+        data = pe_bytes()
+        # Includes absent/partial signatures, partial Machine, and a complete
+        # Machine followed by an incomplete remainder of the COFF header.
+        for size in (1, 63, *range(64, 88)):
+            with self.subTest(size=size), self.assertRaises(b.BundleError):
+                b.check_format(data[:size], 'pe-amd64')
+        for offset in (0, 2, 63, 65, len(data) - 4, len(data), 0xffffffff):
+            invalid = bytearray(data)
+            struct.pack_into('<I', invalid, 60, offset)
+            with self.subTest(offset=offset), self.assertRaisesRegex(
+                    b.BundleError, 'invalid PE header'):
+                b.check_format(invalid, 'pe-amd64')
+        for position in (0, 64):
+            invalid = bytearray(data)
+            invalid[position] = 0
+            with self.subTest(position=position), self.assertRaises(b.BundleError):
+                b.check_format(invalid, 'pe-amd64')
+
+    def test_untyped_pe_check_rejected(self):
+        with self.assertRaisesRegex(b.BundleError, 'unknown format check'):
+            b.check_format(pe_bytes(), 'pe')
+
+    def test_pe_architecture_rejected_by_build_and_verification(self):
+        # Use the production lock's actual check. This regression also runs
+        # against the original code AND lock, without an unknown-kind failure
+        # masking the original acceptance of incompatible machine types.
+        lock = json.loads((b.ROOT / 'packaging/tools-sources.lock.json').read_text())
+        check = next(output['check'] for spec in lock['downloads'] for output in spec['files']
+                     if output['path'] == 'mimikatz.exe')
+        spec = self.lock['downloads'][0]
+        spec['files'][0]['check'] = check
+        payloads = [(hex(machine), pe_bytes(machine)) for machine in (0x014c, 0xaa64, 0, 0xffff)]
+        payloads += [('truncated-coff', pe_bytes()[:-1])]
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'tools.tar.gz'
+            for label, data in [('amd64', pe_bytes()), *payloads]:
+                self.inputs[spec['url']] = data
+                spec['sha256'] = b.sha256(data)
+                if label == 'amd64':
+                    files = self.build()
+                    b.write_archive(files, path)
+                    b.verify_archive(path)
+                    continue
+                with self.subTest(payload=label, entrypoint='build'), self.assertRaisesRegex(
+                        b.BundleError, 'expected Windows amd64 PE|invalid PE header'):
+                    self.build()
+                # Make an internally consistent but incompatible bundle to
+                # independently exercise verification, not checksum failure.
+                with patch.object(b, 'check_format'):
+                    files = self.build()
+                b.write_archive(files, path)
+                with self.subTest(payload=label, entrypoint='verify'), self.assertRaisesRegex(
+                        b.BundleError, 'expected Windows amd64 PE|invalid PE header'):
+                    b.verify_archive(path)
 
     def test_invalid_lock_version_or_platform(self):
         for field, value in [('schema', 99), ('platform', 'linux/arm64')]:

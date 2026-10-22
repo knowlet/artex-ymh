@@ -207,12 +207,16 @@ def check_format(data: bytes, kind: str | None) -> None:
     if kind == "elf-amd64":
         if len(data) < 20 or data[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", data, 18)[0] != 62:
             raise BundleError("expected Linux amd64 ELF")
-    elif kind == "pe":
+    elif kind == "pe-amd64":
         if len(data) < 64 or data[:2] != b"MZ":
             raise BundleError("expected Windows PE")
         offset = struct.unpack_from("<I", data, 60)[0]
-        if data[offset:offset + 4] != b"PE\0\0":
+        # The signature and complete 20-byte COFF header must follow the DOS
+        # header. Machine is the first little-endian word after the signature.
+        if offset < 64 or offset + 24 > len(data) or data[offset:offset + 4] != b"PE\0\0":
             raise BundleError("invalid PE header")
+        if struct.unpack_from("<H", data, offset + 4)[0] != 0x8664:
+            raise BundleError("expected Windows amd64 PE")
     elif kind == "script":
         if not data.startswith(b"#!"):
             raise BundleError("expected a script with shebang")

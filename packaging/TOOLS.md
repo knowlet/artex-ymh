@@ -71,6 +71,12 @@ header，不是普通文件 SHA-1，也不宣称这是 SHA-256）。Mimikatz 的
 其他文件不进入产物。LaZagne 沿用原清单的 EXE SHA-256。任何不符都会失败，
 不能为了让 CI 通过而删除校验。
 
+三个 Windows EXE（mimikatz.exe、laZagne.exe、winPEASx64.exe）的固定内容均已
+确认是 amd64。来源锁使用明确的 `pe-amd64` 检查：构建和独立验证都会检查
+DOS/PE 签名、完整 COFF 头的边界，以及 `Machine = 0x8664`；x86、ARM64、
+未知架构和截断头会失败。它不是完整的 Windows 加载器兼容性测试。依据与回归
+验证见 [PE-VALIDATION.md](PE-VALIDATION.md)。
+
 这是根据公开来源重新建立的工具包，不声称与失落的原作者交付包逐字节一致。
 包内 `tools-manifest.json` 根据实际文件重新计算 SHA-256，不复用不匹配的历史
 部署哈希，也不改写仓库原清单。目录项由内部 `SHA256SUMS` 覆盖。
