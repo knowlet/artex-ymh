@@ -108,6 +108,7 @@ jobs:
           sys.exit(1 if status or missing or skipped else 0)
           PY
       - name: Full Go regression and vet gates (baseline failures remain failures)
+        id: candidate_gate
         run: |
           set +e
           go vet ./...
@@ -115,6 +116,65 @@ jobs:
           go test -count=1 -p=1 -timeout=15m ./...
           test_status=$?
           echo "go vet exit: $vet_status; full go test exit: $test_status"
+          if (( vet_status != 0 || test_status != 0 )); then
+            exit 1
+          fi
+      # Diagnostics only: the failed candidate gate above is never waived.
+      - name: Validate exact PR base for comparison
+        id: baseline_ref
+        if: ${{ failure() && steps.candidate_gate.outcome == 'failure' }}
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PR_BASE_SHA" ]]; then
+            echo "Baseline comparison unavailable: this run has no PR base SHA."
+            exit 0
+          fi
+          if [[ ! "$PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Invalid PR base SHA; refusing baseline checkout."
+            exit 1
+          fi
+          echo "sha=$PR_BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "available=true" >> "$GITHUB_OUTPUT"
+      - name: Check out pristine PR base (diagnostics only)
+        if: ${{ failure() && steps.candidate_gate.outcome == 'failure' && steps.baseline_ref.outputs.available == 'true' }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.baseline_ref.outputs.sha }}
+          path: .ci-pr-base
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Compare pristine base on fresh disposable database
+        if: ${{ failure() && steps.candidate_gate.outcome == 'failure' && steps.baseline_ref.outputs.available == 'true' }}
+        timeout-minutes: 15
+        working-directory: .ci-pr-base
+        env:
+          PR_BASE_SHA: ${{ steps.baseline_ref.outputs.sha }}
+          ARTEX_PG_DSN: postgres://artex_test:disposable_test_password@localhost:5432/artex_baseline?sslmode=disable
+          ARTEX_AUTH_TEST_DSN: postgres://artex_test:disposable_test_password@localhost:5432/artex_baseline?sslmode=disable
+          # Use the candidate's installed toolchain, not a base-directed download.
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR_BASE_SHA"
+          test -z "$(git status --porcelain)"
+          go version
+          # CREATE, never reuse: any existing database makes setup fail visibly.
+          psql 'postgres://artex_test:disposable_test_password@localhost:5432/postgres?sslmode=disable' \
+            -v ON_ERROR_STOP=1 -c 'CREATE DATABASE artex_baseline'
+          psql "$ARTEX_PG_DSN" -v ON_ERROR_STOP=1 -c 'SELECT current_database()'
+          set +e
+          timeout --kill-after=10s 4m go vet ./...
+          vet_status=$?
+          timeout --kill-after=10s 10m go test -count=1 -p=1 -timeout=15m ./...
+          test_status=$?
+          {
+            echo "PR base $PR_BASE_SHA: go vet exit=$vet_status; full go test exit=$test_status"
+            echo "Timeout exits (124/137) indicate incomplete evidence, not a baseline test failure."
+            echo "Compare individual failure names and diagnostics; matching nonzero exit codes alone prove nothing."
+            echo "The candidate gate remains failed regardless of this diagnostic result."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           if (( vet_status != 0 || test_status != 0 )); then
             exit 1
           fi
