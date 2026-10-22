@@ -139,10 +139,17 @@ export ARTEX_RESET_NEWPASS="$NEWPASS"
 SQL=$(cat <<SQL
 \\set ON_ERROR_STOP on
 \\getenv newpw ARTEX_RESET_NEWPASS
+BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 INSERT INTO settings(key, value)
 VALUES ('$PASS_KEY', crypt(:'newpw', gen_salt('bf', $BCRYPT_COST)))
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
+-- Atomically revoke pre-reset access and refresh credentials with the hash.
+INSERT INTO settings(key, value) VALUES ('auth.key_version', '1')
+ON CONFLICT (key) DO UPDATE
+SET value = (settings.value::bigint + 1)::text, updated_at = now();
+DELETE FROM settings WHERE key LIKE 'auth.refresh.%';
+COMMIT;
 SQL
 )
 
