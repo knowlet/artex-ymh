@@ -65,7 +65,7 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
 	// applyIntercept below. Other tools record an empty command.
 	var cmd string
 	switch ev.ToolName {
-	case "Bash", "shell_open":
+	case "Bash", "shell_open", "session_exec":
 		var in struct {
 			Command string `json:"command"`
 		}
@@ -120,11 +120,25 @@ func (g *Guard) checkEgress(ev hook.Event, cmd string) (hook.Result, bool) {
 	}
 	if ev.ToolName == "WebFetch" {
 		var in struct {
-			URL  string `json:"url"`
-			Body string `json:"body"`
+			URL     string         `json:"url"`
+			Body    string         `json:"body"`
+			Headers map[string]any `json:"headers"`
 		}
 		if json.Unmarshal(ev.Input, &in) == nil {
 			texts = append(texts, in.URL, in.Body)
+			for name, values := range in.Headers {
+				texts = append(texts, name)
+				switch v := values.(type) {
+				case string:
+					texts = append(texts, v)
+				case []any:
+					for _, item := range v {
+						if value, ok := item.(string); ok {
+							texts = append(texts, value)
+						}
+					}
+				}
+			}
 		}
 	}
 	for _, text := range texts {

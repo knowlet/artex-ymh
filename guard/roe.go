@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"strings"
 
@@ -52,7 +53,8 @@ func (c RoEConfig) mode() string {
 // checkRoE is the PreToolUse RoE scope gate: extract interaction targets from
 // the tool call and compare them against the task's registered scope. Returns
 // stop=true with a hook.Result when the call is gated (strict ask / block).
-// In / Unknown / no-target all pass through.
+// Known in-scope targets and unregistered scopes pass through. Strict mode
+// requires approval for syntactically opaque destinations within a scoped task.
 func (g *Guard) checkRoE(ctx context.Context, ev hook.Event, cmd string) (hook.Result, bool) {
 	g.mu.Lock()
 	cfg := g.roe
@@ -71,11 +73,20 @@ func (g *Guard) checkRoE(ctx context.Context, ev hook.Event, cmd string) (hook.R
 	if taskID <= 0 {
 		return hook.Result{}, false // 非任务运行(chat 等),无范围可查 → Unknown → 放行
 	}
+	rules := cfg.Scope(taskID)
 	hosts := roeHosts(ev.ToolName, ev.Input, cmd)
-	if len(hosts) == 0 {
-		return hook.Result{}, false // 提取不出目标 = 无目标,不拦截(保守取向)
+	// Extraction is only a heuristic, not proof that a shell command has no destination.
+	if len(rules) > 0 && unresolvedDestination(ev.ToolName, cmd, hosts) {
+		reason := "RoE 授权范围检查: 无法静态确认此调用的全部目的地，需要人工审批"
+		if mode == "strict" {
+			return g.roeAsk(ctx, ev, reason)
+		}
+		g.record(ev.ToolName, "allow", reason, cmd)
 	}
-	matcher := NewScopeMatcher(cfg.Scope(taskID))
+	if len(hosts) == 0 {
+		return hook.Result{}, false // No extracted target; strict uncertainty was handled above.
+	}
+	matcher := NewScopeMatcher(rules)
 	var out []string
 	unknown := false
 	for _, h := range hosts {
@@ -155,4 +166,41 @@ func roeHosts(toolName string, input []byte, cmd string) []string {
 		}
 	}
 	return nil
+}
+
+// unresolvedDestination deliberately favors approval for opaque execution. This
+// is a bounded syntax guard, NOT a sandbox, DNS policy, or network egress boundary.
+// Warn/off modes and tasks without a registered scope retain their semantics.
+func unresolvedDestination(tool, cmd string, hosts []string) bool {
+	if tool == "WebFetch" {
+		return len(hosts) == 0
+	}
+	switch tool {
+	case "Bash", "shell_open", "shell_send", "session_exec":
+	default:
+		return false
+	}
+	if strings.TrimSpace(cmd) == "" {
+		return false
+	}
+	if strings.ContainsAny(cmd, "$`\\;|&<>\n\r(){}") {
+		return true
+	}
+	fields := strings.Fields(cmd)
+	for _, token := range fields {
+		token = strings.Trim(token, "\"'")
+		if _, _, err := net.ParseCIDR(token); err == nil {
+			return true
+		}
+		if token == "-iL" || token == "--config" || token == "-K" || strings.HasPrefix(token, "--config=") {
+			return true
+		}
+	}
+	// Only a few simple local commands have a no-destination fast path. All
+	// interpreters, scripts, wrappers and unfamiliar clients require approval.
+	switch fields[0] {
+	case "pwd", "ls", "whoami", "id", "uname":
+		return false
+	}
+	return !hostTools[fields[0]] || len(hosts) == 0
 }

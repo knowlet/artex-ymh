@@ -6,6 +6,11 @@ package guard
 // 原文的 SHA256 前缀(16 个十六进制字符 = 8 字节),不存原文;检查时按注册过的
 // 原文长度在待检文本上滑窗取哈希,与指纹集常量时间比对。命中即 deny。
 //
+// This is literal input screening, not a process or network egress sandbox.
+// It cannot inspect secrets loaded from files/environment after the hook, or
+// encoded/derived secrets. Runtime isolation and enforced egress need separate
+// controls; passing Check is not evidence that a process cannot disclose secrets.
+//
 // 成本说明:滑窗哈希是 O(文本长 × 原文长) × 不同长度个数。检查面只有 Bash 类
 // 命令全文与 WebFetch 的 url/body,正常都在 KB 级,代价可忽略。
 
@@ -29,7 +34,7 @@ type egressFingerprint struct {
 // EgressGuard 是敏感指纹集合,进程内共享(server 装配时注册,所有任务的 guard
 // 引用同一份,profile 变更重新注册即对全部任务生效)。并发安全。
 type EgressGuard struct {
-	mu sync.RWMutex
+	mu  sync.RWMutex
 	fps []egressFingerprint
 	// byLen 是按原文长度分组的指纹索引,Check 时只需对文本里每个长度各滑一次窗。
 	byLen map[int][]int // length → fps 下标
