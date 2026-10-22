@@ -134,6 +134,28 @@ def checksum_pin(spec: dict, fetch) -> str | None:
     return matches[0]
 
 
+class ArchiveMemberValidator:
+    """Check each member before retaining metadata or reading its contents."""
+
+    def __init__(self) -> None:
+        self.seen: set[str] = set()
+        self.total = 0
+
+    def check(self, name: str, size: int, regular: bool, directory: bool) -> str:
+        if len(self.seen) >= MAX_MEMBERS or size < 0:
+            raise BundleError("invalid archive size/count")
+        name = safe_path(name)
+        if name in self.seen:
+            raise BundleError(f"duplicate archive member: {name}")
+        if not regular and not directory:
+            raise BundleError(f"links and special archive members are forbidden: {name}")
+        self.total += size
+        if self.total > LIMIT:
+            raise BundleError("uncompressed archive too large")
+        self.seen.add(name)
+        return name
+
+
 def extract_selected(data: bytes, kind: str, wanted: set[str]) -> dict[str, bytes]:
     """Read selected regular files; never extract an archive to the filesystem."""
     if kind == "raw":
@@ -145,22 +167,8 @@ def extract_selected(data: bytes, kind: str, wanted: set[str]) -> dict[str, byte
             raise BundleError("gzip input requires one unnamed member")
         with gzip.GzipFile(fileobj=io.BytesIO(data)) as stream:
             return {"": read_limited(stream)}
-    result, seen, total = {}, set(), 0
-
-    def member(name: str, size: int, regular: bool, directory: bool) -> str:
-        nonlocal total
-        name = safe_path(name)
-        if name in seen:
-            raise BundleError(f"duplicate archive member: {name}")
-        seen.add(name)
-        if len(seen) > MAX_MEMBERS or size < 0:
-            raise BundleError("invalid archive size/count")
-        if not regular and not directory:
-            raise BundleError(f"links and special archive members are forbidden: {name}")
-        total += size
-        if total > LIMIT:
-            raise BundleError("uncompressed archive too large")
-        return name
+    result = {}
+    validator = ArchiveMemberValidator()
 
     if kind == "zip":
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -168,7 +176,7 @@ def extract_selected(data: bytes, kind: str, wanted: set[str]) -> dict[str, byte
                 mode = info.external_attr >> 16
                 directory = info.is_dir()
                 regular = stat.S_IFMT(mode) in (0, stat.S_IFREG) and not directory
-                name = member(info.filename, info.file_size, regular, directory)
+                name = validator.check(info.filename, info.file_size, regular, directory)
                 if name in wanted:
                     if not regular:
                         raise BundleError(f"expected regular file: {name}")
@@ -177,9 +185,9 @@ def extract_selected(data: bytes, kind: str, wanted: set[str]) -> dict[str, byte
     elif kind == "tar.gz":
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
             for info in archive:
-                name = member(info.name, info.size, info.isfile(), info.isdir())
+                name = validator.check(info.name, info.size, info.isfile() and not info.issparse(), info.isdir())
                 if name in wanted:
-                    if not info.isfile() or info.issparse():
+                    if not info.isfile():
                         raise BundleError(f"expected ordinary file: {name}")
                     stream = archive.extractfile(info)
                     if stream is None:
@@ -333,12 +341,21 @@ def verify_archive(path: Path) -> None:
     with path.open("rb") as stream:
         data = read_limited(stream)
     # Independent re-read catches missing metadata or accidental repackaging.
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
-        members = list(archive)
-        wanted = {safe_path(m.name) for m in members}
-        modes = {safe_path(m.name): m.mode for m in members}
+    # Python 3.12 caches parsed TarInfo objects, so enforce limits on this first
+    # traversal before asking tarfile for another header or skipping a payload.
+    validator = ArchiveMemberValidator()
+    modes = {}
     prefix = "data/tools/"
-    if not wanted or any(not name.startswith(prefix) for name in wanted):
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+        for info in archive:
+            name = validator.check(info.name, info.size, info.isfile() and not info.issparse(), info.isdir())
+            if not name.startswith(prefix):
+                raise BundleError("bundle contains paths outside data/tools")
+            if not info.isfile():
+                raise BundleError(f"expected ordinary file: {name}")
+            modes[name] = info.mode
+    wanted = set(modes)
+    if not wanted:
         raise BundleError("bundle contains paths outside data/tools")
     files = extract_selected(data, "tar.gz", wanted)
     required = {prefix + name for name in METADATA}

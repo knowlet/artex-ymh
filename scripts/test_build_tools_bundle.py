@@ -64,6 +64,37 @@ class BundleTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             return b.build_files(self.lock, self.manifest, b'Fixture instructions', self.inputs.__getitem__)
 
+    def assert_tar_rejected_early(self, data, after, message, *, verify_only=False):
+        """Fail if the real parser requests a logical member past the bad one."""
+        read_member = tarfile.TarInfo.fromtarfile
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'malicious.tar.gz'
+            path.write_bytes(data)
+            for entrypoint in ('verify',) if verify_only else ('verify', 'extract'):
+                with self.subTest(entrypoint=entrypoint):
+                    parsed = set()
+
+                    def bounded_read(archive):
+                        self.assertLess(len(parsed), after,
+                                        'parsed another member after the rejection boundary')
+                        info = read_member(archive)
+                        # PAX processing may return the same TarInfo through nested
+                        # parser calls on some supported Python patch releases.
+                        parsed.add(info)
+                        return info
+
+                    with patch.object(tarfile.TarInfo, 'fromtarfile', side_effect=bounded_read):
+                        if entrypoint == 'verify':
+                            with patch.object(b, 'extract_selected', side_effect=AssertionError(
+                                    'verification reached extraction before rejecting the archive')):
+                                with self.assertRaisesRegex(b.BundleError, message):
+                                    b.verify_archive(path)
+                        else:
+                            with self.assertRaisesRegex(b.BundleError, message):
+                                # Even unselected members must pass the same checks.
+                                b.extract_selected(data, 'tar.gz', set())
+                    self.assertEqual(len(parsed), after)
+
     def test_valid_lock(self):
         b.validate_lock(self.lock, self.manifest)
 
@@ -192,6 +223,71 @@ class BundleTests(unittest.TestCase):
     def test_member_count_limit(self):
         with patch.object(b, 'MAX_MEMBERS', 1), self.assertRaises(b.BundleError):
             b.extract_selected(zip_bytes([('a', b'a'), ('b', b'b')]), 'zip', {'a'})
+
+    def test_tar_empty_member_bomb_stops_at_count_limit(self):
+        limit = b.MAX_MEMBERS
+        data = tar_bytes((f'data/tools/empty-{i}', b'', tarfile.REGTYPE)
+                         for i in range(limit + 2))
+        # Thousands of empty headers compress to a small input; no OOM is needed.
+        self.assertLess(len(data), (limit + 2) * tarfile.BLOCKSIZE // 20)
+        self.assert_tar_rejected_early(data, limit + 1, 'invalid archive size/count')
+
+    def test_tar_oversized_header_rejected_before_payload(self):
+        info = tarfile.TarInfo('data/tools/oversized')
+        info.size = b.LIMIT + 1
+        # Deliberately omit the declared payload. Reading ahead instead of checking
+        # this header would raise ReadError, not the expected policy rejection.
+        data = gzip.compress(info.tobuf(format=tarfile.GNU_FORMAT) + b'\0' * 1024)
+        self.assert_tar_rejected_early(data, 1, 'uncompressed archive too large')
+
+    def test_tar_cumulative_size_rejected_during_first_pass(self):
+        data = tar_bytes([('data/tools/first', b'\0' * 2048, tarfile.REGTYPE),
+                          ('data/tools/second', b'\0' * 2049, tarfile.REGTYPE),
+                          ('data/tools/unread', b'', tarfile.REGTYPE)])
+        with patch.object(b, 'LIMIT', 4096):
+            self.assert_tar_rejected_early(data, 2, 'uncompressed archive too large')
+
+    def test_tar_negative_pax_size_rejected_during_first_pass(self):
+        # A global PAX size is applied after the builtin header offset is computed,
+        # so this reaches the validator even when negative GNU sizes are rejected
+        # by tarfile itself. It must not subtract from the cumulative size budget.
+        payload = b'11 size=-1\n'
+        header = tarfile.TarInfo('pax-global')
+        header.type, header.size = tarfile.XGLTYPE, len(payload)
+        raw = (header.tobuf(format=tarfile.USTAR_FORMAT) + payload
+               + b'\0' * (-len(payload) % tarfile.BLOCKSIZE)
+               + tarfile.TarInfo('data/tools/negative').tobuf()
+               + tarfile.TarInfo('data/tools/unread').tobuf() + b'\0' * 1024)
+        self.assert_tar_rejected_early(gzip.compress(raw), 1, 'invalid archive size/count')
+
+    def test_tar_invalid_members_rejected_during_first_pass(self):
+        cases = [('unsafe path', [('data/tools/../bad', b'', tarfile.REGTYPE)], 'unsafe path'),
+                 ('duplicate', [('data/tools/same', b'', tarfile.REGTYPE),
+                                ('data/tools/same', b'', tarfile.REGTYPE)], 'duplicate archive member')]
+        for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.FIFOTYPE,
+                     tarfile.CHRTYPE, tarfile.BLKTYPE, tarfile.GNUTYPE_SPARSE):
+            cases.append((kind, [('data/tools/bad', b'', kind)],
+                          'links and special archive members are forbidden'))
+        for label, members, message in cases:
+            with self.subTest(member=label):
+                data = tar_bytes(members + [('data/tools/unread', b'', tarfile.REGTYPE)])
+                self.assert_tar_rejected_early(data, len(members), message)
+
+    def test_verify_bundle_member_requirements_checked_during_first_pass(self):
+        for name, kind, message in [('outside', tarfile.REGTYPE, 'outside data/tools'),
+                                    ('data/tools/directory', tarfile.DIRTYPE, 'expected ordinary file')]:
+            with self.subTest(name=name):
+                data = tar_bytes([(name, b'', kind), ('data/tools/unread', b'', tarfile.REGTYPE)])
+                self.assert_tar_rejected_early(data, 1, message, verify_only=True)
+
+    def test_valid_bundle_at_exact_archive_limits(self):
+        files = self.build()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'tools.tar.gz'
+            b.write_archive(files, path)
+            with patch.object(b, 'MAX_MEMBERS', len(files)), \
+                    patch.object(b, 'LIMIT', sum(len(data) for data, _ in files.values())):
+                b.verify_archive(path)
 
     def test_runtime_manifest_updated_without_changing_source(self):
         before = copy.deepcopy(self.manifest)
