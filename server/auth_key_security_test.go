@@ -88,3 +88,38 @@ func TestMissingKeyOverrideFailsWithoutGenerating(t *testing.T) {
 		t.Fatal("missing persistent mount accepted")
 	}
 }
+
+func TestLegacyKeyMigrationRemovesSymlinkedWorkspaceCopy(t *testing.T) {
+	t.Setenv("ARTEX_KEY_DIR", "")
+	base := t.TempDir()
+	data := filepath.Join(base, "real-data")
+	keyDir := filepath.Join(base, "private")
+	for _, dir := range []string{data, keyDir} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(base, "data-link")
+	if err := os.Symlink(data, alias); err != nil {
+		t.Fatal(err)
+	}
+	original := bytes.Repeat([]byte("s"), 32)
+	legacy := filepath.Join(data, jwtKeyFilename)
+	if err := os.WriteFile(legacy, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := loadOrCreateJWTKey(keyDir, alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(key, original) {
+		t.Fatal("legacy key was not preserved")
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("browsable legacy key remains: %v", err)
+	}
+	stored, err := os.ReadFile(filepath.Join(keyDir, jwtKeyFilename))
+	if err != nil || !bytes.Equal(stored, original) {
+		t.Fatalf("persisted key mismatch: %v", err)
+	}
+}

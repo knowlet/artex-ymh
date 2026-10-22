@@ -130,7 +130,13 @@ func loadOrCreateJWTKey(keyDir, dataDir string) ([]byte, error) {
 			return nil, err
 		}
 		// Only remove the formerly browsable copy, after successful durable writing.
-		if abs == filepath.Join(dataAbs, jwtKeyFilename) {
+		// Compare canonical paths: dataDir may itself be a symlink. Comparing
+		// its unresolved spelling would leave the signing key in the file manager.
+		canonicalLegacy, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return nil, err
+		}
+		if canonicalLegacy == filepath.Join(dataAbs, jwtKeyFilename) {
 			if err := os.Remove(legacy); err != nil {
 				return nil, err
 			}
