@@ -1,0 +1,562 @@
+{
+  "Source": "https://github.com/SnailSploit/Claude-Red",
+  "Commit": "a8de813edc9f66f60d44cfe42d47750e89d9930b",
+  "Version": "0.3.0",
+  "License": "MIT",
+  "LicenseBlobSHA": "53e4674a3e91df7b85c74e1bbf9f0fe37f8b2c8b",
+  "Skills": [
+    {
+      "Category": "active-directory",
+      "Name": "offensive-active-directory",
+      "SourcePath": "Skills/active-directory/offensive-active-directory/SKILL.md",
+      "BlobSHA": "46a1b79b01857180f8d00e8414343ba07e7b5a9c",
+      "Size": 13847
+    },
+    {
+      "Category": "active-directory",
+      "Name": "offensive-netexec",
+      "SourcePath": "Skills/active-directory/offensive-netexec/SKILL.md",
+      "BlobSHA": "86b35f39d82cfdd9bca2812628ec1f14f5249b4a",
+      "Size": 24641
+    },
+    {
+      "Category": "ai",
+      "Name": "offensive-ai-security",
+      "SourcePath": "Skills/ai/offensive-ai-security/SKILL.md",
+      "BlobSHA": "639ef11573f1675e9a8c38292c1a0cce7305a8e0",
+      "Size": 39806
+    },
+    {
+      "Category": "api",
+      "Name": "offensive-api-abuse",
+      "SourcePath": "Skills/api/offensive-api-abuse/SKILL.md",
+      "BlobSHA": "8b7aa8d67a5be2d46b7c31e35f98be31a747a284",
+      "Size": 22383
+    },
+    {
+      "Category": "api",
+      "Name": "offensive-api-security",
+      "SourcePath": "Skills/api/offensive-api-security/SKILL.md",
+      "BlobSHA": "b8dbb433bc509f790c209bf78e6cb01f17466f37",
+      "Size": 19822
+    },
+    {
+      "Category": "auth",
+      "Name": "offensive-jwt",
+      "SourcePath": "Skills/auth/offensive-jwt/SKILL.md",
+      "BlobSHA": "8ac0987f006766bf7fd65055dadc99d4d795a860",
+      "Size": 10861
+    },
+    {
+      "Category": "auth",
+      "Name": "offensive-oauth",
+      "SourcePath": "Skills/auth/offensive-oauth/SKILL.md",
+      "BlobSHA": "0816cf0c72a93805da6dc22d3cb62825b6acb007",
+      "Size": 15033
+    },
+    {
+      "Category": "cicd",
+      "Name": "offensive-cicd-pipeline",
+      "SourcePath": "Skills/cicd/offensive-cicd-pipeline/SKILL.md",
+      "BlobSHA": "b3cbe34e94405efcc018bc8c9af19a2c8f11dfc0",
+      "Size": 20193
+    },
+    {
+      "Category": "cicd",
+      "Name": "offensive-cicd-secrets",
+      "SourcePath": "Skills/cicd/offensive-cicd-secrets/SKILL.md",
+      "BlobSHA": "7480889502c8b3b41cf28907023f906bb46a59e9",
+      "Size": 25081
+    },
+    {
+      "Category": "cloud",
+      "Name": "offensive-cloud",
+      "SourcePath": "Skills/cloud/offensive-cloud/SKILL.md",
+      "BlobSHA": "2d374ac19bb2032d9720c21e309c6b6dfd79d8c4",
+      "Size": 12641
+    },
+    {
+      "Category": "container",
+      "Name": "offensive-container-escape",
+      "SourcePath": "Skills/container/offensive-container-escape/SKILL.md",
+      "BlobSHA": "bb1227b5ea71842fa66d1eb77ed4ce18afa18aa5",
+      "Size": 21739
+    },
+    {
+      "Category": "container",
+      "Name": "offensive-k8s-attacks",
+      "SourcePath": "Skills/container/offensive-k8s-attacks/SKILL.md",
+      "BlobSHA": "6d7945eb87d7766b691d4a9a92ed43b93bb2a784",
+      "Size": 27489
+    },
+    {
+      "Category": "crypto",
+      "Name": "offensive-crypto-attacks",
+      "SourcePath": "Skills/crypto/offensive-crypto-attacks/SKILL.md",
+      "BlobSHA": "531f20a86a57504fa92c0a7333810eda0d03073d",
+      "Size": 20427
+    },
+    {
+      "Category": "crypto",
+      "Name": "offensive-tls-attacks",
+      "SourcePath": "Skills/crypto/offensive-tls-attacks/SKILL.md",
+      "BlobSHA": "4e535421e04e37bf55e0349b2c547f81ae501c2e",
+      "Size": 25574
+    },
+    {
+      "Category": "exploit-dev",
+      "Name": "offensive-basic-exploitation",
+      "SourcePath": "Skills/exploit-dev/offensive-basic-exploitation/SKILL.md",
+      "BlobSHA": "d424845cf97157fc012fc9fc21289bfcda222077",
+      "Size": 354272
+    },
+    {
+      "Category": "exploit-dev",
+      "Name": "offensive-crash-analysis",
+      "SourcePath": "Skills/exploit-dev/offensive-crash-analysis/SKILL.md",
+      "BlobSHA": "8e487e9c2c13d872cdbac1102ee5c51bd1d236c1",
+      "Size": 409213
+    },
+    {
+      "Category": "exploit-dev",
+      "Name": "offensive-exploit-dev-course",
+      "SourcePath": "Skills/exploit-dev/offensive-exploit-dev-course/SKILL.md",
+      "BlobSHA": "01e475e1d1c5ba831a9a02e746754af2a3b7b9a6",
+      "Size": 20117
+    },
+    {
+      "Category": "exploit-dev",
+      "Name": "offensive-exploit-development",
+      "SourcePath": "Skills/exploit-dev/offensive-exploit-development/SKILL.md",
+      "BlobSHA": "f78b417d97774338f9ea8830d8aa37c3f4590cfb",
+      "Size": 33814
+    },
+    {
+      "Category": "exploit-dev",
+      "Name": "offensive-mitigations",
+      "SourcePath": "Skills/exploit-dev/offensive-mitigations/SKILL.md",
+      "BlobSHA": "94b7422e05ca016e85ba3573a22c0a7822a8991e",
+      "Size": 58757
+    },
+    {
+      "Category": "exploit-dev",
+      "Name": "offensive-toctou",
+      "SourcePath": "Skills/exploit-dev/offensive-toctou/SKILL.md",
+      "BlobSHA": "ba68173ff0ba0ea4df7bd7b1cb0b1099bc4d50a5",
+      "Size": 12855
+    },
+    {
+      "Category": "forensics",
+      "Name": "offensive-anti-forensics",
+      "SourcePath": "Skills/forensics/offensive-anti-forensics/SKILL.md",
+      "BlobSHA": "343404cc6db766b122bb10ad236d222cb43909dc",
+      "Size": 19476
+    },
+    {
+      "Category": "forensics",
+      "Name": "offensive-c2-frameworks",
+      "SourcePath": "Skills/forensics/offensive-c2-frameworks/SKILL.md",
+      "BlobSHA": "83c5ecbd928aa3dd3f874889058d3d8415ecee2a",
+      "Size": 22356
+    },
+    {
+      "Category": "fuzzing",
+      "Name": "offensive-bug-identification",
+      "SourcePath": "Skills/fuzzing/offensive-bug-identification/SKILL.md",
+      "BlobSHA": "0c35c8320f056178ba31bcc38b9f92e6f8e63b7c",
+      "Size": 55900
+    },
+    {
+      "Category": "fuzzing",
+      "Name": "offensive-fuzzing-course",
+      "SourcePath": "Skills/fuzzing/offensive-fuzzing-course/SKILL.md",
+      "BlobSHA": "9686c96273e5b23f300fc5fd4448b8dd73afa7db",
+      "Size": 80400
+    },
+    {
+      "Category": "fuzzing",
+      "Name": "offensive-fuzzing",
+      "SourcePath": "Skills/fuzzing/offensive-fuzzing/SKILL.md",
+      "BlobSHA": "b66cdaec4043e4be08a28774ac328fff8eebdb82",
+      "Size": 11875
+    },
+    {
+      "Category": "fuzzing",
+      "Name": "offensive-vuln-classes",
+      "SourcePath": "Skills/fuzzing/offensive-vuln-classes/SKILL.md",
+      "BlobSHA": "bb2774d5289ce81cbba8f922b5afb122d2b29e12",
+      "Size": 96424
+    },
+    {
+      "Category": "infrastructure",
+      "Name": "offensive-advanced-redteam",
+      "SourcePath": "Skills/infrastructure/offensive-advanced-redteam/SKILL.md",
+      "BlobSHA": "ca7c49918c203fc6926607ef4d3888cb19c9f319",
+      "Size": 27594
+    },
+    {
+      "Category": "infrastructure",
+      "Name": "offensive-edr-evasion",
+      "SourcePath": "Skills/infrastructure/offensive-edr-evasion/SKILL.md",
+      "BlobSHA": "9c451f806e38c430a68522d53d60a0b2c9e378ee",
+      "Size": 84357
+    },
+    {
+      "Category": "infrastructure",
+      "Name": "offensive-initial-access",
+      "SourcePath": "Skills/infrastructure/offensive-initial-access/SKILL.md",
+      "BlobSHA": "2a1851e83dd69cc3938727bd15a04b3319684fc4",
+      "Size": 65534
+    },
+    {
+      "Category": "infrastructure",
+      "Name": "offensive-keylogger-arch",
+      "SourcePath": "Skills/infrastructure/offensive-keylogger-arch/SKILL.md",
+      "BlobSHA": "c8fa054a549034c59fb264a322e715c1e9ae88a3",
+      "Size": 11516
+    },
+    {
+      "Category": "infrastructure",
+      "Name": "offensive-shellcode",
+      "SourcePath": "Skills/infrastructure/offensive-shellcode/SKILL.md",
+      "BlobSHA": "508b8fbf0641178085f72ff092e47f1c6aee0005",
+      "Size": 18885
+    },
+    {
+      "Category": "infrastructure",
+      "Name": "offensive-windows-boundaries",
+      "SourcePath": "Skills/infrastructure/offensive-windows-boundaries/SKILL.md",
+      "BlobSHA": "d22150d5493710ce7b2bd80cb41c0977a0f895c4",
+      "Size": 567484
+    },
+    {
+      "Category": "infrastructure",
+      "Name": "offensive-windows-mitigations",
+      "SourcePath": "Skills/infrastructure/offensive-windows-mitigations/SKILL.md",
+      "BlobSHA": "1896c55b1a483c472c36b446f752c4a28e544128",
+      "Size": 530459
+    },
+    {
+      "Category": "iot",
+      "Name": "offensive-iot",
+      "SourcePath": "Skills/iot/offensive-iot/SKILL.md",
+      "BlobSHA": "6524d6fd80b59a67f4483b5236fb5ddccf19f873",
+      "Size": 13791
+    },
+    {
+      "Category": "mobile",
+      "Name": "offensive-mobile",
+      "SourcePath": "Skills/mobile/offensive-mobile/SKILL.md",
+      "BlobSHA": "29d6290d005f5b91dd67e3053a700ad45249d21b",
+      "Size": 14036
+    },
+    {
+      "Category": "network",
+      "Name": "offensive-network-attacks",
+      "SourcePath": "Skills/network/offensive-network-attacks/SKILL.md",
+      "BlobSHA": "8f167923dde58f7e4af36283315192f89db035f5",
+      "Size": 20169
+    },
+    {
+      "Category": "post-exploitation",
+      "Name": "offensive-data-exfiltration",
+      "SourcePath": "Skills/post-exploitation/offensive-data-exfiltration/SKILL.md",
+      "BlobSHA": "3cc473fc9348bd04bc218b1c056d2301b8fc5470",
+      "Size": 19708
+    },
+    {
+      "Category": "post-exploitation",
+      "Name": "offensive-lateral-movement",
+      "SourcePath": "Skills/post-exploitation/offensive-lateral-movement/SKILL.md",
+      "BlobSHA": "229a0091e9c66a97fc12c41eaf09a307606fefbc",
+      "Size": 16265
+    },
+    {
+      "Category": "post-exploitation",
+      "Name": "offensive-persistence",
+      "SourcePath": "Skills/post-exploitation/offensive-persistence/SKILL.md",
+      "BlobSHA": "17080d05c7eee4db6eeb486cc622f22fae9215f1",
+      "Size": 23558
+    },
+    {
+      "Category": "privesc",
+      "Name": "offensive-linux-privesc",
+      "SourcePath": "Skills/privesc/offensive-linux-privesc/SKILL.md",
+      "BlobSHA": "2d1f30c9d847d2f1bd335e1d811a8d94c6bdbaaa",
+      "Size": 19032
+    },
+    {
+      "Category": "privesc",
+      "Name": "offensive-windows-privesc",
+      "SourcePath": "Skills/privesc/offensive-windows-privesc/SKILL.md",
+      "BlobSHA": "ed3f0cf67952529de5933c396450f786766bfd5a",
+      "Size": 22580
+    },
+    {
+      "Category": "recon",
+      "Name": "offensive-osint-methodology",
+      "SourcePath": "Skills/recon/offensive-osint-methodology/SKILL.md",
+      "BlobSHA": "a85e33546a77fabbb8ea96c95356a820a9715309",
+      "Size": 22820
+    },
+    {
+      "Category": "recon",
+      "Name": "offensive-osint",
+      "SourcePath": "Skills/recon/offensive-osint/SKILL.md",
+      "BlobSHA": "ea7eaec8020a8de9bd054ded11f7e26319bd026f",
+      "Size": 22751
+    },
+    {
+      "Category": "social-engineering",
+      "Name": "offensive-phishing",
+      "SourcePath": "Skills/social-engineering/offensive-phishing/SKILL.md",
+      "BlobSHA": "6abdde2f11e659f97175d8582e511b916d93fad4",
+      "Size": 19361
+    },
+    {
+      "Category": "social-engineering",
+      "Name": "offensive-social-engineering",
+      "SourcePath": "Skills/social-engineering/offensive-social-engineering/SKILL.md",
+      "BlobSHA": "88a902ffec5bc32dfccc78230f006d306b4f3394",
+      "Size": 22933
+    },
+    {
+      "Category": "supply-chain",
+      "Name": "offensive-dependency-confusion",
+      "SourcePath": "Skills/supply-chain/offensive-dependency-confusion/SKILL.md",
+      "BlobSHA": "3352d596f71ca90de904b04276c352e3cc10c847",
+      "Size": 23800
+    },
+    {
+      "Category": "supply-chain",
+      "Name": "offensive-supply-chain",
+      "SourcePath": "Skills/supply-chain/offensive-supply-chain/SKILL.md",
+      "BlobSHA": "ecf5873a84c3221a5a813f70b898a7859c58555a",
+      "Size": 18507
+    },
+    {
+      "Category": "utility",
+      "Name": "offensive-fast-checking",
+      "SourcePath": "Skills/utility/offensive-fast-checking/SKILL.md",
+      "BlobSHA": "964ad643d853e21165a563b2f744b6bd597ad3dc",
+      "Size": 23860
+    },
+    {
+      "Category": "utility",
+      "Name": "offensive-reporting",
+      "SourcePath": "Skills/utility/offensive-reporting/SKILL.md",
+      "BlobSHA": "536c2dd0d422b0925bfe34ca834f03e47dca7e76",
+      "Size": 14720
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-business-logic",
+      "SourcePath": "Skills/web/offensive-business-logic/SKILL.md",
+      "BlobSHA": "0a0604a93931444b2a55efed76a26f8666af3566",
+      "Size": 13312
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-deserialization",
+      "SourcePath": "Skills/web/offensive-deserialization/SKILL.md",
+      "BlobSHA": "08c6932f59b86464626e67cb3b8a09ad2b94f4d8",
+      "Size": 22517
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-file-upload",
+      "SourcePath": "Skills/web/offensive-file-upload/SKILL.md",
+      "BlobSHA": "3020ea5e651aa9cf4d9bf343b984636369aa2336",
+      "Size": 30690
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-graphql",
+      "SourcePath": "Skills/web/offensive-graphql/SKILL.md",
+      "BlobSHA": "a96564c62e7c6017f573fce81874d50b50162aba",
+      "Size": 21864
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-idor",
+      "SourcePath": "Skills/web/offensive-idor/SKILL.md",
+      "BlobSHA": "ce95b65bb274472b2100e0ea439c4d02e81b913e",
+      "Size": 25606
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-open-redirect",
+      "SourcePath": "Skills/web/offensive-open-redirect/SKILL.md",
+      "BlobSHA": "7cae2733930a4265c38ebafd2317cbfebf875073",
+      "Size": 16286
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-parameter-pollution",
+      "SourcePath": "Skills/web/offensive-parameter-pollution/SKILL.md",
+      "BlobSHA": "63c75d61477cdc7d0bdc4b366d307454cf52c14b",
+      "Size": 16743
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-race-condition",
+      "SourcePath": "Skills/web/offensive-race-condition/SKILL.md",
+      "BlobSHA": "2fab6108fae02e0c48b0111221dbdbf7d092d51d",
+      "Size": 29346
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-rce",
+      "SourcePath": "Skills/web/offensive-rce/SKILL.md",
+      "BlobSHA": "f038864cff7abee7f893d8cf93c7c37e82695f41",
+      "Size": 26602
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-request-smuggling",
+      "SourcePath": "Skills/web/offensive-request-smuggling/SKILL.md",
+      "BlobSHA": "041a03000bfb07414172f226139d6d2ff7db2222",
+      "Size": 21842
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-sqli",
+      "SourcePath": "Skills/web/offensive-sqli/SKILL.md",
+      "BlobSHA": "82d6d6a41393229e9e14531fe820b6c801643bd8",
+      "Size": 9880
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-ssrf",
+      "SourcePath": "Skills/web/offensive-ssrf/SKILL.md",
+      "BlobSHA": "d01865313bfb599a89b9192b01bd326344260b0b",
+      "Size": 25890
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-ssti",
+      "SourcePath": "Skills/web/offensive-ssti/SKILL.md",
+      "BlobSHA": "7210ac63be5aeb674eed44726c66e13bd25424ad",
+      "Size": 22984
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-waf-bypass",
+      "SourcePath": "Skills/web/offensive-waf-bypass/SKILL.md",
+      "BlobSHA": "3eb882b780ea69632c98d1bbb92a5f9ba232433c",
+      "Size": 37738
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-xss",
+      "SourcePath": "Skills/web/offensive-xss/SKILL.md",
+      "BlobSHA": "f60dd6a09a32fff24ec943bf87a401262aebe251",
+      "Size": 24895
+    },
+    {
+      "Category": "web",
+      "Name": "offensive-xxe",
+      "SourcePath": "Skills/web/offensive-xxe/SKILL.md",
+      "BlobSHA": "f560892f7f6f7293d86ae8d493efaddcb0551a3e",
+      "Size": 28487
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-bluetooth-ble",
+      "SourcePath": "Skills/wireless/offensive-bluetooth-ble/SKILL.md",
+      "BlobSHA": "e81d3e83a2fbc2244fc7b810741fd444b9f6c459",
+      "Size": 6694
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-bluetooth-classic",
+      "SourcePath": "Skills/wireless/offensive-bluetooth-classic/SKILL.md",
+      "BlobSHA": "7cf477b7b3920d89d5c94a6de8ba5a45f683e5ea",
+      "Size": 5463
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-deauth-disassoc",
+      "SourcePath": "Skills/wireless/offensive-deauth-disassoc/SKILL.md",
+      "BlobSHA": "d5a7ea8204925eb90071ea21f0d4843bc66dd9c1",
+      "Size": 4621
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-evil-twin",
+      "SourcePath": "Skills/wireless/offensive-evil-twin/SKILL.md",
+      "BlobSHA": "beb4b7c9bad98c85192a03970311d40e5225f08e",
+      "Size": 8093
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-krack-fragattacks",
+      "SourcePath": "Skills/wireless/offensive-krack-fragattacks/SKILL.md",
+      "BlobSHA": "b0eb255290f26daff49ab69ab172df011ce0601f",
+      "Size": 4542
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-lorawan-sub-ghz",
+      "SourcePath": "Skills/wireless/offensive-lorawan-sub-ghz/SKILL.md",
+      "BlobSHA": "d17360aeb785aa66b2c246b2f74e2a2819d4e94c",
+      "Size": 6929
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-wifi-recon",
+      "SourcePath": "Skills/wireless/offensive-wifi-recon/SKILL.md",
+      "BlobSHA": "aa3a5e5ae905d031d2b7a33bf2b7fd8efb8c2d31",
+      "Size": 6857
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-wifi",
+      "SourcePath": "Skills/wireless/offensive-wifi/SKILL.md",
+      "BlobSHA": "34fb5d4b060f12784c97b269111794247a2f995c",
+      "Size": 11053
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-wpa-enterprise",
+      "SourcePath": "Skills/wireless/offensive-wpa-enterprise/SKILL.md",
+      "BlobSHA": "a1a176befb5f00ec10d814dbb949cec28136d51a",
+      "Size": 7687
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-wpa2-psk",
+      "SourcePath": "Skills/wireless/offensive-wpa2-psk/SKILL.md",
+      "BlobSHA": "8a702d57e76b5073927559527b074d90ea1b90ac",
+      "Size": 6280
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-wpa3-sae",
+      "SourcePath": "Skills/wireless/offensive-wpa3-sae/SKILL.md",
+      "BlobSHA": "184b63b5589d75a5d7224be8cf180770fc8b8801",
+      "Size": 6439
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-wps",
+      "SourcePath": "Skills/wireless/offensive-wps/SKILL.md",
+      "BlobSHA": "462daf3069120240ecc92738151a4e06d1e4222f",
+      "Size": 5874
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-z-wave",
+      "SourcePath": "Skills/wireless/offensive-z-wave/SKILL.md",
+      "BlobSHA": "b262b9a58a0fae02588d67baa041817389853d18",
+      "Size": 5400
+    },
+    {
+      "Category": "wireless",
+      "Name": "offensive-zigbee-thread-matter",
+      "SourcePath": "Skills/wireless/offensive-zigbee-thread-matter/SKILL.md",
+      "BlobSHA": "20ebba3e32a665feb787e8cb25077b272ab2fc39",
+      "Size": 5864
+    }
+  ]
+}
