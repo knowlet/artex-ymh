@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'traffic/**'
+      - 'db/**'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/traffic-tests.yml'
