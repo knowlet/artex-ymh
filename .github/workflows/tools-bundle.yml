@@ -1,0 +1,67 @@
+name: tools-bundle
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  pull_request:
+    paths:
+      - .github/workflows/tools-bundle.yml
+      - .github/workflows/release.yml
+      - scripts/build_tools_bundle.py
+      - scripts/test_build_tools_bundle.py
+      - packaging/tools-*.json
+      - packaging/TOOLS.md
+      - images/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/tools-bundle.yml
+      - .github/workflows/release.yml
+      - scripts/build_tools_bundle.py
+      - scripts/test_build_tools_bundle.py
+      - packaging/tools-*.json
+      - packaging/TOOLS.md
+      - images/**
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SOURCE_DATE_EPOCH: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Offline regression tests and manifest coverage
+        run: |
+          python -m unittest discover -s scripts -p 'test_build_tools_bundle.py' -v
+          python scripts/build_tools_bundle.py --validate
+      - name: Download pinned inputs and build
+        run: python scripts/build_tools_bundle.py
+      - name: Check determinism and archive integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          first=$(sha256sum images/tools.tar.gz | cut -d ' ' -f 1)
+          python scripts/build_tools_bundle.py
+          second=$(sha256sum images/tools.tar.gz | cut -d ' ' -f 1)
+          test "$first" = "$second"
+          (cd images && sha256sum -c tools.tar.gz.sha256)
+          python scripts/build_tools_bundle.py --verify images/tools.tar.gz
+      - name: Upload verified tool bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: tools-linux-amd64
+          path: |
+            images/tools.tar.gz
+            images/tools.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
