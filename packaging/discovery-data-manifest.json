@@ -1,0 +1,31 @@
+{
+  "files": [
+    {
+      "bytes": 1624588,
+      "license": "CC0-1.0",
+      "name": "cisa-kev",
+      "path": "vulnerability-intel.json",
+      "sha256": "5efae15e794bb4e46154facaea5d9f0f6ff03c2a9893330d0b7997b7fd1eaf3a",
+      "source_date": "2026-10-23T19:30:18.9209Z"
+    },
+    {
+      "bytes": 8120,
+      "license": "MIT",
+      "name": "projectdiscovery-releases",
+      "path": "projectdiscovery-lock.json",
+      "sha256": "afa90d90fd2318eba8f2a20f41a0e82922dcb3df556c1400e908fad739a044e3",
+      "source_date": "2026-10-23T11:19:55Z"
+    },
+    {
+      "bytes": 1274531,
+      "license": "MIT",
+      "name": "nuclei-cve-index",
+      "path": "nuclei-cve-index.json",
+      "sha256": "ebdb62664c1d8acff6e8e61a8ede0a3ca585ed578966f311f8d60efbfcafb05d",
+      "source_date": "2026-10-23T11:19:55Z"
+    }
+  ],
+  "kind": "artex-discovery-intelligence",
+  "schema_version": 1,
+  "scope": "CISA KEV and ProjectDiscovery release metadata; not complete CVE List or target evidence."
+}

@@ -52,6 +52,15 @@ func main() {
 }
 
 func run() int {
+	// Offline intelligence lookup never initializes the service or agents.
+	if len(os.Args) > 1 && os.Args[1] == "intel" {
+		return runIntelCLI(os.Args[2:])
+	}
+	// Discovery is an explicit local CLI operation; it does not initialize the
+	// database, server, agents, or background update checks.
+	if len(os.Args) > 1 && os.Args[1] == "discovery" {
+		return runDiscoveryCLI(os.Args[2:])
+	}
 	// `artex doctor` 部署预检（期 6)：只读检查，在解析服务 flag / 起任何子系统之前分流。
 	if len(os.Args) > 1 && os.Args[1] == "doctor" {
 		return runDoctor(os.Args[2:])
