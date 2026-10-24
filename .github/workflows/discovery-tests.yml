@@ -1,0 +1,69 @@
+name: discovery tooling tests
+on:
+  pull_request:
+    paths:
+      - 'discovery/**'
+      - 'intelpack/**'
+      - 'skillcheck/**'
+      - 'skills/projectdiscovery-recon/**'
+      - 'skills/vulnerability-triage/**'
+      - 'cmd/artex/discovery*'
+      - 'cmd/artex/intel*'
+      - 'cmd/artex/main.go'
+      - 'tools/**'
+      - 'packaging/projectdiscovery-lock.json'
+      - 'packaging/vulnerability-intel.json'
+      - 'packaging/nuclei-cve-index.json'
+      - 'packaging/discovery-data-manifest.json'
+      - 'packaging/discovery/**'
+      - 'packaging/tools-manifest.json'
+      - 'scripts/*projectdiscovery*'
+      - 'scripts/*vulnerability_intel*'
+      - 'scripts/*nuclei_index*'
+      - 'scripts/*intel_pack*'
+      - 'scripts/test_discovery_distribution.py'
+      - 'build.sh'
+      - 'Dockerfile'
+      - 'Dockerfile.source'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/discovery-tests.yml'
+permissions:
+  contents: read
+concurrency:
+  group: discovery-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  offline-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Offline updater and installer contracts
+        run: python3 -m unittest discover -s scripts -p 'test_*projectdiscovery.py' -v
+      - name: Offline vulnerability feed contracts
+        run: python3 -m unittest discover -s scripts -p 'test_update_vulnerability_intel.py' -v
+      - name: Nuclei metadata and data pack contracts
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_update_nuclei_index.py' -v
+          python3 -m unittest discover -s scripts -p 'test_build_intel_pack.py' -v
+          python3 scripts/build_intel_pack.py --check
+      - name: Release and Docker data inclusion
+        run: python3 -m unittest discover -s scripts -p 'test_discovery_distribution.py' -v
+      - name: Managed process contracts
+        run: go test -race ./discovery ./intelpack ./tools -count=1
+      - name: Actual Norma skill loading and invocation
+        run: go test -race ./skillcheck -count=1
+      - name: CLI contracts without service initialization
+        run: |
+          go test -race ./cmd/artex/discovery.go ./cmd/artex/discovery_test.go -count=1
+          go test -race ./cmd/artex/intel.go ./cmd/artex/intel_test.go -count=1
+      - name: Backend compilation
+        run: |
+          go build -o /tmp/artex-ci ./cmd/artex
+          /tmp/artex-ci intel status --data-pack packaging/discovery-data-manifest.json
+          /tmp/artex-ci intel search --data-pack packaging/discovery-data-manifest.json --cve CVE-2021-44228

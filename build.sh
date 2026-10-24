@@ -182,8 +182,25 @@ package_binary() {
     chmod +x "$package_root/start.sh"
   fi
   cp -R skills "$package_root/"
+  # Offline discovery/intelligence is part of the application distribution.
+  # Keep reviewed resources outside data/, which operators persist or mount.
+  # Do not bundle downloaded binaries/templates or fetch anything here.
+  mkdir -p "$package_root/packaging" "$package_root/scripts"
+  cp packaging/discovery-data-manifest.json \
+    packaging/vulnerability-intel.json \
+    packaging/projectdiscovery-lock.json \
+    packaging/nuclei-cve-index.json \
+    packaging/tools-manifest.json "$package_root/packaging/"
+  cp -R packaging/discovery "$package_root/packaging/"
+  cp scripts/update_projectdiscovery.py \
+    scripts/install_projectdiscovery.py \
+    scripts/update_vulnerability_intel.py \
+    scripts/update_nuclei_index.py \
+    scripts/build_intel_pack.py "$package_root/scripts/"
   cp config.example.json "$package_root/"
   if [ -f README.md ]; then cp README.md "$package_root/"; fi
+  if [ -f README-FORK.md ]; then cp README-FORK.md "$package_root/"; fi
+  if [ -f LICENSE ]; then cp LICENSE "$package_root/"; fi
   (cd "$ARTEX_PACKAGE_DIR" && zip -q -r -9 "$(basename "$archive")" "$(basename "$package_root")")
   rm -rf "$package_root"
   ok "Release 压缩包：$archive"

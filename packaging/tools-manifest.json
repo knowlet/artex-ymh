@@ -1,5 +1,6 @@
 {
   "_comment": "ARTEX 外部工具钉版清单（期 6 部署链加固）。path 相对 data 目录；env 为可选的路径覆盖环境变量（与运行时的解析顺序一致：env 优先）。sha256 空串 = 未钉（宁可留空也不编造），启动与 artex doctor 只校验非空的；哈希不匹配只警告不阻断（用户可能自编译）。已钉的哈希来自 2026-09 linux/amd64 实际部署的二进制；换版本时同步更新。impacket/nxc/pypykatz 是 Python venv 工具，部署时用符号链接指到 venv 入口（如 tools/nxc -> postx-venv/bin/nxc），impacket 条目链接到 venv bin 目录（目录条目只查存在性）。",
+  "_release_lock": "packaging/projectdiscovery-lock.json records desired upstream releases and archive digests. Existing version/sha256 fields below describe deployed binaries and are not rewritten by a metadata refresh. Inventory entries do not imply installation; artex doctor checks actual paths.",
   "tools": [
     {
       "name": "suo5",
@@ -44,6 +45,7 @@
     {
       "name": "naabu",
       "purpose": "快速端口扫描（projectdiscovery）",
+      "release_lock_name": "naabu",
       "version": "",
       "platform": "linux/amd64",
       "sha256": "6c0aac4253aebe95bbc13d4712a5f8caf7db9c9b62d6bc1fb4c56594cfa45165",
@@ -54,6 +56,7 @@
     {
       "name": "httpx",
       "purpose": "HTTP 服务探活与指纹/标题识别（projectdiscovery）",
+      "release_lock_name": "httpx",
       "version": "",
       "platform": "linux/amd64",
       "sha256": "6d78b83b4da452a7e0bd3613c4fae04cbf523209f083904b563f4d4406a680b0",
@@ -64,10 +67,44 @@
     {
       "name": "katana",
       "purpose": "Web 爬虫与端点发现（projectdiscovery）",
+      "release_lock_name": "katana",
       "version": "",
       "platform": "linux/amd64",
       "sha256": "2dd9024907d656235409dea7aac18d3cdd88f8a8da332494113a69bff4c295d6",
       "path": "tools/katana",
+      "env": "",
+      "category": "arsenal"
+    },
+    {
+      "name": "subfinder",
+      "purpose": "被動子網域來源查詢（ProjectDiscovery；需另行安裝，不代表已安裝）",
+      "release_lock_name": "subfinder",
+      "version": "",
+      "platform": "linux/amd64",
+      "sha256": "",
+      "path": "tools/subfinder",
+      "env": "",
+      "category": "arsenal"
+    },
+    {
+      "name": "nuclei",
+      "purpose": "簽章範本弱點驗證（ProjectDiscovery；需另行安裝，範本版本獨立管理）",
+      "release_lock_name": "nuclei",
+      "version": "",
+      "platform": "linux/amd64",
+      "sha256": "",
+      "path": "tools/nuclei",
+      "env": "",
+      "category": "arsenal"
+    },
+    {
+      "name": "nuclei-templates",
+      "purpose": "官方 Nuclei 範本目錄（含 CVE 偵測規則；需另行安裝，不等同完整 CVE 清單）",
+      "release_lock_name": "nuclei-templates",
+      "version": "",
+      "platform": "any",
+      "sha256": "",
+      "path": "tools/nuclei-templates",
       "env": "",
       "category": "arsenal"
     },

@@ -39,7 +39,7 @@
 
 ### 4. 武器库与部署链
 
-- `packaging/tools-manifest.json`：17 项外部工具（gogo/naabu/httpx/katana/fscan/impacket/nxc/mimikatz/pypykatz/laZagne/ligolo/peass/penelope/suo5/chisel）的钉版清单，启动自检 sha256（不匹配只警告），未确认哈希一律留空不编造。
+- `packaging/tools-manifest.json`：外部工具部署清單，新增 nuclei/subfinder/nuclei-templates；原部署 binary SHA 與新版 release archive SHA 分開管理。`artex discovery plan|run` 提供五項 ProjectDiscovery 工具的低流量參數、明確目標與執行收據。`artex intel status|search` 離線查詢 1,756 筆 KEV 與 4,509 筆 Nuclei 模板 metadata；新增 `projectdiscovery-recon`／`vulnerability-triage` 兩個選用技能。版本更新、校驗安裝、資料包與限制見 [工具操作說明](packaging/discovery/README.md)。
 - `artex doctor`：7 项部署预检（PG/LLM/data 可写/隧道工具/军火库/门控/回连地址），FAIL 退出码 1，只读不启动服务。
 - systemd unit（崩溃重拉、开机自启、与页面一键更新的退出码 75 换装兼容）。
 
