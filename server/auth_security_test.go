@@ -121,8 +121,15 @@ func TestSecurityAuthDecodeBoundsAndDeadline(t *testing.T) {
 		if w.Code != tc.want {
 			t.Fatalf("decode status=%d want=%d", w.Code, tc.want)
 		}
-		if len(w.deadlines) != 2 || w.deadlines[0].IsZero() || !w.deadlines[1].IsZero() {
-			t.Fatalf("read deadline not set then cleared: %v", w.deadlines)
+		if len(w.deadlines) != 2 || !w.deadlines[0].After(time.Now()) {
+			t.Fatalf("read deadline not set: %v", w.deadlines)
+		}
+		if tc.want == http.StatusRequestEntityTooLarge {
+			if w.deadlines[1].IsZero() || w.deadlines[1].After(time.Now()) || w.Header().Get("Connection") != "close" {
+				t.Fatalf("failed read did not expire deadline and close connection: %v, headers=%v", w.deadlines, w.Header())
+			}
+		} else if !w.deadlines[1].IsZero() {
+			t.Fatalf("complete body did not clear read deadline: %v", w.deadlines)
 		}
 	}
 }

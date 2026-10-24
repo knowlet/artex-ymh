@@ -270,9 +270,13 @@ const maxAuthBodyBytes = 4096
 func decodeAuth(w http.ResponseWriter, r *http.Request, v any) bool {
 	controller := http.NewResponseController(w)
 	_ = controller.SetReadDeadline(time.Now().Add(10 * time.Second))
-	defer controller.SetReadDeadline(time.Time{})
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAuthBodyBytes))
 	if err != nil {
+		// net/http may drain or close an unread body after the handler returns.
+		// Do not let that read block again after a timeout or an early size
+		// rejection. An incomplete body also makes this connection unusable.
+		_ = controller.SetReadDeadline(time.Now())
+		w.Header().Set("Connection", "close")
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeErr(w, http.StatusRequestEntityTooLarge, "请求内容过大")
@@ -281,6 +285,7 @@ func decodeAuth(w http.ResponseWriter, r *http.Request, v any) bool {
 		}
 		return false
 	}
+	_ = controller.SetReadDeadline(time.Time{})
 	if json.Unmarshal(body, v) != nil {
 		writeErr(w, http.StatusBadRequest, "请求格式错误")
 		return false
