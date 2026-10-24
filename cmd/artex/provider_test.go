@@ -11,6 +11,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -68,7 +69,15 @@ func callProviderCLI(t *testing.T, args ...string) (int, []byte, string) {
 	return code, out.Bytes(), errOut.String()
 }
 
+func requireProviderCLIFS(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("provider filesystem commands require Linux no-follow/no-replace support")
+	}
+}
+
 func TestProviderCLICatalogAndStatusRemainMetadataOnly(t *testing.T) {
+	requireProviderCLIFS(t)
 	catalogPath, err := filepath.Abs(filepath.Join("..", "..", "providers", "claude-red", "catalog.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -118,6 +127,7 @@ func TestProviderCLICatalogAndStatusRemainMetadataOnly(t *testing.T) {
 }
 
 func TestProviderCLIExplicitImportAndStatus(t *testing.T) {
+	requireProviderCLIFS(t)
 	catalogPath, source, library := providerCLIFixture(t)
 	code, out, stderr := callProviderCLI(t, "import", "-catalog", catalogPath, "-source", source, "-dest", library, "-select", "notes")
 	if code != 0 {
@@ -128,11 +138,13 @@ func TestProviderCLIExplicitImportAndStatus(t *testing.T) {
 		ImportedIDs          []string `json:"imported_ids"`
 		AgentBindingsCreated bool     `json:"agent_bindings_created"`
 		RuntimeVerified      bool     `json:"runtime_verified"`
+		Committed            bool     `json:"committed"`
+		AgentVisible         string   `json:"agent_visible"`
 	}
 	if err := json.Unmarshal(out, &imported); err != nil {
 		t.Fatal(err)
 	}
-	if imported.Library != library || len(imported.ImportedIDs) != 1 || imported.ImportedIDs[0] != "notes" || imported.AgentBindingsCreated || imported.RuntimeVerified {
+	if imported.Library != library || len(imported.ImportedIDs) != 1 || imported.ImportedIDs[0] != "notes" || imported.AgentBindingsCreated || imported.RuntimeVerified || !imported.Committed || imported.AgentVisible != "unknown" {
 		t.Fatalf("unexpected import report: %+v", imported)
 	}
 	code, out, stderr = callProviderCLI(t, "status", "-catalog", catalogPath, "-library", library)
@@ -149,6 +161,7 @@ func TestProviderCLIExplicitImportAndStatus(t *testing.T) {
 }
 
 func TestProviderCLIRefusesImplicitAndUnverifiedImport(t *testing.T) {
+	requireProviderCLIFS(t)
 	t.Run("no selection", func(t *testing.T) {
 		catalogPath, source, library := providerCLIFixture(t)
 		code, _, stderr := callProviderCLI(t, "import", "-catalog", catalogPath, "-source", source, "-dest", library)
@@ -200,12 +213,15 @@ func TestProviderCLIMissingOrInvalidInputs(t *testing.T) {
 			t.Fatalf("invalid CLI %q exit=%d stdout=%s stderr=%s", args, code, out, stderr)
 		}
 	}
-	if err := os.WriteFile(catalogPath, []byte(`{"schema_version":999}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if code, out, stderr := callProviderCLI(t, "catalog", "-catalog", catalogPath); code != 1 || len(out) != 0 || stderr == "" {
-		t.Fatalf("unknown schema exit=%d stdout=%s stderr=%s", code, out, stderr)
-	}
+	t.Run("unknown schema", func(t *testing.T) {
+		requireProviderCLIFS(t)
+		if err := os.WriteFile(catalogPath, []byte(`{"schema_version":999}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if code, out, stderr := callProviderCLI(t, "catalog", "-catalog", catalogPath); code != 1 || len(out) != 0 || !strings.Contains(stderr, "schema") {
+			t.Fatalf("unknown schema exit=%d stdout=%s stderr=%s", code, out, stderr)
+		}
+	})
 }
 
 // This checks direct production imports and calls; it supplements the real
@@ -271,6 +287,7 @@ func TestProviderProductionCodeHasNoProcessOrNetworkAPIs(t *testing.T) {
 }
 
 func TestProviderCLICatalogSymlinksRefused(t *testing.T) {
+	requireProviderCLIFS(t)
 	catalogPath, _, _ := providerCLIFixture(t)
 	link := filepath.Join(t.TempDir(), "linked-catalog.json")
 	if err := os.Symlink(catalogPath, link); err != nil {

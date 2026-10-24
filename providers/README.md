@@ -36,11 +36,13 @@ review; a hash certifies identity rather than licensing, policy or safety.
 
 Provider filesystem commands currently require Linux support for `O_NOFOLLOW` and
 `renameat2(RENAME_NOREPLACE)`; unsupported platforms/filesystems fail closed.
-The destination parent must already exist and have no symlink components. The
+The destination parent must already exist. Explicit input path components must
+have no symlinks. Relative paths start from the current directory descriptor, so
+a symlink-form `PWD` does not make otherwise safe relative inputs fail. The
 complete destination must be new, including when another importer or a user
 creates an empty directory concurrently. Validation finishes before publication;
-failed or canceled imports remove staging files through pinned private directory descriptors. One no-replace rename commits
-the library atomically. Cancellation after that commit reports success. This
+cooperative failures or cancellations attempt cleanup through pinned private
+directory descriptors. One no-replace rename commits the library atomically. Cancellation after that commit reports success. This
 provides atomic visibility, not a guarantee of persistence across power loss.
 Existing libraries and user edits are never merged or overwritten. Processes
 with the same service UID (or root access) can already modify that UID's files;
@@ -63,6 +65,37 @@ source bytes and 32 MiB complete selected output (including retained originals
 and licenses). File modes are 0600 and directories 0700; run administration as
 the ARTEX service owner so existing access requirements stay explicit.
 
+## Interruption and command outcomes
+
+SIGINT and SIGTERM cancel an ongoing import through its context, allowing it to
+unwind and attempt staging cleanup. Cancellation before publication returns a
+nonzero exit code; it does not publish the destination. A signal arriving after
+the atomic rename cannot roll back a committed library. SIGPIPE is observed
+separately so a closed stdout becomes an output error instead of terminating the
+process before it can report that the import already committed.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Requested action and report completed; successful import JSON includes `committed: true` |
+| 1 | Import failed/canceled before commit, or a catalog/status action or its output failed |
+| 2 | Invalid command or options |
+| 3 | Import **committed**, but the success report could not be written; stderr names the library and says `committed=true` |
+
+Exit 3 is still an output failure, not a successful report. Inspect the existing
+library with `provider status`; do not blindly retry or delete it. Retrying the
+same destination is refused and never overwrites the committed data. If both
+output streams fail, exit 3 still distinguishes that committed state.
+
+SIGKILL, a crash or host shutdown cannot run deferred cleanup and can leave a
+partial or complete `.provider-stage-*` tree, consuming disk space. Cleanup can
+also fail on filesystem I/O errors. There is **no automatic stale-stage recovery**:
+a later import never deletes a directory just because its name has that prefix.
+Before retiring a residual directory, an operator must stop or account for active
+imports, establish which exact directory belongs to the interrupted operation,
+and inspect/preserve user content. Prefix, age or a receipt alone do not prove
+that deletion is safe. After an abrupt stop near commit, inspect both the chosen
+destination and any staging data before deciding what happened.
+
 ## Visibility, audit and readiness
 
 Choose a new library explicitly through the existing `ARTEX_SKILL_DIR` setting
@@ -70,8 +103,21 @@ and existing deployment/configuration process. This command does not change
 configuration or start/restart ARTEX. A standalone library replaces the configured
 skill root; this foundation does not combine it with an existing library. Grant
 individual skill-directory visibility using ARTEX's existing per-agent controls.
-No agent receives a default binding. Existing usage metering records the
-namespaced directory for resolved calls and records unknown-name misses.
+Import creates no new visibility binding, but this does not prove that the new
+library is invisible. Existing ARTEX grants are keyed only by skill directory
+name, without library path, revision or content hash. An enabled old grant for
+the same generated name applies when that name appears in a newly configured
+library or is restored after out-of-band file removal. Import itself does not
+change `ARTEX_SKILL_DIR`.
+
+Before switching libraries or reusing names, review and revoke matching grants
+for every affected agent, then check effective visibility in a fresh run. A
+different namespace avoids the specific old-name grant only if no grant already
+exists for the new name. Offline status cannot inspect the runtime DB and keeps
+`agent_visible` unknown. Library-bound identity would require a separate DB and
+audit-model design; this foundation retains existing name-based bindings.
+
+Existing usage metering records the namespaced directory for resolved calls and records unknown-name misses.
 
 | Report field | Evidence |
 | --- | --- |

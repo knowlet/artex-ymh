@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/Autumn-27/artex/skillprovider"
 )
@@ -15,8 +17,25 @@ import (
 // This command is dispatched before server initialization: no DB migration,
 // network listener, MCP connection or task runner is involved.
 func runProvider(args []string) int {
-	return providerCommand(context.Background(), args, os.Stdout, os.Stderr)
+	return withProviderSignals(func(ctx context.Context) int {
+		return providerCommand(ctx, args, os.Stdout, os.Stderr)
+	})
 }
+
+// Catch ordinary operator interruption so Import can unwind its staging files.
+// SIGPIPE is handled separately: a closed stdout must become an output error,
+// rather than terminate the process after a library has already been committed.
+func withProviderSignals(run func(context.Context) int) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	pipe := make(chan os.Signal, 1)
+	signal.Notify(pipe, syscall.SIGPIPE)
+	defer signal.Stop(pipe)
+	return run(ctx)
+}
+
+const providerExitCommittedOutputFailed = 3
+
 func providerCommand(ctx context.Context, args []string, out, errOut io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(errOut, "usage: artex provider <catalog|import|status> -catalog FILE [-source DIR -dest NEW_LIBRARY -select ID,ID | -library DIR]")
@@ -62,7 +81,11 @@ func providerCommand(ctx context.Context, args []string, out, errOut io.Writer) 
 		}
 		err = skillprovider.Import(ctx, catalog, *source, *dest, ids)
 		if err == nil {
-			err = encoder.Encode(map[string]any{"library": *dest, "imported_ids": ids, "agent_bindings_created": false, "runtime_verified": false})
+			err = encoder.Encode(map[string]any{"committed": true, "library": *dest, "imported_ids": ids, "agent_bindings_created": false, "agent_visible": "unknown", "runtime_verified": false})
+			if err != nil {
+				fmt.Fprintf(errOut, "committed=true: import committed to %q, but success output failed: %v; do not retry this destination; inspect it with provider status before further action\n", *dest, err)
+				return providerExitCommittedOutputFailed
+			}
 		}
 	case "status":
 		var report *skillprovider.ReadinessReport

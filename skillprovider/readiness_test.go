@@ -31,6 +31,9 @@ func TestProviderInspectMissingEvidence(t *testing.T) {
 	}
 	for _, mode := range []string{"no library", "missing library", "missing receipt", "unreceipted skill"} {
 		t.Run(mode, func(t *testing.T) {
+			if mode != "no library" {
+				requireLinuxFS(t)
+			}
 			c, _, library := importerFixture(t)
 			switch mode {
 			case "no library":
@@ -57,6 +60,7 @@ func TestProviderInspectMissingEvidence(t *testing.T) {
 }
 
 func TestProviderInspectImportedFilesAndDependencyEvidence(t *testing.T) {
+	requireLinuxFS(t)
 	c, source, library := importerFixture(t)
 	if err := Import(context.Background(), c, source, library, []string{"normal"}); err != nil {
 		t.Fatal(err)
@@ -72,20 +76,10 @@ func TestProviderInspectImportedFilesAndDependencyEvidence(t *testing.T) {
 	if report.Provider != c.Provider || report.Revision != c.Source.Revision || len(report.CatalogSHA256) != 64 {
 		t.Fatalf("readiness lacks catalog identity: %+v", report)
 	}
-	for _, alias := range []string{"tool-stationery", "stationery", "STATIONERY"} {
-		dependency, found := c.ResolveDependency(alias)
-		if !found || dependency.ID != "tool-stationery" {
-			t.Fatalf("explicit alias %q did not resolve: %+v", alias, dependency)
-		}
-	}
-	for _, mention := range []string{"Bash", "must-not-connect", "Use stationery now", "unknown-command", " stationery "} {
-		if dependency, found := c.ResolveDependency(mention); found {
-			t.Fatalf("instruction mention %q inferred dependency %+v", mention, dependency)
-		}
-	}
 }
 
 func TestProviderInspectAlteredAndMissingFiles(t *testing.T) {
+	requireLinuxFS(t)
 	for _, relative := range []string{"SKILL.md", "references/source.md", "references/LICENSE"} {
 		for _, mode := range []string{"altered", "missing"} {
 			t.Run(relative+"/"+mode, func(t *testing.T) {
@@ -137,6 +131,7 @@ func TestProviderInspectAlteredAndMissingFiles(t *testing.T) {
 }
 
 func TestProviderInspectRejectsMismatchedReceipts(t *testing.T) {
+	requireLinuxFS(t)
 	mutations := map[string]func(*Receipt){
 		"unknown schema": func(r *Receipt) { r.SchemaVersion++ },
 		"provider":       func(r *Receipt) { r.Provider = "different" },
@@ -202,6 +197,7 @@ func TestProviderInspectRejectsMismatchedReceipts(t *testing.T) {
 }
 
 func TestProviderInspectDoesNotTrustRewrittenReceipt(t *testing.T) {
+	requireLinuxFS(t)
 	for _, mode := range []string{"forged generated hash", "unverified import claim"} {
 		t.Run(mode, func(t *testing.T) {
 			c, source, library := importerFixture(t)
@@ -242,6 +238,34 @@ func TestProviderInspectDoesNotTrustRewrittenReceipt(t *testing.T) {
 			}
 			assertOfflineEvidence(t, report)
 		})
+	}
+}
+
+func TestProviderDependencyMetadataDoesNotRequireFilesystem(t *testing.T) {
+	c, _, _ := importerFixture(t)
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Inspect(c, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOfflineEvidence(t, report)
+	for _, status := range report.Skills {
+		if status.Imported != Missing {
+			t.Fatalf("metadata inferred import without a library: %+v", status)
+		}
+	}
+	for _, alias := range []string{"tool-stationery", "stationery", "STATIONERY"} {
+		dependency, found := c.ResolveDependency(alias)
+		if !found || dependency.ID != "tool-stationery" {
+			t.Fatalf("explicit alias %q did not resolve: %+v", alias, dependency)
+		}
+	}
+	for _, mention := range []string{"Bash", "must-not-connect", "Use stationery now", "unknown-command", " stationery "} {
+		if dependency, found := c.ResolveDependency(mention); found {
+			t.Fatalf("instruction mention %q inferred dependency %+v", mention, dependency)
+		}
 	}
 }
 

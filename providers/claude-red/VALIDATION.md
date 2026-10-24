@@ -54,3 +54,47 @@ that any of the 79 catalog entries or 85 tool families are executable. All
 bundled entries remain metadata-only/provenance-unverified; all offline agent,
 registration, binary and runtime evidence remains unknown. Existing traffic
 workflow and scope/approval/cancel/isolation logic are unchanged.
+
+## Review follow-up against head 2eb4b35
+
+Independent baseline reproduction used the actual provider command and harmless
+synthetic fixtures. SIGINT/SIGTERM during staging terminated the old command and
+left one staging directory. A real closed stdout pipe terminated it with SIGPIPE
+even though `Inspect` verified a committed library. A synthetic output writer
+failure also reported only an ordinary failure after commit, and retry was
+correctly refused by the unchanged no-replace contract.
+
+The revised command uses a shared signal wrapper with NotifyContext for ordinary
+interrupt/termination and temporary SIGPIPE notification for observable output
+errors. Regressions cover real signals during staging, a real closed stdout pipe,
+zero/partial report failures after verified commit, retained existing-destination
+refusal, and SIGKILL residual staging that later imports do not delete. Exit 3
+explicitly means committed-but-output-failed. Cooperative signal cleanup is
+separate from the documented uncatchable crash/SIGKILL limitation.
+
+The real PG test now also checks the existing name-based identity limitation:
+a pre-existing same-name grant follows a configured replacement library, a
+new namespace does not inherit that particular grant, and revoking matching
+grants before switching prevents visibility in a fresh run. No production DB
+schema, binding, assembly or metering logic is changed. This limitation remains
+an explicit operational constraint rather than a claimed identity fix.
+
+Relative catalog/source/destination paths under a symlink-form PWD were rejected
+by the old filepath.Abs-based walk. A baseline overlay reproduces that failure;
+regressions now exercise the descriptor-relative implementation while explicit
+symlink components and traversal still fail closed.
+
+Filesystem tests now distinguish Linux backend coverage from portable metadata
+validation and the unsupported-backend contract. Linux-host execution of the
+actual unsupported stub tests does not count as a Darwin/Windows runtime test.
+Darwin/Windows compilation checks do not execute foreign binaries. No broader
+runtime support or recovery architecture is claimed.
+
+Local follow-up results: Linux `go test -race ./skillprovider -count=1` passed
+128 tests/subtests with zero skips; the production provider command file tests
+also passed under `-race`, including actual OS signals and closed-pipe output.
+Provider and CLI test binaries compiled for Darwin/amd64 and Windows/amd64;
+they were not executed. Positive unsupported provider/CLI backend tests and
+portable metadata tests passed using the actual unsupported stub on the Linux
+host. The workspace dependency-download blocker still prevents a local full
+backend/PG build; the PR records the new head's dedicated remote CI results.

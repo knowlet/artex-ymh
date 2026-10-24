@@ -48,6 +48,24 @@ jobs:
         run: test -z "$(gofmt -l skillprovider cmd/artex/provider*.go server/provider_integration_test.go)"
       - name: Offline conversion and real Norma contract
         run: go test -race ./skillprovider -count=1 -v
+      - name: Unsupported backend contract and portable metadata on Linux host
+        run: |
+          go test skillprovider/catalog.go skillprovider/import.go skillprovider/readiness.go skillprovider/filesystem_other.go skillprovider/importer_test.go skillprovider/importer_additional_test.go skillprovider/readiness_test.go skillprovider/filesystem_unsupported_test.go -run '^(TestProviderUnsupportedFilesystemFailsClosed|TestProviderCatalogValidation|TestProviderParseCatalogStrict|TestProviderImportRefusesInvalidSelectionAndProvenance|TestProviderImportCancelledBeforeFilesystem|TestProviderRejectsCaseVariantJSONFieldShadowing|TestProviderCatalogNestingBound|TestProviderDependencyMetadataDoesNotRequireFilesystem|TestProviderDependencyAliasUsesValidationComparison)$' -count=1 -v
+          python3 - <<'PYOVERLAY'
+          import json, os, pathlib
+          root = pathlib.Path.cwd()
+          scratch = pathlib.Path(os.environ["RUNNER_TEMP"])
+          stub = scratch / "provider-unsupported.go"
+          stub.write_text((root / "skillprovider/filesystem_other.go").read_text().split("\n", 1)[1])
+          (scratch / "provider-unsupported-overlay.json").write_text(json.dumps({"Replace": {str(root / "skillprovider/filesystem_linux.go"): str(stub)}}))
+          PYOVERLAY
+          go test -overlay="$RUNNER_TEMP/provider-unsupported-overlay.json" cmd/artex/provider.go cmd/artex/provider_test.go cmd/artex/provider_output_test.go cmd/artex/provider_unsupported_test.go -run '^TestProviderCLIUnsupportedFilesystemFailsClosed$' -count=1 -v
+      - name: Darwin and Windows compile checks only
+        run: |
+          for target in darwin windows; do
+            CGO_ENABLED=0 GOOS="$target" GOARCH=amd64 go test -c ./skillprovider -o "$RUNNER_TEMP/provider-$target.test"
+            CGO_ENABLED=0 GOOS="$target" GOARCH=amd64 go test -c cmd/artex/provider.go cmd/artex/provider_test.go cmd/artex/provider_output_test.go cmd/artex/provider_unsupported_test.go -o "$RUNNER_TEMP/provider-cli-$target.test"
+          done
       - name: Trace harmless import for process and network side effects
         run: |
           go test -c ./skillprovider -o "$RUNNER_TEMP/provider.test"

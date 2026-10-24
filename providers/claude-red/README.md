@@ -74,6 +74,9 @@ A name appearing in a document establishes none of the latter five states.
 The source repository supplies Markdown guidance and repository-maintenance
 scripts, rather than binaries, APIs or execution adapters for the referenced
 tools. This catalog performs no network request, installation, execution,
-credential provisioning, permission change or default agent binding. Existing
+credential provisioning, permission change or new agent binding. Existing
+same-name visibility grants can apply after an operator switches libraries;
+review and revoke them before reusing names, as described in the
+[provider visibility contract](../README.md#visibility-audit-and-readiness). Existing
 ARTEX scope, approval, cancellation, isolation and usage-audit mechanisms remain
 the authority for any later invocation.

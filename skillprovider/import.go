@@ -221,15 +221,14 @@ func destinationParts(destination string) (string, string, error) {
 			return "", "", fmt.Errorf("destination traversal is forbidden")
 		}
 	}
-	abs, err := filepath.Abs(destination)
-	if err != nil {
-		return "", "", err
-	}
-	base := filepath.Base(abs)
+	// Keep relative parents relative so openDirectory can pin "." directly.
+	// All traversal components were rejected before this lexical cleanup.
+	clean := filepath.Clean(destination)
+	base := filepath.Base(clean)
 	if base == "." || base == string(filepath.Separator) || len(base) > 240 {
 		return "", "", fmt.Errorf("invalid destination root")
 	}
-	return filepath.Dir(abs), base, nil
+	return filepath.Dir(clean), base, nil
 }
 
 // convert keeps the body byte-for-byte and retains the complete original source

@@ -4,13 +4,13 @@ package skillprovider
 
 import "fmt"
 
-// Import fails closed where no no-follow/no-replace implementation is provided.
+// Filesystem commands fail closed without a no-follow/no-replace implementation.
 type safeDir struct{}
 
 func (*safeDir) requirePrivate() error { return unsupportedFS() }
 
 func unsupportedFS() error {
-	return fmt.Errorf("provider imports require Linux no-follow/no-replace filesystem support")
+	return fmt.Errorf("provider filesystem commands require Linux no-follow/no-replace filesystem support")
 }
 func openDirectory(string) (*safeDir, error)                      { return nil, unsupportedFS() }
 func (*safeDir) Close() error                                     { return nil }

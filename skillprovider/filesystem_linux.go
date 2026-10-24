@@ -27,17 +27,20 @@ func openDirectory(name string) (*safeDir, error) {
 			return nil, fmt.Errorf("directory traversal is forbidden")
 		}
 	}
-	abs, err := filepath.Abs(name)
-	if err != nil {
-		return nil, err
+	anchor := "."
+	if filepath.IsAbs(name) {
+		anchor = "/"
 	}
-	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	// Relative paths start at the kernel's current directory, not Getwd/PWD.
+	// Expanding a logical cwd through filepath.Abs would introduce symlink
+	// components which the caller never supplied, then incorrectly reject them.
+	fd, err := unix.Open(anchor, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
 	}
 	d := &safeDir{fd: fd}
-	for _, p := range strings.Split(strings.TrimPrefix(abs, "/"), "/") {
-		if p == "" {
+	for _, p := range strings.Split(name, "/") {
+		if p == "" || p == "." {
 			continue
 		}
 		next, err := d.child(p)

@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,6 +24,9 @@ import (
 // MCPs, external tools, an LLM, or a task runner. CI requires PG rather than
 // treating a missing service as successful integration coverage.
 func TestProviderVisibilityAndMeteringPG(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("provider import integration requires the Linux filesystem backend")
+	}
 	requirePG := os.Getenv("ARTEX_PROVIDER_REQUIRE_PG") == "1"
 	dsn, _, err := db.DSN()
 	if err != nil {
@@ -99,7 +104,7 @@ func TestProviderVisibilityAndMeteringPG(t *testing.T) {
 	t.Cleanup(func() { agent.ToolAugment = originalAugment })
 	ri := agent.RunInfo{TaskID: 72341, ExplorationID: 72342, IntentID: 72343, SessionID: agentKey}
 	ctx := agent.WithRunInfo(context.Background(), ri)
-	assemble := func(key string) []actool.CoreTool {
+	assemble := func(t *testing.T, key string) []actool.CoreTool {
 		t.Helper()
 		extra, deferred, cleanup := agent.ToolAugment(ctx, key)
 		if cleanup != nil {
@@ -113,13 +118,13 @@ func TestProviderVisibilityAndMeteringPG(t *testing.T) {
 	if names, err := pg.AgentSkillNames(ag.ID); err != nil || len(names) != 0 {
 		t.Fatalf("new agent visibility=%v, err=%v", names, err)
 	}
-	if extra := assemble(agentKey); len(extra) != 0 {
+	if extra := assemble(t, agentKey); len(extra) != 0 {
 		t.Fatalf("imported skill became visible without binding: %v", extra)
 	}
 	if err := pg.ToggleSkillVisibility(ag.ID, skillName, true); err != nil {
 		t.Fatal(err)
 	}
-	extra := assemble(agentKey)
+	extra := assemble(t, agentKey)
 	if len(extra) != 1 || extra[0].Name() != "Skill" {
 		t.Fatalf("expected only the Skill meta-tool after binding, got %v", extra)
 	}
@@ -186,7 +191,7 @@ FROM skill_usage WHERE agent_key=$1 ORDER BY id`, agentKey)
 	if err := pg.ToggleSkillVisibility(ag.ID, skillName, false); err != nil {
 		t.Fatal(err)
 	}
-	if extra := assemble(agentKey); len(extra) != 0 {
+	if extra := assemble(t, agentKey); len(extra) != 0 {
 		t.Fatalf("revoked skill remained in a fresh run: %v", extra)
 	}
 	if err := pg.ToggleSkillVisibility(ag.ID, skillName, true); err != nil {
@@ -195,10 +200,60 @@ FROM skill_usage WHERE agent_key=$1 ORDER BY id`, agentKey)
 	if err := os.Remove(filepath.Join(library, skillName, "SKILL.md")); err != nil {
 		t.Fatal(err)
 	}
-	if extra := assemble(agentKey); len(extra) != 0 {
+	if extra := assemble(t, agentKey); len(extra) != 0 {
 		t.Fatalf("missing skill file became available: %v", extra)
 	}
-	if extra := assemble(agentKey + "_missing"); len(extra) != 0 {
+	if extra := assemble(t, agentKey+"_missing"); len(extra) != 0 {
 		t.Fatalf("missing agent received tools: %v", extra)
 	}
+
+	t.Run("existing name grant follows configured library", func(t *testing.T) {
+		// The prior out-of-band file removal left this name's grant in PG.
+		// A new library path does not establish a new authorization identity.
+		before, err := pg.AgentSkillNames(ag.ID)
+		if err != nil || !slices.Equal(before, []string{skillName}) {
+			t.Fatalf("expected retained same-name grant, got %v: %v", before, err)
+		}
+		replacement := filepath.Join(t.TempDir(), "replacement-library")
+		if err := skillprovider.Import(ctx, catalog, source, replacement, []string{"hello"}); err != nil {
+			t.Fatal(err)
+		}
+		after, err := pg.AgentSkillNames(ag.ID)
+		if err != nil || !slices.Equal(before, after) {
+			t.Fatalf("import changed visibility bindings: before=%v after=%v err=%v", before, after, err)
+		}
+		// This simulates configuring ARTEX to use the replacement library; the
+		// importer itself neither switches libraries nor checks the runtime DB.
+		wireAgentAugment(pg, replacement, nil)
+		if extra := assemble(t, agentKey); len(extra) != 1 || extra[0].Name() != "Skill" {
+			t.Fatalf("pre-existing same-name grant did not apply to replacement library: %v", extra)
+		}
+
+		// A different namespace has a different directory name. It is hidden
+		// here because this test agent has no grant for that particular name.
+		separateCatalog := *catalog
+		separateCatalog.Namespace = "fixture-separate"
+		separateLibrary := filepath.Join(t.TempDir(), "separate-library")
+		if err := skillprovider.Import(ctx, &separateCatalog, source, separateLibrary, []string{"hello"}); err != nil {
+			t.Fatal(err)
+		}
+		after, err = pg.AgentSkillNames(ag.ID)
+		if err != nil || !slices.Equal(before, after) {
+			t.Fatalf("distinct namespace import changed visibility bindings: before=%v after=%v err=%v", before, after, err)
+		}
+		wireAgentAugment(pg, separateLibrary, nil)
+		if extra := assemble(t, agentKey); len(extra) != 0 {
+			t.Fatalf("old name granted visibility to distinct namespace: %v", extra)
+		}
+
+		// Revoke the old name before configuring the replacement library.
+		// Fresh runs then cannot see the imported skill at the reused name.
+		if err := pg.ToggleSkillVisibility(ag.ID, skillName, false); err != nil {
+			t.Fatal(err)
+		}
+		wireAgentAugment(pg, replacement, nil)
+		if extra := assemble(t, agentKey); len(extra) != 0 {
+			t.Fatalf("revoked name remained visible after library switch: %v", extra)
+		}
+	})
 }

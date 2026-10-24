@@ -13,6 +13,7 @@ import (
 )
 
 func TestProviderPreservesDocumentLicenseAndCRLFBody(t *testing.T) {
+	requireLinuxFS(t)
 	c, source, destination := importerFixture(t)
 	body := "\r\n# Fictional stationery\r\nCopyright local fixture authors.\r\n"
 	md := []byte("---\r\nname: harmless\r\ndescription: Harmless fixture.\r\nlicense: Apache-2.0\r\nmcps: [never-connect]\r\n---\r\n" + body)
@@ -77,6 +78,7 @@ func (c stageCancellationContext) Err() error {
 }
 
 func TestProviderCancellationRemovesCreatedStaging(t *testing.T) {
+	requireLinuxFS(t)
 	c, source, destination := importerFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -85,4 +87,10 @@ func TestProviderCancellationRemovesCreatedStaging(t *testing.T) {
 		t.Fatalf("got %v, want cancellation after staging creation", err)
 	}
 	assertImportAbsent(t, destination)
+}
+
+func TestProviderCatalogNestingBound(t *testing.T) {
+	if _, err := ParseCatalog(strings.NewReader(strings.Repeat("[", 64) + strings.Repeat("]", 64))); err == nil || !strings.Contains(err.Error(), "nesting") {
+		t.Fatalf("deep JSON not rejected by nesting limit: %v", err)
+	}
 }

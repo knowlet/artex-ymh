@@ -20,6 +20,15 @@ const syntheticBody = "\n# Harmless inventory\n\nList local fictional stationery
 const syntheticNormal = "---\nname: original-display\ndescription: Inspect a synthetic stationery list.\nlicense: MIT\nmcps: [must-not-connect]\nmcp: must-not-connect-either\nallowed-tools: [Bash]\nhooks: [must-not-run]\n---\n" + syntheticBody
 const syntheticLegacy = "# Legacy stationery list\n\nDescribe fictional pencils in prose.\nCopyright: synthetic fixture authors.\n"
 
+// requireLinuxFS gates only tests that exercise the Linux filesystem backend.
+// Keep catalog, parser, metadata and pre-filesystem rejection tests portable.
+func requireLinuxFS(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("provider filesystem operations require Linux no-follow/no-replace support")
+	}
+}
+
 func importerFixture(t *testing.T) (*Catalog, string, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -91,9 +100,7 @@ func assertImportAbsent(t *testing.T, destination string) {
 }
 
 func TestProviderImportNormaContract(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("atomic no-replace import currently supports Linux")
-	}
+	requireLinuxFS(t)
 	c, source, destination := importerFixture(t)
 	if err := Import(context.Background(), c, source, destination, []string{"normal", "legacy"}); err != nil {
 		t.Fatal(err)
@@ -175,9 +182,7 @@ func TestProviderImportNormaContract(t *testing.T) {
 }
 
 func TestProviderImportIsSelective(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("atomic no-replace import currently supports Linux")
-	}
+	requireLinuxFS(t)
 	c, source, destination := importerFixture(t)
 	// The unselected source need not exist and is never read.
 	if err := os.Remove(filepath.Join(source, filepath.FromSlash(c.Skills[1].SourcePath))); err != nil {
@@ -199,9 +204,7 @@ func TestProviderImportIsSelective(t *testing.T) {
 }
 
 func TestProviderImportPreservesSourceDetails(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("atomic no-replace import currently supports Linux")
-	}
+	requireLinuxFS(t)
 	for _, tc := range []struct {
 		name, source, body, license string
 		legacy                      bool
@@ -247,9 +250,7 @@ func TestProviderImportPreservesSourceDetails(t *testing.T) {
 }
 
 func TestProviderImportBoundsCombinedOutput(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("atomic no-replace import currently supports Linux")
-	}
+	requireLinuxFS(t)
 	c, source, destination := importerFixture(t)
 	body := bytes.Repeat([]byte("a"), MaxSourceBytes-2048)
 	c.Skills = nil
@@ -378,8 +379,12 @@ func TestProviderImportRefusesInvalidSelectionAndProvenance(t *testing.T) {
 	for _, ids := range [][]string{nil, {}, {"missing"}, {"normal", "normal"}} {
 		t.Run(fmt.Sprint(ids), func(t *testing.T) {
 			c, source, destination := importerFixture(t)
-			if err := Import(context.Background(), c, source, destination, ids); err == nil {
-				t.Fatal("accepted invalid selection")
+			want := "unknown or duplicate selected skill"
+			if len(ids) == 0 {
+				want = "select between"
+			}
+			if err := Import(context.Background(), c, source, destination, ids); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("invalid selection did not fail before filesystem access: %v", err)
 			}
 			assertImportAbsent(t, destination)
 		})
@@ -388,15 +393,26 @@ func TestProviderImportRefusesInvalidSelectionAndProvenance(t *testing.T) {
 		c, source, destination := importerFixture(t)
 		c.Skills[0].Provenance = "provenance-unverified"
 		c.Skills[0].ImportPolicy = "metadata-only"
-		if err := Import(context.Background(), c, source, destination, []string{"normal"}); err == nil {
-			t.Fatal("unverified source imported")
+		if err := Import(context.Background(), c, source, destination, []string{"normal"}); err == nil || !strings.Contains(err.Error(), "metadata-only") {
+			t.Fatalf("unverified provenance did not fail before filesystem access: %v", err)
 		}
 		assertImportAbsent(t, destination)
 	})
 }
 
-func TestProviderImportAtomicFailureAndCancellation(t *testing.T) {
-	for _, mode := range []string{"hash mismatch", "size mismatch", "missing source", "license mismatch", "oversized actual source", "oversized license", "non utf8 license", "non utf8", "empty source description", "malformed yaml", "duplicate yaml", "missing frontmatter", "unclosed frontmatter", "cancelled"} {
+func TestProviderImportCancelledBeforeFilesystem(t *testing.T) {
+	c, source, destination := importerFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := Import(ctx, c, source, destination, []string{"normal"}); err != context.Canceled {
+		t.Fatalf("pre-cancelled import returned %v, want context.Canceled before filesystem access", err)
+	}
+	assertImportAbsent(t, destination)
+}
+
+func TestProviderImportAtomicFailure(t *testing.T) {
+	requireLinuxFS(t)
+	for _, mode := range []string{"hash mismatch", "size mismatch", "missing source", "license mismatch", "oversized actual source", "oversized license", "non utf8 license", "non utf8", "empty source description", "malformed yaml", "duplicate yaml", "missing frontmatter", "unclosed frontmatter"} {
 		t.Run(mode, func(t *testing.T) {
 			c, source, destination := importerFixture(t)
 			ctx := context.Background()
@@ -421,10 +437,6 @@ func TestProviderImportAtomicFailureAndCancellation(t *testing.T) {
 				license := []byte{0xff}
 				c.Source.License.SHA256 = hashBytes(license)
 				writeImporterFile(t, filepath.Join(source, "LICENSE"), license)
-			case "cancelled":
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithCancel(ctx)
-				cancel()
 			default:
 				md := []byte{0xff}
 				switch mode {
@@ -473,9 +485,7 @@ func (c *cancelWhenStaged) Err() error {
 }
 
 func TestProviderImportCancellationRemovesStaging(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("atomic no-replace import currently supports Linux")
-	}
+	requireLinuxFS(t)
 	c, source, destination := importerFixture(t)
 	base, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -490,6 +500,7 @@ func TestProviderImportCancellationRemovesStaging(t *testing.T) {
 }
 
 func TestProviderImportRejectsLinksAndPreservesDestinations(t *testing.T) {
+	requireLinuxFS(t)
 	for _, mode := range []string{"source file symlink", "source directory symlink", "source root symlink", "destination parent symlink", "destination symlink", "existing empty destination", "existing user file"} {
 		t.Run(mode, func(t *testing.T) {
 			c, source, destination := importerFixture(t)
@@ -564,9 +575,7 @@ func TestProviderImportRejectsLinksAndPreservesDestinations(t *testing.T) {
 }
 
 func TestProviderImportConcurrentNoReplace(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("atomic no-replace import currently supports Linux")
-	}
+	requireLinuxFS(t)
 	c, source, destination := importerFixture(t)
 	start := make(chan struct{})
 	results := make(chan error, 2)
