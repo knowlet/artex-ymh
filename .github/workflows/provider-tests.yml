@@ -1,0 +1,79 @@
+name: provider tests
+on:
+  pull_request:
+    paths:
+      - 'skillprovider/**'
+      - 'providers/**'
+      - 'cmd/artex/**'
+      - 'server/assembly.go'
+      - 'server/skill_usage.go'
+      - 'server/provider_integration_test.go'
+      - 'db/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/provider-tests.yml'
+permissions:
+  contents: read
+concurrency:
+  group: provider-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  provider:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
+        env:
+          POSTGRES_USER: artex_test
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: artex_provider
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U artex_test -d artex_provider"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ARTEX_PG_DSN: postgres://artex_test:fixture-only@127.0.0.1:5432/artex_provider?sslmode=disable
+      ARTEX_PROVIDER_REQUIRE_PG: '1'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Formatting
+        run: test -z "$(gofmt -l skillprovider cmd/artex/provider*.go server/provider_integration_test.go)"
+      - name: Offline conversion and real Norma contract
+        run: go test -race ./skillprovider -count=1 -v
+      - name: Trace harmless import for process and network side effects
+        run: |
+          go test -c ./skillprovider -o "$RUNNER_TEMP/provider.test"
+          strace -f -e trace=execve,execveat,network -o "$RUNNER_TEMP/provider.trace" "$RUNNER_TEMP/provider.test" -test.run '^TestProviderImportNormaContract$' -test.v
+          python3 - <<'PYTRACE'
+          import os, pathlib, re
+          trace = pathlib.Path(os.environ["RUNNER_TEMP"], "provider.trace").read_text()
+          calls = re.findall(r"^\d+\s+(\w+)\(", trace, flags=re.M)
+          assert calls == ["execve"], trace
+          print("PASS: one initial test executable; no additional exec or network syscalls")
+          PYTRACE
+      - name: Administration command
+        run: go test ./cmd/artex -run '^TestProvider' -count=1 -v
+      - name: Real PostgreSQL visibility and metering
+        run: go test ./server -run '^TestProviderVisibilityAndMeteringPG$' -count=1 -v
+      - name: Vet
+        run: go vet ./skillprovider ./cmd/artex ./server
+      - name: Build backend
+        run: go build -o "$RUNNER_TEMP/artex" ./cmd/artex
+      - name: Built backend offline status dispatch
+        run: |
+          ARTEX_PG_DSN=unavailable "$RUNNER_TEMP/artex" provider status -catalog providers/claude-red/catalog.json > "$RUNNER_TEMP/provider-status.json"
+          python3 - <<'PYDISPATCH'
+          import json, os, pathlib
+          report = json.loads(pathlib.Path(os.environ["RUNNER_TEMP"], "provider-status.json").read_text())
+          assert len(report["skills"]) == 79
+          assert all(s["imported"] == "missing" and s["agent_visible"] == "unknown" for s in report["skills"])
+          print("PASS: real backend provider command needs no database/server initialization")
+          PYDISPATCH

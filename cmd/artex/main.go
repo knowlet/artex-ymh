@@ -52,6 +52,10 @@ func main() {
 }
 
 func run() int {
+	if len(os.Args) > 1 && os.Args[1] == "provider" {
+		return runProvider(os.Args[2:])
+	}
+
 	// `artex doctor` 部署预检（期 6)：只读检查，在解析服务 flag / 起任何子系统之前分流。
 	if len(os.Args) > 1 && os.Args[1] == "doctor" {
 		return runDoctor(os.Args[2:])
