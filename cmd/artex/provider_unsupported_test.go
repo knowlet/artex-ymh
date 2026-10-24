@@ -20,7 +20,7 @@ func TestProviderCLIUnsupportedFilesystemFailsClosed(t *testing.T) {
 		{"catalog", "-catalog", catalog},
 		{"status", "-catalog", catalog, "-library", source},
 		{"import", "-catalog", catalog, "-source", source, "-dest", library, "-select", "notes"},
-		{"recover", "-stage", filepath.Join(filepath.Dir(library), ".provider-stage-"+strings.Repeat("a", 32))},
+		{"recover", "-stage", filepath.ToSlash(filepath.Join(filepath.Dir(library), ".provider-stage-"+strings.Repeat("a", 32)))},
 	} {
 		code, out, stderr := callProviderCLI(t, args...)
 		if code != 1 || len(out) != 0 || !strings.Contains(stderr, "require Linux") {
