@@ -1,0 +1,98 @@
+# Load ONCE inside http {}, e.g. /etc/nginx/conf.d/artex.conf.
+# Nginx >= 1.19.4 with http_ssl, http_realip and http_geo modules is required.
+# Deploy a currently patched release. See HARDENING.md before enabling.
+# Replace every artex.example.com and install the origin certificate/key.
+
+# Real IP rewrites $remote_addr to the visitor; authorize the original peer.
+geo $realip_remote_addr $artex_cloudflare_peer {
+    default 0;
+    include /etc/nginx/snippets/artex/cloudflare-peers.geo;
+}
+
+# Validate HTTP Host independently of TLS SNI, including absolute-form requests.
+map $http_host $artex_valid_host {
+    default 0;
+    artex.example.com 1;
+    artex.example.com:443 1;
+}
+
+map $http_upgrade $artex_connection_upgrade {
+    default upgrade;
+    '' '';
+}
+
+# The default TLS server deliberately has NO certificate or proxy location.
+# Unknown / absent SNI must fail before a certificate is sent, not with HTTP 444
+# after a completed handshake. Ensure no other default_server owns this socket.
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_reject_handshake on;
+    return 444;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name artex.example.com;
+    server_tokens off;
+    # Match ARTEX's largest bounded workspace upload; Cloudflare's plan-specific
+    # request-size limit may be lower and must be checked separately.
+    client_max_body_size 512m;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_certificate /etc/nginx/ssl/artex/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/artex/privkey.pem;
+    ssl_session_tickets off;
+
+    # Only Cloudflare socket peers may supply the visitor address.
+    include /etc/nginx/snippets/artex/cloudflare-realip.conf;
+
+    # These return-only checks are safe in the rewrite phase. The peer check
+    # occurs AFTER TLS; use a network firewall to block direct peers before TLS.
+    if ($artex_cloudflare_peer = 0) { return 444; }
+    if ($artex_valid_host = 0) { return 444; }
+    # $host also covers the request-target authority in absolute-form requests.
+    if ($host != artex.example.com) { return 444; }
+
+    # Optional AOP: install the matching CLIENT-certificate CA and enable AOP
+    # in Cloudflare first. This is not the Origin CA used for the server cert.
+    # A custom zone/hostname certificate authenticates your zone; the shared
+    # Cloudflare certificate authenticates Cloudflare infrastructure only.
+    # ssl_client_certificate /etc/nginx/ssl/artex/origin-pull-ca.pem;
+    # ssl_verify_client on;
+    # ssl_verify_depth 2;
+
+    # The hostname serves a private control plane; also configure a Cloudflare
+    # Cache Rule to bypass caching for the entire hostname.
+    add_header Cache-Control "private, no-store" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Port 443;
+
+        # Overwrite, never append to an untrusted incoming forwarding chain.
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header CF-Connecting-IP $remote_addr;
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header True-Client-IP "";
+        proxy_set_header CF-Connecting-IPv6 "";
+
+        # Preserve Gate POSTs, WebSocket upgrades and incremental SSE events.
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $artex_connection_upgrade;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_hide_header Cache-Control;
+        proxy_hide_header Expires;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
