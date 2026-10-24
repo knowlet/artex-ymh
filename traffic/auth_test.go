@@ -173,6 +173,10 @@ func TestOpenTightensPermissions(t *testing.T) {
 	dir := t.TempDir()
 
 	// Simulate a legacy install: loose dirs/files written by older versions.
+	// TempDir starts at 0700; loosen the root so its assertion checks tightening.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	legacy := filepath.Join(dir, "old.example.com", "GET")
 	if err := os.MkdirAll(legacy, 0o755); err != nil {
 		t.Fatal(err)
@@ -191,8 +195,9 @@ func TestOpenTightensPermissions(t *testing.T) {
 	}
 	defer tr.Close()
 
-	for _, d := range []string{dir, "_index", "_blobs", "_ca"} {
-		if m := fileMode(t, filepath.Join(dir, d)); m != 0o700 {
+	// Each entry is a complete path: joining dir again duplicates the absolute root.
+	for _, d := range []string{dir, filepath.Join(dir, "_index"), filepath.Join(dir, "_blobs"), filepath.Join(dir, "_ca")} {
+		if m := fileMode(t, d); m != 0o700 {
 			t.Errorf("dir %s mode=%o, want 700", d, m)
 		}
 	}
