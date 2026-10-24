@@ -48,3 +48,27 @@ func (d *DB) SetBool(key string, val bool) error {
 	}
 	return d.SetSetting(key, "false")
 }
+
+// SetSettingIfAbsent claims a key atomically without overwriting another writer.
+// An existing empty value is also reserved; recovery must use the reset script.
+func (d *DB) SetSettingIfAbsent(key, value string) (bool, error) {
+	result, err := d.Exec(`INSERT INTO settings(key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`, key, value)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n == 1, err
+}
+
+// TakeSetting atomically removes and returns a one-use credential. A SELECT
+// followed by DELETE lets simultaneous callers redeem the same credential.
+func (d *DB) TakeSetting(key string) (value string, ok bool, err error) {
+	err = d.QueryRow(`DELETE FROM settings WHERE key=$1 RETURNING value`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return value, true, nil
+}

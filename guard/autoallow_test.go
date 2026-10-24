@@ -48,6 +48,14 @@ func TestAutoAllowKeepsDenyEnforced(t *testing.T) {
 		_, _ = d.Exec(`DELETE FROM intercept_pending WHERE tool_input::text LIKE '%' || $1 || '%'`, marker)
 	})
 
+	// IsToolEnabled above warms the rule cache. Direct fixture inserts bypass
+	// the server CRUD handlers, so mirror their explicit cache invalidation.
+	ic.Invalidate()
+	denyInput, _ := json.Marshal(map[string]string{"command": marker + "-deny"})
+	if dec, matched := ic.Match("Bash", denyInput); !matched || dec.Action != "deny" || dec.RuleID != denyRule.ID {
+		t.Fatalf("deny fixture must match before enabling auto-allow: matched=%v decision=%+v", matched, dec)
+	}
+
 	g := NewWithInterceptor(ic)
 	call := func(cmd string) bool {
 		input, _ := json.Marshal(map[string]string{"command": cmd})
