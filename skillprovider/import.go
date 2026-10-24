@@ -93,7 +93,11 @@ func Import(ctx context.Context, c *Catalog, sourceDir, destination string, ids 
 	if err != nil {
 		return err
 	}
-	receipt := Receipt{SchemaVersion: SchemaVersion, Provider: c.Provider, Namespace: c.Namespace, Revision: c.Source.Revision, CatalogSHA256: dig, Skills: make([]ImportedSkill, 0, len(prepared))}
+	var libraryNonce [16]byte
+	if _, err := rand.Read(libraryNonce[:]); err != nil {
+		return err
+	}
+	receipt := Receipt{LibraryID: hex.EncodeToString(libraryNonce[:]), SchemaVersion: SchemaVersion, Provider: c.Provider, Namespace: c.Namespace, Revision: c.Source.Revision, CatalogSHA256: dig, Skills: make([]ImportedSkill, 0, len(prepared))}
 	for _, p := range prepared {
 		receipt.Skills = append(receipt.Skills, ImportedSkill{ID: p.entry.ID, Name: p.name, SourceSHA256: p.entry.SourceSHA256, SkillSHA256: hashBytes(p.converted), LicenseSHA256: c.Source.License.SHA256})
 	}
@@ -102,7 +106,8 @@ func Import(ctx context.Context, c *Catalog, sourceDir, destination string, ids 
 		return err
 	}
 	receiptJSON = append(receiptJSON, '\n')
-	if total+int64(len(receiptJSON)) > MaxTotalBytes {
+	libraryID := []byte(receipt.LibraryID + "\n")
+	if total+int64(len(receiptJSON)+len(libraryID)) > MaxTotalBytes {
 		return fmt.Errorf("import receipt exceeds total byte limit")
 	}
 	if err := ctx.Err(); err != nil {
@@ -170,6 +175,9 @@ func Import(ctx context.Context, c *Catalog, sourceDir, destination string, ids 
 		if err != nil {
 			return err
 		}
+	}
+	if err := stage.writeFile(LibraryIDFilename, libraryID); err != nil {
+		return err
 	}
 	if err := stage.writeFile(ReceiptFilename, receiptJSON); err != nil {
 		return err

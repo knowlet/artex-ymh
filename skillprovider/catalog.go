@@ -18,12 +18,13 @@ import (
 )
 
 const (
-	SchemaVersion   = 1
-	MaxCatalogBytes = 2 << 20
-	MaxSourceBytes  = 1 << 20
-	MaxTotalBytes   = 32 << 20
-	MaxSkills       = 100
-	ReceiptFilename = ".provider-import.json"
+	SchemaVersion     = 1
+	MaxCatalogBytes   = 2 << 20
+	MaxSourceBytes    = 1 << 20
+	MaxTotalBytes     = 32 << 20
+	MaxSkills         = 100
+	ReceiptFilename   = ".provider-import.json"
+	LibraryIDFilename = ".provider-library-id"
 )
 
 type Catalog struct {
@@ -66,6 +67,7 @@ type Dependency struct {
 }
 
 type Receipt struct {
+	LibraryID     string          `json:"library_id"`
 	SchemaVersion int             `json:"schema_version"`
 	Provider      string          `json:"provider"`
 	Namespace     string          `json:"namespace"`

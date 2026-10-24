@@ -285,3 +285,39 @@ func TestProviderDependencyAliasUsesValidationComparison(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderInspectRejectsInvalidIdentityMarker(t *testing.T) {
+	requireLinuxFS(t)
+	for _, mode := range []string{"missing", "mismatch", "symlink"} {
+		t.Run(mode, func(t *testing.T) {
+			catalog, source, library := importerFixture(t)
+			if err := Import(context.Background(), catalog, source, library, []string{"normal"}); err != nil {
+				t.Fatal(err)
+			}
+			markerPath := filepath.Join(library, LibraryIDFilename)
+			original, err := os.ReadFile(markerPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(markerPath); err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "mismatch":
+				writeImporterFile(t, markerPath, []byte(strings.Repeat("0", 32)+"\n"))
+			case "symlink":
+				target := filepath.Join(t.TempDir(), "marker")
+				writeImporterFile(t, target, original)
+				if err := os.Symlink(target, markerPath); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := Inspect(catalog, library); err == nil {
+				t.Fatal("invalid identity marker certified import")
+			}
+			if _, err := LibraryIdentity(library); err == nil {
+				t.Fatal("invalid identity marker authorized runtime")
+			}
+		})
+	}
+}

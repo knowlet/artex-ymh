@@ -5,10 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -84,6 +87,10 @@ func TestProviderVisibilityAndMeteringPG(t *testing.T) {
 		t.Fatal(err)
 	}
 	const skillName = "fixture-hello"
+	libraryID, err := skillprovider.LibraryIdentity(library)
+	if err != nil || libraryID == "" {
+		t.Fatalf("import identity=%q: %v", libraryID, err)
+	}
 
 	agentKey := "provider_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	ag, err := pg.CreateAgent(agentKey, "Provider fixture", "Harmless integration test")
@@ -99,6 +106,16 @@ func TestProviderVisibilityAndMeteringPG(t *testing.T) {
 		}
 	})
 
+	api := &Server{m: &Manager{pg: pg}, skillDir: library}
+	grant := func(t *testing.T, on bool) {
+		t.Helper()
+		body := `{"agent_id":"` + strconv.FormatInt(ag.ID, 10) + `","skill_name":"` + skillName + `","visible":` + strconv.FormatBool(on) + `}`
+		w := httptest.NewRecorder()
+		api.pgToggleSkillVisibility(w, httptest.NewRequest(http.MethodPost, "/api/visibility/skill/toggle", strings.NewReader(body)))
+		if w.Code != http.StatusOK {
+			t.Fatalf("grant response=%d: %s", w.Code, w.Body.String())
+		}
+	}
 	originalAugment := agent.ToolAugment
 	wireAgentAugment(pg, library, nil)
 	t.Cleanup(func() { agent.ToolAugment = originalAugment })
@@ -121,9 +138,14 @@ func TestProviderVisibilityAndMeteringPG(t *testing.T) {
 	if extra := assemble(t, agentKey); len(extra) != 0 {
 		t.Fatalf("imported skill became visible without binding: %v", extra)
 	}
+	// A legacy same-name grant must not authorize this provider library.
 	if err := pg.ToggleSkillVisibility(ag.ID, skillName, true); err != nil {
 		t.Fatal(err)
 	}
+	if extra := assemble(t, agentKey); len(extra) != 0 {
+		t.Fatalf("legacy grant authorized imported skill: %v", extra)
+	}
+	grant(t, true)
 	extra := assemble(t, agentKey)
 	if len(extra) != 1 || extra[0].Name() != "Skill" {
 		t.Fatalf("expected only the Skill meta-tool after binding, got %v", extra)
@@ -188,15 +210,11 @@ FROM skill_usage WHERE agent_key=$1 ORDER BY id`, agentKey)
 
 	// Existing runs may retain loaded guidance. Revocation must take effect on
 	// fresh assembly, which is the existing ARTEX visibility lifecycle contract.
-	if err := pg.ToggleSkillVisibility(ag.ID, skillName, false); err != nil {
-		t.Fatal(err)
-	}
+	grant(t, false)
 	if extra := assemble(t, agentKey); len(extra) != 0 {
 		t.Fatalf("revoked skill remained in a fresh run: %v", extra)
 	}
-	if err := pg.ToggleSkillVisibility(ag.ID, skillName, true); err != nil {
-		t.Fatal(err)
-	}
+	grant(t, true)
 	if err := os.Remove(filepath.Join(library, skillName, "SKILL.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -207,53 +225,87 @@ FROM skill_usage WHERE agent_key=$1 ORDER BY id`, agentKey)
 		t.Fatalf("missing agent received tools: %v", extra)
 	}
 
-	t.Run("existing name grant follows configured library", func(t *testing.T) {
-		// The prior out-of-band file removal left this name's grant in PG.
-		// A new library path does not establish a new authorization identity.
-		before, err := pg.AgentSkillNames(ag.ID)
+	t.Run("same-name library requires a fresh grant", func(t *testing.T) {
+		before, err := pg.AgentSkillNamesInLibrary(ag.ID, libraryID)
 		if err != nil || !slices.Equal(before, []string{skillName}) {
-			t.Fatalf("expected retained same-name grant, got %v: %v", before, err)
+			t.Fatalf("expected retained scoped grant, got %v: %v", before, err)
 		}
 		replacement := filepath.Join(t.TempDir(), "replacement-library")
 		if err := skillprovider.Import(ctx, catalog, source, replacement, []string{"hello"}); err != nil {
 			t.Fatal(err)
 		}
-		after, err := pg.AgentSkillNames(ag.ID)
+		replacementID, err := skillprovider.LibraryIdentity(replacement)
+		if err != nil || replacementID == libraryID || replacementID == "" {
+			t.Fatalf("new import reused identity %q: %v", replacementID, err)
+		}
+		after, err := pg.AgentSkillNamesInLibrary(ag.ID, libraryID)
 		if err != nil || !slices.Equal(before, after) {
 			t.Fatalf("import changed visibility bindings: before=%v after=%v err=%v", before, after, err)
 		}
-		// This simulates configuring ARTEX to use the replacement library; the
-		// importer itself neither switches libraries nor checks the runtime DB.
 		wireAgentAugment(pg, replacement, nil)
+		api.skillDir = replacement
+		if extra := assemble(t, agentKey); len(extra) != 0 {
+			t.Fatalf("same-name grant leaked into replacement library: %v", extra)
+		}
+		// Both sides of visibility report only the currently configured library.
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/visibility/skill/"+skillName, nil)
+		r.SetPathValue("name", skillName)
+		api.pgSkillVisibility(w, r)
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), strconv.FormatInt(ag.ID, 10)) {
+			t.Fatalf("old binding appeared in replacement visibility: %d %s", w.Code, w.Body.String())
+		}
+		grant(t, true)
 		if extra := assemble(t, agentKey); len(extra) != 1 || extra[0].Name() != "Skill" {
-			t.Fatalf("pre-existing same-name grant did not apply to replacement library: %v", extra)
+			t.Fatalf("fresh explicit library grant did not apply: %v", extra)
 		}
-
-		// A different namespace has a different directory name. It is hidden
-		// here because this test agent has no grant for that particular name.
-		separateCatalog := *catalog
-		separateCatalog.Namespace = "fixture-separate"
-		separateLibrary := filepath.Join(t.TempDir(), "separate-library")
-		if err := skillprovider.Import(ctx, &separateCatalog, source, separateLibrary, []string{"hello"}); err != nil {
+		if names, err := pg.AgentSkillNamesInLibrary(ag.ID, libraryID); err != nil || len(names) != 0 {
+			t.Fatalf("regrant retained old library binding: %v %v", names, err)
+		}
+		grant(t, false)
+		if extra := assemble(t, agentKey); len(extra) != 0 {
+			t.Fatalf("revoked scoped skill remained available: %v", extra)
+		}
+		// Bulk visibility writes must also bind to the current library.
+		w = httptest.NewRecorder()
+		r = httptest.NewRequest(http.MethodPut, "/api/agents/"+agentKey+"/visibility", strings.NewReader(`{"mcp":[],"skill":["`+skillName+`"]}`))
+		r.SetPathValue("key", agentKey)
+		api.pgSetAgentVisibility(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("bulk grant response=%d: %s", w.Code, w.Body.String())
+		}
+		if extra := assemble(t, agentKey); len(extra) != 1 {
+			t.Fatalf("bulk scoped grant was not loaded: %v", extra)
+		}
+		// Accidental receipt loss must not reactivate a pre-provider name grant.
+		if err := pg.ToggleSkillVisibility(ag.ID, skillName, true); err != nil {
 			t.Fatal(err)
 		}
-		after, err = pg.AgentSkillNames(ag.ID)
-		if err != nil || !slices.Equal(before, after) {
-			t.Fatalf("distinct namespace import changed visibility bindings: before=%v after=%v err=%v", before, after, err)
-		}
-		wireAgentAugment(pg, separateLibrary, nil)
-		if extra := assemble(t, agentKey); len(extra) != 0 {
-			t.Fatalf("old name granted visibility to distinct namespace: %v", extra)
-		}
-
-		// Revoke the old name before configuring the replacement library.
-		// Fresh runs then cannot see the imported skill at the reused name.
-		if err := pg.ToggleSkillVisibility(ag.ID, skillName, false); err != nil {
+		receiptPath := filepath.Join(replacement, skillprovider.ReceiptFilename)
+		receiptBytes, err := os.ReadFile(receiptPath)
+		if err != nil {
 			t.Fatal(err)
 		}
-		wireAgentAugment(pg, replacement, nil)
+		if err := os.Remove(receiptPath); err != nil {
+			t.Fatal(err)
+		}
 		if extra := assemble(t, agentKey); len(extra) != 0 {
-			t.Fatalf("revoked name remained visible after library switch: %v", extra)
+			t.Fatalf("receipt loss reactivated legacy grant: %v", extra)
+		}
+		if err := os.WriteFile(receiptPath, receiptBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// A malformed receipt must fail closed at both runtime and grant controls.
+		if err := os.WriteFile(filepath.Join(replacement, skillprovider.ReceiptFilename), []byte(`{"schema_version":1}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if extra := assemble(t, agentKey); len(extra) != 0 {
+			t.Fatalf("invalid receipt authorized guidance: %v", extra)
+		}
+		w = httptest.NewRecorder()
+		api.pgToggleSkillVisibility(w, httptest.NewRequest(http.MethodPost, "/api/visibility/skill/toggle", strings.NewReader(`{"agent_id":"`+strconv.FormatInt(ag.ID, 10)+`","skill_name":"`+skillName+`","visible":true}`)))
+		if w.Code != http.StatusConflict {
+			t.Fatalf("invalid receipt grant response=%d: %s", w.Code, w.Body.String())
 		}
 	})
 }

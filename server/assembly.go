@@ -10,6 +10,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/skillprovider"
 	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/skill"
 	actool "github.com/Autumn-27/norma/tool"
@@ -33,7 +34,11 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 		// --- skills: load visible skills into reg (used for the Skill meta-tool
 		// and to know which MCP servers are skill-gated). ---
 		var reg *skill.Registry
-		if names, _ := pg.AgentSkillNames(a.ID); len(names) > 0 {
+		libraryID, identityErr := skillprovider.LibraryIdentity(skillDir)
+		if identityErr != nil {
+			log.Printf("[skills] library identity: %v", identityErr)
+		}
+		if names, _ := pg.AgentSkillNamesInLibrary(a.ID, libraryID); identityErr == nil && len(names) > 0 {
 			nameSet := make(map[string]bool, len(names))
 			for _, n := range names {
 				nameSet[n] = true

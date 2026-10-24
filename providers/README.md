@@ -48,8 +48,12 @@ Existing libraries and user edits are never merged or overwritten. Processes
 with the same service UID (or root access) can already modify that UID's files;
 the importer does not establish an isolation boundary against them.
 
-Each selected skill is published as `<namespace>-<id>/SKILL.md`, matching both
-its Norma display name and ARTEX visibility/audit key. Normal frontmatter uses
+Each selected skill is published as `<namespace>-<id>/SKILL.md`, matching its
+Norma display name and audit label. Every import creates a new random library
+identity, recorded in the receipt and `.provider-library-id`; visibility grants
+combine this identity with the skill directory name. Copying an intact library
+retains that logical identity, while importing the same content again creates a
+new identity. Source conversion and content hashes remain deterministic. Normal frontmatter uses
 the original description and document license (falling back to the pinned root
 license); legacy content uses the reviewed catalog description and root license.
 The body, complete original source and root license are retained byte-for-byte.
@@ -103,19 +107,23 @@ and existing deployment/configuration process. This command does not change
 configuration or start/restart ARTEX. A standalone library replaces the configured
 skill root; this foundation does not combine it with an existing library. Grant
 individual skill-directory visibility using ARTEX's existing per-agent controls.
-Import creates no new visibility binding, but this does not prove that the new
-library is invisible. Existing ARTEX grants are keyed only by skill directory
-name, without library path, revision or content hash. An enabled old grant for
-the same generated name applies when that name appears in a newly configured
-library or is restored after out-of-band file removal. Import itself does not
-change `ARTEX_SKILL_DIR`.
+Import creates no visibility binding. Provider libraries require a fresh explicit
+grant scoped to their random library identity; old grants for the same directory
+name cannot authorize a newly imported library. Both per-agent and per-skill
+visibility controls read and write the current library scope. Revocation applies
+to that scope; explicitly granting the same name in a different library replaces
+the former binding for that agent/name.
 
-Before switching libraries or reusing names, review and revoke matching grants
-for every affected agent, then check effective visibility in a fresh run. A
-different namespace avoids the specific old-name grant only if no grant already
-exists for the new name. Offline status cannot inspect the runtime DB and keeps
-`agent_visible` unknown. Library-bound identity would require a separate DB and
-audit-model design; this foundation retains existing name-based bindings.
+The additive `agent_skill_visibility.library_id` database column defaults to the
+empty legacy scope, preserving grants for ordinary skill directories without
+provider identity records. Provider receipts from before library identities were
+introduced must be reimported into a new library and explicitly granted again.
+A missing or malformed receipt/identity marker on an identified provider library
+fails closed. Removing both identity records is an out-of-band conversion to a
+legacy directory, outside this accidental-loss protection. Preserve both records
+with the library; they are identity metadata, not signatures or a boundary against
+an operator who can rewrite files. Offline status cannot inspect runtime grants
+and keeps `agent_visible` unknown.
 
 Existing usage metering records the namespaced directory for resolved calls and records unknown-name misses.
 
@@ -151,6 +159,7 @@ locally and remotely from runtime capabilities that remain unverified.
 
 Remove visibility bindings through existing controls before retiring a library.
 Retain any user edits and receipts for audit; roll back a configured skill root
-through the normal deployment process. Reverting this PR removes the provider
-code/catalog without a database migration. No deployment or tool installation
+through the normal deployment process. A code rollback leaves the additive library identity column and its scoped
+bindings in place; back up the database and remove/review provider grants before
+running an older version that does not enforce library scope. No deployment or tool installation
 is part of this change.
