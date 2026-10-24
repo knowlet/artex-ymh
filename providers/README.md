@@ -91,14 +91,27 @@ same destination is refused and never overwrites the committed data. If both
 output streams fail, exit 3 still distinguishes that committed state.
 
 SIGKILL, a crash or host shutdown cannot run deferred cleanup and can leave a
-partial or complete `.provider-stage-*` tree, consuming disk space. Cleanup can
-also fail on filesystem I/O errors. There is **no automatic stale-stage recovery**:
-a later import never deletes a directory just because its name has that prefix.
-Before retiring a residual directory, an operator must stop or account for active
-imports, establish which exact directory belongs to the interrupted operation,
-and inspect/preserve user content. Prefix, age or a receipt alone do not prove
-that deletion is safe. After an abrupt stop near commit, inspect both the chosen
-destination and any staging data before deciding what happened.
+partial or complete `.provider-stage-*` tree. Recover one exact interrupted stage
+explicitly, without loading a catalog or contacting the database:
+
+```sh
+./artex provider recover -stage /absolute/path/to/.provider-stage-0123456789abcdef0123456789abcdef
+```
+
+The importer holds an exclusive directory lock and syncs an inode-bound inventory
+before writing the library. Recovery pins that exact directory, refuses an active
+lock, verifies private ownership/modes and every remaining file's recorded size
+and hash, then removes only recognized content. Missing expected files are allowed;
+unknown additions, edited or partially written files, symlinks, hardlinks, copied
+inventories and malformed records are preserved for manual review. Recovery never
+removes the published destination. A successful cleanup reports `recovered: true`;
+exit 3 means cleanup completed but its report failed, so inspect before retrying.
+
+There is no automatic prefix/age-based sweep. A crash before the inventory is
+complete, an I/O failure, or modified contents can still require manual recovery.
+Account for active imports and retain operator content before retiring unrecognized
+residue. The inventory and advisory lock protect cooperating operations; they are
+not an isolation boundary against another process with the same UID or root.
 
 ## Visibility, audit and readiness
 

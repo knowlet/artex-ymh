@@ -144,13 +144,24 @@ func Import(ctx context.Context, c *Catalog, sourceDir, destination string, ids 
 		// recursively remove anything beneath an unverified outer directory.
 		return err
 	}
+	if err := outer.lockStage(); err != nil {
+		return err
+	}
 	// Keep the rename's source parent pinned as well as the output parent.
 	// Moving/replacing the visible outer staging name must neither publish the
 	// replacement nor let cleanup recurse into somebody else's replacement.
 	defer func() {
-		_ = outer.removeTree("library")
-		_ = parent.removeEmptyIfSame(stageName, outer)
+		if outer.removeTree("library") == nil {
+			_ = outer.unlinkStageRecord()
+			_ = parent.removeEmptyIfSame(stageName, outer)
+		}
 	}()
+	if err := outer.writeStageRecord(stageName, stageInventory(prepared, license, receiptJSON, libraryID)); err != nil {
+		return err
+	}
+	if err := parent.sync(); err != nil {
+		return err
+	}
 	if err := outer.mkdir("library"); err != nil {
 		return err
 	}
@@ -324,4 +335,91 @@ func splitFrontmatter(b []byte) ([]byte, []byte, error) {
 		pos = next
 	}
 	return nil, nil, fmt.Errorf("frontmatter closing delimiter missing")
+}
+
+const stageRecordFilename = ".provider-stage.json"
+const maxStageRecordBytes = 128 << 10
+
+type stagedFile struct {
+	Path   string `json:"path"`
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+// stageRecord is written and synced before the library is populated. It is an
+// inventory, not a signature or a boundary against another process of this UID.
+type stageRecord struct {
+	Version int          `json:"version"`
+	Name    string       `json:"name"`
+	Device  uint64       `json:"device"`
+	Inode   uint64       `json:"inode"`
+	Files   []stagedFile `json:"files"`
+}
+
+func stageInventory(prepared []preparedSkill, license, receipt, libraryID []byte) []stagedFile {
+	files := make([]stagedFile, 0, len(prepared)*3+2)
+	add := func(path string, data []byte) {
+		files = append(files, stagedFile{path, int64(len(data)), hashBytes(data)})
+	}
+	for _, p := range prepared {
+		add("library/"+p.name+"/SKILL.md", p.converted)
+		add("library/"+p.name+"/references/source.md", p.source)
+		add("library/"+p.name+"/references/LICENSE", license)
+	}
+	add("library/"+ReceiptFilename, receipt)
+	add("library/"+LibraryIDFilename, libraryID)
+	return files
+}
+
+// RecoverStage removes only the exact, inactive, recognized staging directory
+// selected by the operator. Missing expected files are allowed after a crash;
+// changed or unrecognized content is preserved and reported as an error.
+func RecoverStage(ctx context.Context, stagePath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	parentPath, name, err := destinationParts(stagePath)
+	if err != nil {
+		return err
+	}
+	if !validStageName(name) {
+		return fmt.Errorf("recovery requires an exact .provider-stage-<32 lowercase hex> directory")
+	}
+	return recoverStage(ctx, parentPath, name)
+}
+
+func validStageName(name string) bool {
+	const prefix = ".provider-stage-"
+	if len(name) != len(prefix)+32 || name[:len(prefix)] != prefix {
+		return false
+	}
+	for _, r := range name[len(prefix):] {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validStagedFile(file stagedFile) bool {
+	if !validSourcePath(file.Path) || file.Bytes < 0 || !digest.MatchString(file.SHA256) {
+		return false
+	}
+	if file.Path == "library/"+ReceiptFilename {
+		return file.Bytes <= MaxCatalogBytes
+	}
+	if file.Path == "library/"+LibraryIDFilename {
+		return file.Bytes == 33
+	}
+	parts := strings.Split(file.Path, "/")
+	if len(parts) < 3 || parts[0] != "library" || !validSlug(parts[1]) {
+		return false
+	}
+	if len(parts) == 3 {
+		return parts[2] == "SKILL.md" && file.Bytes <= MaxSourceBytes
+	}
+	if len(parts) != 4 || parts[2] != "references" {
+		return false
+	}
+	return (parts[3] == "source.md" && file.Bytes <= MaxSourceBytes) || (parts[3] == "LICENSE" && file.Bytes <= maxLicenseBytes)
 }

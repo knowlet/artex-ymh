@@ -3,9 +3,13 @@
 package skillprovider
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -198,4 +202,257 @@ func (d *safeDir) removeTree(name string) error {
 		}
 	}
 	return unix.Unlinkat(d.fd, name, unix.AT_REMOVEDIR)
+}
+
+func (d *safeDir) lockStage() error {
+	if err := unix.Flock(d.fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		return fmt.Errorf("staging directory is active or cannot be locked: %w", err)
+	}
+	return nil
+}
+
+func (d *safeDir) writeStageRecord(name string, files []stagedFile) error {
+	var st unix.Stat_t
+	if err := unix.Fstat(d.fd, &st); err != nil {
+		return err
+	}
+	data, err := json.Marshal(stageRecord{1, name, uint64(st.Dev), st.Ino, files})
+	if err != nil {
+		return err
+	}
+	if len(data) > maxStageRecordBytes {
+		return fmt.Errorf("staging inventory exceeds byte limit")
+	}
+	if err := d.writeFile(stageRecordFilename, data); err != nil {
+		return err
+	}
+	return d.sync()
+}
+
+func (d *safeDir) unlinkStageRecord() error {
+	err := unix.Unlinkat(d.fd, stageRecordFilename, 0)
+	if err == unix.ENOENT {
+		return nil
+	}
+	return err
+}
+
+type recoveryNode struct {
+	parent *safeDir
+	name   string
+	stat   unix.Stat_t
+	dir    *safeDir
+}
+
+func recoverStage(ctx context.Context, parentPath, name string) error {
+	parent, err := openDirectory(parentPath)
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	outer, err := parent.child(name)
+	if err != nil {
+		return err
+	}
+	defer outer.Close()
+	if err := outer.requirePrivate(); err != nil {
+		return err
+	}
+	if err := outer.lockStage(); err != nil {
+		return err
+	}
+	var st unix.Stat_t
+	if err := unix.Fstat(outer.fd, &st); err != nil {
+		return err
+	}
+	var markerStat unix.Stat_t
+	if err := unix.Fstatat(outer.fd, stageRecordFilename, &markerStat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return err
+	}
+	if err := privateRecoveryFile(outer, stageRecordFilename, &markerStat); err != nil {
+		return fmt.Errorf("unrecognized staging inventory: %w", err)
+	}
+	data, err := outer.readFile(stageRecordFilename, maxStageRecordBytes)
+	if err != nil {
+		return err
+	}
+	if err := rejectDuplicateKeys(data); err != nil {
+		return err
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var record stageRecord
+	if err := dec.Decode(&record); err != nil {
+		return err
+	}
+	if record.Version != 1 || record.Name != name || record.Device != uint64(st.Dev) || record.Inode != st.Ino || len(record.Files) == 0 || len(record.Files) > MaxSkills*3+2 {
+		return fmt.Errorf("staging inventory identity mismatch")
+	}
+	expected := map[string]stagedFile{}
+	dirs := map[string]bool{"library": true}
+	var total int64
+	for _, file := range record.Files {
+		if !validStagedFile(file) {
+			return fmt.Errorf("invalid staging inventory path, size or hash")
+		}
+		if _, exists := expected[file.Path]; exists {
+			return fmt.Errorf("duplicate staging inventory path")
+		}
+		expected[file.Path] = file
+		total += file.Bytes
+		for dir := path.Dir(file.Path); dir != "."; dir = path.Dir(dir) {
+			dirs[dir] = true
+		}
+	}
+	if total > MaxTotalBytes {
+		return fmt.Errorf("staging inventory exceeds output limit")
+	}
+	// Pin every directory and validate the complete tree before deleting any
+	// content. Unknown additions and edited/partial files require manual review.
+	var nodes []recoveryNode
+	defer func() {
+		for _, node := range nodes {
+			if node.dir != nil {
+				node.dir.Close()
+			}
+		}
+	}()
+	var walk func(*safeDir, string) error
+	walk = func(dir *safeDir, prefix string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// A separately opened descriptor gives each scan its own directory offset.
+		fd, err := unix.Openat(dir.fd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			return err
+		}
+		f := os.NewFile(uintptr(fd), ".")
+		entries, err := f.ReadDir(MaxSkills*6 + 10)
+		f.Close()
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if len(entries) >= MaxSkills*6+10 {
+			return fmt.Errorf("staging entry count exceeds limit")
+		}
+		for _, entry := range entries {
+			rel := path.Join(prefix, entry.Name())
+			var named unix.Stat_t
+			if err := unix.Fstatat(dir.fd, entry.Name(), &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+				return err
+			}
+			if prefix == "" && entry.Name() == stageRecordFilename {
+				continue
+			}
+			if named.Mode&unix.S_IFMT == unix.S_IFDIR && dirs[rel] {
+				child, err := dir.child(entry.Name())
+				if err != nil {
+					return err
+				}
+				nodes = append(nodes, recoveryNode{dir, entry.Name(), named, child})
+				if err := child.requirePrivate(); err != nil {
+					return err
+				}
+				var pinned unix.Stat_t
+				if err := unix.Fstat(child.fd, &pinned); err != nil {
+					return err
+				}
+				if pinned.Dev != named.Dev || pinned.Ino != named.Ino {
+					return fmt.Errorf("staging directory changed during inspection; preserved")
+				}
+				if err := walk(child, rel); err != nil {
+					return err
+				}
+				continue
+			}
+			file, ok := expected[rel]
+			if !ok {
+				return fmt.Errorf("unrecognized staging content %q; preserved", rel)
+			}
+			if err := privateRecoveryFile(dir, entry.Name(), &named); err != nil {
+				return err
+			}
+			content, err := dir.readFile(entry.Name(), file.Bytes)
+			if err != nil || int64(len(content)) != file.Bytes || hashBytes(content) != file.SHA256 {
+				return fmt.Errorf("staging content %q changed or incomplete; preserved", rel)
+			}
+			nodes = append(nodes, recoveryNode{dir, entry.Name(), named, nil})
+		}
+		return nil
+	}
+	if err := walk(outer, ""); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := sameRecoveryStage(parent, name, &st); err != nil {
+		return err
+	}
+	for i := len(nodes) - 1; i >= 0; i-- {
+		node := nodes[i]
+		if node.dir != nil {
+			if err := node.parent.removeEmptyIfSame(node.name, node.dir); err != nil {
+				return err
+			}
+		} else {
+			var now unix.Stat_t
+			if err := unix.Fstatat(node.parent.fd, node.name, &now, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+				return err
+			}
+			if now.Dev != node.stat.Dev || now.Ino != node.stat.Ino || now.Size != node.stat.Size || now.Mtim != node.stat.Mtim || now.Mode != node.stat.Mode || now.Nlink != node.stat.Nlink || now.Uid != node.stat.Uid {
+				return fmt.Errorf("staging content changed during recovery; preserved")
+			}
+			if err := unix.Unlinkat(node.parent.fd, node.name, 0); err != nil {
+				return err
+			}
+		}
+	}
+	var currentMarker unix.Stat_t
+	if err := unix.Fstatat(outer.fd, stageRecordFilename, &currentMarker, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return err
+	}
+	if currentMarker.Dev != markerStat.Dev || currentMarker.Ino != markerStat.Ino || currentMarker.Mtim != markerStat.Mtim || currentMarker.Mode != markerStat.Mode || currentMarker.Size != markerStat.Size {
+		return fmt.Errorf("staging inventory changed during recovery; preserved")
+	}
+	if err := outer.unlinkStageRecord(); err != nil {
+		return err
+	}
+	if err := sameRecoveryStage(parent, name, &st); err != nil {
+		return err
+	}
+	if err := parent.removeEmptyIfSame(name, outer); err != nil {
+		return err
+	}
+	// Removing the selected stage is the commit point. A later sync failure
+	// cannot truthfully report that cleanup was unapplied.
+	_ = parent.sync()
+	return nil
+}
+
+func sameRecoveryStage(parent *safeDir, name string, expected *unix.Stat_t) error {
+	var current unix.Stat_t
+	if err := unix.Fstatat(parent.fd, name, &current, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return err
+	}
+	if current.Dev != expected.Dev || current.Ino != expected.Ino || current.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return fmt.Errorf("selected staging pathname was replaced; preserved")
+	}
+	return nil
+}
+
+func privateRecoveryFile(dir *safeDir, name string, stat *unix.Stat_t) error {
+	var st unix.Stat_t
+	if stat == nil {
+		if err := unix.Fstatat(dir.fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			return err
+		}
+	} else {
+		st = *stat
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&0o777 != 0o600 || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 {
+		return fmt.Errorf("staging file %q must be private, owned and unlinked elsewhere", name)
+	}
+	return nil
 }

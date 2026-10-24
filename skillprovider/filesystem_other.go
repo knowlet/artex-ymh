@@ -2,7 +2,10 @@
 
 package skillprovider
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // Filesystem commands fail closed without a no-follow/no-replace implementation.
 type safeDir struct{}
@@ -24,3 +27,8 @@ func (*safeDir) removeEmptyIfSame(string, *safeDir) error         { return unsup
 func (*safeDir) readFile(string, int64) ([]byte, error)           { return nil, unsupportedFS() }
 func (*safeDir) writeFile(string, []byte) error                   { return unsupportedFS() }
 func (*safeDir) removeTree(string) error                          { return unsupportedFS() }
+
+func (*safeDir) lockStage() error                            { return unsupportedFS() }
+func (*safeDir) writeStageRecord(string, []stagedFile) error { return unsupportedFS() }
+func (*safeDir) unlinkStageRecord() error                    { return unsupportedFS() }
+func recoverStage(context.Context, string, string) error     { return unsupportedFS() }

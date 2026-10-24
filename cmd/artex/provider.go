@@ -38,10 +38,13 @@ const providerExitCommittedOutputFailed = 3
 
 func providerCommand(ctx context.Context, args []string, out, errOut io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "usage: artex provider <catalog|import|status> -catalog FILE [-source DIR -dest NEW_LIBRARY -select ID,ID | -library DIR]")
+		fmt.Fprintln(errOut, "usage: artex provider <catalog|import|status> -catalog FILE [-source DIR -dest NEW_LIBRARY -select ID,ID | -library DIR]; artex provider recover -stage EXACT_STAGE_PATH")
 		return 2
 	}
 	action := args[0]
+	if action == "recover" {
+		return providerRecoverCommand(ctx, args[1:], out, errOut)
+	}
 	if action != "catalog" && action != "import" && action != "status" {
 		fmt.Fprintln(errOut, "unknown provider action")
 		return 2
@@ -97,6 +100,28 @@ func providerCommand(ctx context.Context, args []string, out, errOut io.Writer) 
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 		return 1
+	}
+	return 0
+}
+
+func providerRecoverCommand(ctx context.Context, args []string, out, errOut io.Writer) int {
+	flags := flag.NewFlagSet("provider recover", flag.ContinueOnError)
+	flags.SetOutput(errOut)
+	stage := flags.String("stage", "", "exact interrupted staging directory; changed or unknown content is preserved")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || *stage == "" {
+		fmt.Fprintln(errOut, "recover requires -stage EXACT_STAGE_PATH and no positional arguments")
+		return 2
+	}
+	if err := skillprovider.RecoverStage(ctx, *stage); err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	if err := json.NewEncoder(out).Encode(map[string]any{"recovered": true, "stage": *stage}); err != nil {
+		fmt.Fprintf(errOut, "recovered=true: staging cleanup completed, but success output failed: %v\n", err)
+		return providerExitCommittedOutputFailed
 	}
 	return 0
 }
