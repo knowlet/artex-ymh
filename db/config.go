@@ -815,7 +815,7 @@ type MCPServer struct {
 	Env       json.RawMessage `json:"env"`
 	URL       string          `json:"url,omitempty"`
 	Enabled   bool            `json:"enabled"`
-	Insecure  bool            `json:"insecure"` // http: skip TLS cert verification (self-signed servers, issue #108)
+	Insecure  bool            `json:"insecure"`        // http: skip TLS cert verification (self-signed servers, issue #108)
 	Tools     []string        `json:"tools,omitempty"` // cached tool names (mcp_tools_cache)
 }
 
@@ -946,7 +946,12 @@ func (d *DB) DeleteMCP(id int64) error {
 
 // AgentSkillNames returns the skill directory names visible to an agent.
 func (d *DB) AgentSkillNames(agentID int64) ([]string, error) {
-	rows, err := d.Query(`SELECT skill_name FROM agent_skill_visibility WHERE agent_id=$1 AND enabled ORDER BY skill_name`, agentID)
+	return d.AgentSkillNamesInLibrary(agentID, "")
+}
+
+// AgentSkillNamesInLibrary excludes grants made for another library identity.
+func (d *DB) AgentSkillNamesInLibrary(agentID int64, libraryID string) ([]string, error) {
+	rows, err := d.Query(`SELECT skill_name FROM agent_skill_visibility WHERE agent_id=$1 AND library_id=$2 AND enabled ORDER BY skill_name`, agentID, libraryID)
 	if err != nil {
 		return nil, err
 	}
@@ -964,7 +969,11 @@ func (d *DB) AgentSkillNames(agentID int64) ([]string, error) {
 
 // SkillAgents returns the agent IDs that can see a skill.
 func (d *DB) SkillAgents(skillName string) ([]int64, error) {
-	rows, err := d.Query(`SELECT agent_id FROM agent_skill_visibility WHERE skill_name=$1 AND enabled`, skillName)
+	return d.SkillAgentsInLibrary(skillName, "")
+}
+
+func (d *DB) SkillAgentsInLibrary(skillName, libraryID string) ([]int64, error) {
+	rows, err := d.Query(`SELECT agent_id FROM agent_skill_visibility WHERE skill_name=$1 AND library_id=$2 AND enabled`, skillName, libraryID)
 	if err != nil {
 		return nil, err
 	}
@@ -982,17 +991,21 @@ func (d *DB) SkillAgents(skillName string) ([]int64, error) {
 
 // SetAgentSkillVisibility replaces all skill visibility for an agent.
 func (d *DB) SetAgentSkillVisibility(agentID int64, names []string) error {
+	return d.SetAgentSkillVisibilityInLibrary(agentID, names, "")
+}
+
+func (d *DB) SetAgentSkillVisibilityInLibrary(agentID int64, names []string, libraryID string) error {
 	tx, err := d.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM agent_skill_visibility WHERE agent_id=$1`, agentID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM agent_skill_visibility WHERE agent_id=$1 AND library_id=$2`, agentID, libraryID); err != nil {
 		return err
 	}
 	for _, name := range names {
-		if _, err := tx.Exec(`INSERT INTO agent_skill_visibility(agent_id,skill_name,enabled) VALUES ($1,$2,true)
-ON CONFLICT (agent_id,skill_name) DO UPDATE SET enabled=true`, agentID, name); err != nil {
+		if _, err := tx.Exec(`INSERT INTO agent_skill_visibility(agent_id,skill_name,library_id,enabled) VALUES ($1,$2,$3,true)
+ON CONFLICT (agent_id,skill_name) DO UPDATE SET enabled=true,library_id=EXCLUDED.library_id`, agentID, name, libraryID); err != nil {
 			return err
 		}
 	}
@@ -1001,12 +1014,17 @@ ON CONFLICT (agent_id,skill_name) DO UPDATE SET enabled=true`, agentID, name); e
 
 // ToggleSkillVisibility sets one (agent, skill_name) visibility on/off.
 func (d *DB) ToggleSkillVisibility(agentID int64, skillName string, on bool) error {
+	return d.ToggleSkillVisibilityInLibrary(agentID, skillName, on, "")
+}
+
+// A fresh explicit grant replaces any former library's same-name binding.
+func (d *DB) ToggleSkillVisibilityInLibrary(agentID int64, skillName string, on bool, libraryID string) error {
 	if on {
-		_, err := d.Exec(`INSERT INTO agent_skill_visibility(agent_id,skill_name,enabled) VALUES ($1,$2,true)
-ON CONFLICT (agent_id,skill_name) DO UPDATE SET enabled=true`, agentID, skillName)
+		_, err := d.Exec(`INSERT INTO agent_skill_visibility(agent_id,skill_name,library_id,enabled) VALUES ($1,$2,$3,true)
+ON CONFLICT (agent_id,skill_name) DO UPDATE SET enabled=true,library_id=EXCLUDED.library_id`, agentID, skillName, libraryID)
 		return err
 	}
-	_, err := d.Exec(`DELETE FROM agent_skill_visibility WHERE agent_id=$1 AND skill_name=$2`, agentID, skillName)
+	_, err := d.Exec(`DELETE FROM agent_skill_visibility WHERE agent_id=$1 AND skill_name=$2 AND library_id=$3`, agentID, skillName, libraryID)
 	return err
 }
 
