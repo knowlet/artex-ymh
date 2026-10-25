@@ -30,7 +30,7 @@ the image. A custom `ARTEX_SKILL_DIR` must contain these directories separately.
 
 - `packaging/claude-red.lock.json` pins the upstream commit, paths, Git blob SHA-1 and byte lengths.
 - `go test ./tools -run '^TestClaudeRedSkills$' -count=1 -v` checks every original blob, the upstream license, and actual `norma/skill.LoadDir` discoverability.
-- `third_party/claude-red/LICENSE` preserves MIT notice. ARTEX remains AGPL-3.0.
+- `third_party/claude-red/LICENSE` preserves the upstream MIT notice. An exact copy accompanies every `references/source.md` as `references/LICENSE`, so Docker images, release archives, and separately copied skill directories retain attribution. ARTEX remains AGPL-3.0.
 - Only Markdown sources are copied: no upstream scripts, installer, or network fetch on application startup.
 - Treat third-party skill text as untrusted; apply the existing ARTEX task scope and approval restrictions. This fork's README limits use to isolated labs.
 
