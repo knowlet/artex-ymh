@@ -123,3 +123,62 @@ func TestLegacyKeyMigrationRemovesSymlinkedWorkspaceCopy(t *testing.T) {
 		t.Fatalf("persisted key mismatch: %v", err)
 	}
 }
+
+// A prior migration may have persisted the private copy before removal failed.
+// Retrying startup must not leave that signing key downloadable in the workspace.
+func TestExistingPrivateKeyRemovesMatchingWorkspaceCopy(t *testing.T) {
+	t.Setenv("ARTEX_KEY_DIR", "")
+	base := t.TempDir()
+	data := filepath.Join(base, "data")
+	keyDir := filepath.Join(base, "private")
+	for _, dir := range []string{data, keyDir} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := bytes.Repeat([]byte("r"), 32)
+	privatePath := filepath.Join(keyDir, jwtKeyFilename)
+	legacyPath := filepath.Join(data, jwtKeyFilename)
+	for _, path := range []string{privatePath, legacyPath} {
+		if err := os.WriteFile(path, key, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := loadOrCreateJWTKey(keyDir, data)
+	if err != nil || !bytes.Equal(got, key) {
+		t.Fatalf("persisted private key changed: %v", err)
+	}
+	if _, err := os.Lstat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("browsable signing-key copy survived startup: %v", err)
+	}
+}
+
+func TestExistingPrivateKeyPreservesConflictingWorkspaceCopy(t *testing.T) {
+	t.Setenv("ARTEX_KEY_DIR", "")
+	base := t.TempDir()
+	data := filepath.Join(base, "data")
+	keyDir := filepath.Join(base, "private")
+	for _, dir := range []string{data, keyDir} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	private := bytes.Repeat([]byte("p"), 32)
+	legacy := bytes.Repeat([]byte("l"), 32)
+	privatePath := filepath.Join(keyDir, jwtKeyFilename)
+	legacyPath := filepath.Join(data, jwtKeyFilename)
+	for path, key := range map[string][]byte{privatePath: private, legacyPath: legacy} {
+		if err := os.WriteFile(path, key, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := loadOrCreateJWTKey(keyDir, data); err == nil {
+		t.Fatal("startup accepted conflicting private and workspace keys")
+	}
+	for path, want := range map[string][]byte{privatePath: private, legacyPath: legacy} {
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("conflicting key was changed at %s: %v", path, err)
+		}
+	}
+}

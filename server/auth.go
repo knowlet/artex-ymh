@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -89,7 +90,26 @@ func loadOrCreateJWTKey(keyDir, dataDir string) ([]byte, error) {
 		}
 		return []byte(key), nil
 	}
+	removeWorkspaceCopy := func(key []byte) error {
+		legacy := filepath.Join(dataDir, jwtKeyFilename)
+		copy, err := read(legacy)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(copy, key) {
+			return fmt.Errorf("workspace JWT key differs from private key: refusing startup")
+		}
+		return os.Remove(legacy)
+	}
 	if key, err := read(path); err == nil {
+		// A previous migration may have persisted this copy before removing
+		// the browsable one failed. Never skip that cleanup on a retry.
+		if err := removeWorkspaceCopy(key); err != nil {
+			return nil, err
+		}
 		return key, nil
 	} else if !os.IsNotExist(err) {
 		return nil, err
@@ -129,17 +149,11 @@ func loadOrCreateJWTKey(keyDir, dataDir string) ([]byte, error) {
 		if err := persist(key); err != nil {
 			return nil, err
 		}
-		// Only remove the formerly browsable copy, after successful durable writing.
-		// Compare canonical paths: dataDir may itself be a symlink. Comparing
-		// its unresolved spelling would leave the signing key in the file manager.
-		canonicalLegacy, err := filepath.EvalSymlinks(abs)
-		if err != nil {
+		// Remove only a matching workspace copy after durable private writing.
+		// This also handles dataDir spelling that traverses a symlink and a
+		// duplicate left beside a prior container key.
+		if err := removeWorkspaceCopy(key); err != nil {
 			return nil, err
-		}
-		if canonicalLegacy == filepath.Join(dataAbs, jwtKeyFilename) {
-			if err := os.Remove(legacy); err != nil {
-				return nil, err
-			}
 		}
 		return key, nil
 	}
