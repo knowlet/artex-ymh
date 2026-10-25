@@ -1,0 +1,1831 @@
+{
+  "schema_version": 1,
+  "provider": "claude-red",
+  "namespace": "claude-red",
+  "source": {
+    "repository": "https://github.com/SnailSploit/Claude-Red",
+    "revision": "a8de813edc9f66f60d44cfe42d47750e89d9930b",
+    "license": {
+      "path": "LICENSE",
+      "sha256": "f2ebf01e609ee09215fbe0334dc8a96e7474a186f07a73e24e983fa2462e0ff9",
+      "spdx": "MIT"
+    }
+  },
+  "skills": [
+    {
+      "id": "offensive-active-directory",
+      "category": "active-directory",
+      "source_path": "Skills/active-directory/offensive-active-directory/SKILL.md",
+      "source_sha256": "00e5b7cea50d450daf515cd0e541d3eb659347bb39f04caf0d88a470ca9a4c19",
+      "source_bytes": 13847,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-active-directory (active-directory).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-bloodhound",
+        "tool-certipy",
+        "tool-hashcat",
+        "tool-netexec",
+        "tool-pypykatz",
+        "tool-responder",
+        "tool-rubeus",
+        "tool-sharphound",
+        "tool-winrm"
+      ]
+    },
+    {
+      "id": "offensive-netexec",
+      "category": "active-directory",
+      "source_path": "Skills/active-directory/offensive-netexec/SKILL.md",
+      "source_sha256": "cd462110388ff5dc360535e75a496a405391a68d6d1d32d4ac4205f299d47e19",
+      "source_bytes": 24641,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-netexec (active-directory).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-bloodhound",
+        "tool-crackmapexec",
+        "tool-hashcat",
+        "tool-netexec",
+        "tool-winrm"
+      ]
+    },
+    {
+      "id": "offensive-ai-security",
+      "category": "ai",
+      "source_path": "Skills/ai/offensive-ai-security/SKILL.md",
+      "source_sha256": "345b920695dabd22392ee623512df78a8862dd30cde507a02c2d31f9139f2595",
+      "source_bytes": 39806,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-ai-security (ai).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": []
+    },
+    {
+      "id": "offensive-api-abuse",
+      "category": "api",
+      "source_path": "Skills/api/offensive-api-abuse/SKILL.md",
+      "source_sha256": "42cd1e419aea0b2e5a3e97c1bad3b6503fac9bf9d14a769d7eb65da5486f755a",
+      "source_bytes": 22383,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-api-abuse (api).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite"
+      ]
+    },
+    {
+      "id": "offensive-api-security",
+      "category": "api",
+      "source_path": "Skills/api/offensive-api-security/SKILL.md",
+      "source_sha256": "c76a14cfc2e427d64b769445de5d6ef233c10188c2aeee1ce3dc1631b8b1cd23",
+      "source_bytes": 19822,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-api-security (api).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite"
+      ]
+    },
+    {
+      "id": "offensive-jwt",
+      "category": "auth",
+      "source_path": "Skills/auth/offensive-jwt/SKILL.md",
+      "source_sha256": "f4062ca66c1241fbeb772e1671d0d86d3683e27f33744fee6723b13a934a3fb9",
+      "source_bytes": 10861,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-jwt (auth).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite",
+        "tool-frida",
+        "tool-hashcat",
+        "tool-mobsf",
+        "tool-objection"
+      ]
+    },
+    {
+      "id": "offensive-oauth",
+      "category": "auth",
+      "source_path": "Skills/auth/offensive-oauth/SKILL.md",
+      "source_sha256": "1202b700fac05d63cc78c959c084cbcf9c8cb4f3b00be6cec52c7ebc98f0ec52",
+      "source_bytes": 15033,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-oauth (auth).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite"
+      ]
+    },
+    {
+      "id": "offensive-cicd-pipeline",
+      "category": "cicd",
+      "source_path": "Skills/cicd/offensive-cicd-pipeline/SKILL.md",
+      "source_sha256": "24518b4ee312dadd456cef225d351b733a9803187293a5e32380d290b8a1ab3f",
+      "source_bytes": 20193,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-cicd-pipeline (cicd).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-kubectl",
+        "tool-nmap",
+        "tool-ysoserial"
+      ]
+    },
+    {
+      "id": "offensive-cicd-secrets",
+      "category": "cicd",
+      "source_path": "Skills/cicd/offensive-cicd-secrets/SKILL.md",
+      "source_sha256": "ab2ca5e4cb6a05a92e2a575e84fbb7f3af57977673ced0b96bfe3a468e4f303c",
+      "source_bytes": 25081,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-cicd-secrets (cicd).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": []
+    },
+    {
+      "id": "offensive-cloud",
+      "category": "cloud",
+      "source_path": "Skills/cloud/offensive-cloud/SKILL.md",
+      "source_sha256": "5dd13c1cac582a03db3e1ab8c9c0c147a93c2121e4cb275b8d39763cb9a144cb",
+      "source_bytes": 12641,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-cloud (cloud).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-bloodhound"
+      ]
+    },
+    {
+      "id": "offensive-container-escape",
+      "category": "container",
+      "source_path": "Skills/container/offensive-container-escape/SKILL.md",
+      "source_sha256": "0646139103a2be51f4f6875e1bdf53cd00c23e259ee47e0262dc2fd0c38cb4fc",
+      "source_bytes": 21739,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-container-escape (container).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-socat",
+        "tool-tcpdump"
+      ]
+    },
+    {
+      "id": "offensive-k8s-attacks",
+      "category": "container",
+      "source_path": "Skills/container/offensive-k8s-attacks/SKILL.md",
+      "source_sha256": "04382cb9bfa12bf6f62bc3b2b22baf01e30e66624979450016462b158a4270e0",
+      "source_bytes": 27489,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-k8s-attacks (container).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-kubectl"
+      ]
+    },
+    {
+      "id": "offensive-crypto-attacks",
+      "category": "crypto",
+      "source_path": "Skills/crypto/offensive-crypto-attacks/SKILL.md",
+      "source_sha256": "75d97b1fa7546ed5defe75ed488686cc5eee7d19bbdd1ffc2f3f05b0bb48ea7b",
+      "source_bytes": 20427,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-crypto-attacks (crypto).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-hashcat"
+      ]
+    },
+    {
+      "id": "offensive-tls-attacks",
+      "category": "crypto",
+      "source_path": "Skills/crypto/offensive-tls-attacks/SKILL.md",
+      "source_sha256": "1d9939a3033e2316a2961c338440803a67482860b09a2a9943150bc5c0c15737",
+      "source_bytes": 25574,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-tls-attacks (crypto).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-amass",
+        "tool-frida",
+        "tool-nmap",
+        "tool-objection",
+        "tool-subfinder",
+        "tool-testssl"
+      ]
+    },
+    {
+      "id": "offensive-basic-exploitation",
+      "category": "exploit-dev",
+      "source_path": "Skills/exploit-dev/offensive-basic-exploitation/SKILL.md",
+      "source_sha256": "92508b7739895c04e4cdb9b671d6c06f678f9d490b2a1bb23fd1ee5dc14ad028",
+      "source_bytes": 354272,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-basic-exploitation (exploit-dev).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aflplusplus",
+        "tool-gdb",
+        "tool-pwntools",
+        "tool-radare2"
+      ]
+    },
+    {
+      "id": "offensive-crash-analysis",
+      "category": "exploit-dev",
+      "source_path": "Skills/exploit-dev/offensive-crash-analysis/SKILL.md",
+      "source_sha256": "43212963900033f563cb23ad323d5a56d507142d2caeebba55b8c50605681a32",
+      "source_bytes": 409213,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-crash-analysis (exploit-dev).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aflplusplus",
+        "tool-frida",
+        "tool-gdb",
+        "tool-ghidra",
+        "tool-libfuzzer",
+        "tool-lldb",
+        "tool-procdump",
+        "tool-pwntools",
+        "tool-tcpdump"
+      ]
+    },
+    {
+      "id": "offensive-exploit-dev-course",
+      "category": "exploit-dev",
+      "source_path": "Skills/exploit-dev/offensive-exploit-dev-course/SKILL.md",
+      "source_sha256": "b3b87666645d63b80a5ba071dc1d7136b677073a40f5cabfd2fb578d2b0b7fa0",
+      "source_bytes": 20117,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-exploit-dev-course (exploit-dev).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aflplusplus",
+        "tool-gdb",
+        "tool-john-the-ripper",
+        "tool-libfuzzer"
+      ]
+    },
+    {
+      "id": "offensive-exploit-development",
+      "category": "exploit-dev",
+      "source_path": "Skills/exploit-dev/offensive-exploit-development/SKILL.md",
+      "source_sha256": "22ae77955883399b00bfd4b10909f403869efc4c4b49e81ba065f1e477b83cce",
+      "source_bytes": 33814,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-exploit-development (exploit-dev).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aflplusplus",
+        "tool-ghidra",
+        "tool-lldb",
+        "tool-pwntools"
+      ]
+    },
+    {
+      "id": "offensive-mitigations",
+      "category": "exploit-dev",
+      "source_path": "Skills/exploit-dev/offensive-mitigations/SKILL.md",
+      "source_sha256": "cbd789c1bf8fd8110c511150169fc5b98e097a9419aa41647e35ced477b3a388",
+      "source_bytes": 58757,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-mitigations (exploit-dev).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": []
+    },
+    {
+      "id": "offensive-toctou",
+      "category": "exploit-dev",
+      "source_path": "Skills/exploit-dev/offensive-toctou/SKILL.md",
+      "source_sha256": "8c7fb9790b1853ecf5dfa23fe85b8fa0d1967c20a7ffe04752a6ac4c2253636f",
+      "source_bytes": 12855,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-toctou (exploit-dev).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite"
+      ]
+    },
+    {
+      "id": "offensive-anti-forensics",
+      "category": "forensics",
+      "source_path": "Skills/forensics/offensive-anti-forensics/SKILL.md",
+      "source_sha256": "000f9269cf32fde3032437dca969b2c7c545c6c5810482c3e6fa6a144da050a3",
+      "source_bytes": 19476,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-anti-forensics (forensics).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-nmap"
+      ]
+    },
+    {
+      "id": "offensive-c2-frameworks",
+      "category": "forensics",
+      "source_path": "Skills/forensics/offensive-c2-frameworks/SKILL.md",
+      "source_sha256": "dc1cfeee684e2a9569fb9260be7af48bf5315e54d193508ffc823795020bcd84",
+      "source_bytes": 22356,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-c2-frameworks (forensics).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-nikto",
+        "tool-nmap",
+        "tool-rubeus"
+      ]
+    },
+    {
+      "id": "offensive-bug-identification",
+      "category": "fuzzing",
+      "source_path": "Skills/fuzzing/offensive-bug-identification/SKILL.md",
+      "source_sha256": "b80715679fc455a96585cbe25005b107963daa0c10e08df743b2ddbc017bc272",
+      "source_bytes": 55900,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-bug-identification (fuzzing).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aflplusplus",
+        "tool-binwalk",
+        "tool-burp-suite",
+        "tool-codeql",
+        "tool-ffuf",
+        "tool-frida",
+        "tool-gdb",
+        "tool-ghidra",
+        "tool-grype",
+        "tool-libfuzzer",
+        "tool-mobsf",
+        "tool-nuclei",
+        "tool-objection",
+        "tool-radare2",
+        "tool-semgrep",
+        "tool-trivy"
+      ]
+    },
+    {
+      "id": "offensive-fuzzing-course",
+      "category": "fuzzing",
+      "source_path": "Skills/fuzzing/offensive-fuzzing-course/SKILL.md",
+      "source_sha256": "1094410fb2a89843e9f8d8447d1d28602fc5fd36b29481cdd45b47b5c768acdd",
+      "source_bytes": 80400,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-fuzzing-course (fuzzing).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aflplusplus",
+        "tool-codeql",
+        "tool-gdb",
+        "tool-libfuzzer"
+      ]
+    },
+    {
+      "id": "offensive-fuzzing",
+      "category": "fuzzing",
+      "source_path": "Skills/fuzzing/offensive-fuzzing/SKILL.md",
+      "source_sha256": "fcd129b42cdf383cacd7852db336dc51e3e540d872ead9931c7acec30b4088c4",
+      "source_bytes": 11875,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-fuzzing (fuzzing).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aflplusplus",
+        "tool-gdb",
+        "tool-libfuzzer"
+      ]
+    },
+    {
+      "id": "offensive-vuln-classes",
+      "category": "fuzzing",
+      "source_path": "Skills/fuzzing/offensive-vuln-classes/SKILL.md",
+      "source_sha256": "85b7eeeded746de0962b27ed14984f483cb21d1444843e21bc531aba221985e0",
+      "source_bytes": 96424,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-vuln-classes (fuzzing).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-john-the-ripper"
+      ]
+    },
+    {
+      "id": "offensive-advanced-redteam",
+      "category": "infrastructure",
+      "source_path": "Skills/infrastructure/offensive-advanced-redteam/SKILL.md",
+      "source_sha256": "d5e1d178728c68971727e3e64c774cbe3a4506c68c3d134ced4d1c891fc9a1f8",
+      "source_bytes": 27594,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-advanced-redteam (infrastructure).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-impacket",
+        "tool-winrm"
+      ]
+    },
+    {
+      "id": "offensive-edr-evasion",
+      "category": "infrastructure",
+      "source_path": "Skills/infrastructure/offensive-edr-evasion/SKILL.md",
+      "source_sha256": "e0131dc7f57fc7bd93bf17ec9e0eac4a228b07cb7afff35a7c45abb8a4c2958c",
+      "source_bytes": 84357,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-edr-evasion (infrastructure).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-kubectl",
+        "tool-sharphound"
+      ]
+    },
+    {
+      "id": "offensive-initial-access",
+      "category": "infrastructure",
+      "source_path": "Skills/infrastructure/offensive-initial-access/SKILL.md",
+      "source_sha256": "f7752f0940b2f985aeb4a352f6a77d9ef8bc268fd22c1faa6b40e22ce00cf965",
+      "source_bytes": 65534,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-initial-access (infrastructure).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-evilginx",
+        "tool-frida",
+        "tool-responder",
+        "tool-socat"
+      ]
+    },
+    {
+      "id": "offensive-keylogger-arch",
+      "category": "infrastructure",
+      "source_path": "Skills/infrastructure/offensive-keylogger-arch/SKILL.md",
+      "source_sha256": "856f21f14f6645cd2c566f2504fe1ac42d23be51d21be80e966ed6b36509449c",
+      "source_bytes": 11516,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-keylogger-arch (infrastructure).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": []
+    },
+    {
+      "id": "offensive-shellcode",
+      "category": "infrastructure",
+      "source_path": "Skills/infrastructure/offensive-shellcode/SKILL.md",
+      "source_sha256": "3f6399baf95a1e41c6968ed8b69fcb0989019ae79420298058da48cab3e09a68",
+      "source_bytes": 18885,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-shellcode (infrastructure).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": []
+    },
+    {
+      "id": "offensive-windows-boundaries",
+      "category": "infrastructure",
+      "source_path": "Skills/infrastructure/offensive-windows-boundaries/SKILL.md",
+      "source_sha256": "a31cb44295c46284a3742f923f6a55175fb3d9a6f4f90e69fa3cab70bd4983c2",
+      "source_bytes": 567484,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-windows-boundaries (infrastructure).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-ghidra",
+        "tool-pypykatz",
+        "tool-wireshark"
+      ]
+    },
+    {
+      "id": "offensive-windows-mitigations",
+      "category": "infrastructure",
+      "source_path": "Skills/infrastructure/offensive-windows-mitigations/SKILL.md",
+      "source_sha256": "de31c49a6ecaa77f9fb4c351aef94bf661de03a4cac24b58b63fb7c31cca3b8f",
+      "source_bytes": 530459,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-windows-mitigations (infrastructure).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-crackmapexec",
+        "tool-procdump",
+        "tool-pwntools",
+        "tool-responder"
+      ]
+    },
+    {
+      "id": "offensive-iot",
+      "category": "iot",
+      "source_path": "Skills/iot/offensive-iot/SKILL.md",
+      "source_sha256": "4f9e9df132f3b93ba79b7f25f1d76a6ac2ac384cd6e51412dda19b5242ee6ab6",
+      "source_bytes": 13791,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-iot (iot).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-apktool",
+        "tool-bettercap",
+        "tool-binwalk",
+        "tool-flashrom",
+        "tool-frida",
+        "tool-ghidra",
+        "tool-hackrf",
+        "tool-inspectrum",
+        "tool-jadx",
+        "tool-killerbee",
+        "tool-openocd",
+        "tool-rtl-sdr"
+      ]
+    },
+    {
+      "id": "offensive-mobile",
+      "category": "mobile",
+      "source_path": "Skills/mobile/offensive-mobile/SKILL.md",
+      "source_sha256": "16efaba6203ac752b5d266534fa6a488d5b2c00f11f5a1ccd89fc75bead122c1",
+      "source_bytes": 14036,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-mobile (mobile).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-apktool",
+        "tool-burp-suite",
+        "tool-frida",
+        "tool-ghidra",
+        "tool-gitleaks",
+        "tool-jadx",
+        "tool-mobsf",
+        "tool-objection"
+      ]
+    },
+    {
+      "id": "offensive-network-attacks",
+      "category": "network",
+      "source_path": "Skills/network/offensive-network-attacks/SKILL.md",
+      "source_sha256": "2053dfa11437d2b47d941eb3238025dc68ba3ce415d14ffb0ea3e545c32673d8",
+      "source_bytes": 20169,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-network-attacks (network).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-bettercap",
+        "tool-hashcat",
+        "tool-impacket",
+        "tool-netexec",
+        "tool-responder",
+        "tool-tcpdump",
+        "tool-tshark",
+        "tool-wireshark"
+      ]
+    },
+    {
+      "id": "offensive-data-exfiltration",
+      "category": "post-exploitation",
+      "source_path": "Skills/post-exploitation/offensive-data-exfiltration/SKILL.md",
+      "source_sha256": "ae48370b98336536e9012d7b3f16ffb8abf745fdd8da78213fa3fd065c9c0534",
+      "source_bytes": 19708,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-data-exfiltration (post-exploitation).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-chisel"
+      ]
+    },
+    {
+      "id": "offensive-lateral-movement",
+      "category": "post-exploitation",
+      "source_path": "Skills/post-exploitation/offensive-lateral-movement/SKILL.md",
+      "source_sha256": "dbb18f5cf8381a84afff58d9b196cdd50d9e5b86a0a2099ba41664c2f6a2a7f4",
+      "source_bytes": 16265,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-lateral-movement (post-exploitation).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-chisel",
+        "tool-crackmapexec",
+        "tool-impacket",
+        "tool-ligolo-ng",
+        "tool-netexec",
+        "tool-nmap",
+        "tool-responder",
+        "tool-winrm"
+      ]
+    },
+    {
+      "id": "offensive-persistence",
+      "category": "post-exploitation",
+      "source_path": "Skills/post-exploitation/offensive-persistence/SKILL.md",
+      "source_sha256": "9b571dd2288f56db193fea2d541053ec95f774375f73feba97f339102c282929",
+      "source_bytes": 23558,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-persistence (post-exploitation).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-impacket"
+      ]
+    },
+    {
+      "id": "offensive-linux-privesc",
+      "category": "privesc",
+      "source_path": "Skills/privesc/offensive-linux-privesc/SKILL.md",
+      "source_sha256": "1007b1e3bbdab4d434a07c95d5a8edf8ef6d4cc1d8ef38a6f45ddbe01657a1ab",
+      "source_bytes": 19032,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-linux-privesc (privesc).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-linpeas",
+        "tool-nmap"
+      ]
+    },
+    {
+      "id": "offensive-windows-privesc",
+      "category": "privesc",
+      "source_path": "Skills/privesc/offensive-windows-privesc/SKILL.md",
+      "source_sha256": "cfb83e47118ed95d406374a5894124a8b3d993da9ca65c0270576b9a32697efe",
+      "source_bytes": 22580,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-windows-privesc (privesc).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-socat",
+        "tool-winpeas"
+      ]
+    },
+    {
+      "id": "offensive-osint-methodology",
+      "category": "recon",
+      "source_path": "Skills/recon/offensive-osint-methodology/SKILL.md",
+      "source_sha256": "f03929b1e6f39bae288afbb301fced0d596a9f96fdeb257dd7a990f6ec336c6c",
+      "source_bytes": 22820,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-osint-methodology (recon).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-maltego",
+        "tool-sherlock",
+        "tool-shodan"
+      ]
+    },
+    {
+      "id": "offensive-osint",
+      "category": "recon",
+      "source_path": "Skills/recon/offensive-osint/SKILL.md",
+      "source_sha256": "999f3e0bc7badfdbb35d3f7e6f149fe7c62384ab1e2972a0dcc289ca1f78adb2",
+      "source_bytes": 22751,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-osint (recon).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-amass",
+        "tool-recon-ng",
+        "tool-sherlock",
+        "tool-shodan",
+        "tool-spiderfoot",
+        "tool-subfinder",
+        "tool-theharvester"
+      ]
+    },
+    {
+      "id": "offensive-phishing",
+      "category": "social-engineering",
+      "source_path": "Skills/social-engineering/offensive-phishing/SKILL.md",
+      "source_sha256": "cb07baa8b247b1759724283f1304f03aecf75fc329f93b38ed4823dec104cb78",
+      "source_bytes": 19361,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-phishing (social-engineering).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-gophish",
+        "tool-john-the-ripper",
+        "tool-king-phisher",
+        "tool-theharvester"
+      ]
+    },
+    {
+      "id": "offensive-social-engineering",
+      "category": "social-engineering",
+      "source_path": "Skills/social-engineering/offensive-social-engineering/SKILL.md",
+      "source_sha256": "415cc4d61afb3e8581bb9066d80eb7ce99f72d9ea13ee7d6d6a040761ab17d75",
+      "source_bytes": 22933,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-social-engineering (social-engineering).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-john-the-ripper",
+        "tool-objection",
+        "tool-recon-ng",
+        "tool-responder",
+        "tool-shodan",
+        "tool-theharvester"
+      ]
+    },
+    {
+      "id": "offensive-dependency-confusion",
+      "category": "supply-chain",
+      "source_path": "Skills/supply-chain/offensive-dependency-confusion/SKILL.md",
+      "source_sha256": "e394e3eb2467b93d8cf65c3db1a2bc01d27c53c6d2ea704b18f6ef10bc3fcb8b",
+      "source_bytes": 23800,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-dependency-confusion (supply-chain).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite"
+      ]
+    },
+    {
+      "id": "offensive-supply-chain",
+      "category": "supply-chain",
+      "source_path": "Skills/supply-chain/offensive-supply-chain/SKILL.md",
+      "source_sha256": "5457988a8e2fd3d846e3ad62908957fb9f3eff877e393ad6cec8d9c7750a2a56",
+      "source_bytes": 18507,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-supply-chain (supply-chain).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite"
+      ]
+    },
+    {
+      "id": "offensive-fast-checking",
+      "category": "utility",
+      "source_path": "Skills/utility/offensive-fast-checking/SKILL.md",
+      "source_sha256": "f25479fa99f60fa70471fedd40daad09be897b43b0ed6783c45327962bb32f12",
+      "source_bytes": 23860,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-fast-checking (utility).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite",
+        "tool-inql",
+        "tool-shodan",
+        "tool-sqlmap"
+      ]
+    },
+    {
+      "id": "offensive-reporting",
+      "category": "utility",
+      "source_path": "Skills/utility/offensive-reporting/SKILL.md",
+      "source_sha256": "b9a8bf71828399c75c6c877e0768e4f916adbea352010e2fed06e57f06786200",
+      "source_bytes": 14720,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-reporting (utility).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": []
+    },
+    {
+      "id": "offensive-business-logic",
+      "category": "web",
+      "source_path": "Skills/web/offensive-business-logic/SKILL.md",
+      "source_sha256": "4bd5fbf6bf70f98d0b11583e41d4d778044212df63576b31212edf34542779aa",
+      "source_bytes": 13312,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-business-logic (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite"
+      ]
+    },
+    {
+      "id": "offensive-deserialization",
+      "category": "web",
+      "source_path": "Skills/web/offensive-deserialization/SKILL.md",
+      "source_sha256": "2dfb6f4dfa3be8a5ff7a36593908f0f00f236ccc6f7f53f3e1ea33bfe47537e2",
+      "source_bytes": 22517,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-deserialization (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite",
+        "tool-nmap",
+        "tool-phpggc",
+        "tool-ysoserial"
+      ]
+    },
+    {
+      "id": "offensive-file-upload",
+      "category": "web",
+      "source_path": "Skills/web/offensive-file-upload/SKILL.md",
+      "source_sha256": "afd9029b2171fc5ffa70e2dc1deeab62ff362a0006f28ba98f2be475ca666b64",
+      "source_bytes": 30690,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-file-upload (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite",
+        "tool-ffuf"
+      ]
+    },
+    {
+      "id": "offensive-graphql",
+      "category": "web",
+      "source_path": "Skills/web/offensive-graphql/SKILL.md",
+      "source_sha256": "fb88732fb1cc0396df485f3616f237a9bf36a5473b19511ea178a06a5a4cec30",
+      "source_bytes": 21864,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-graphql (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite",
+        "tool-graphql-cop",
+        "tool-inql"
+      ]
+    },
+    {
+      "id": "offensive-idor",
+      "category": "web",
+      "source_path": "Skills/web/offensive-idor/SKILL.md",
+      "source_sha256": "03a3002dd293907c507c27107d44368668d26dcfccf6d9a25197b871f58f528e",
+      "source_bytes": 25606,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-idor (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite",
+        "tool-john-the-ripper"
+      ]
+    },
+    {
+      "id": "offensive-open-redirect",
+      "category": "web",
+      "source_path": "Skills/web/offensive-open-redirect/SKILL.md",
+      "source_sha256": "3d298ca267a20ad24e687ffc891fc0013bb0edffd223d5e92adb21637d814aeb",
+      "source_bytes": 16286,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-open-redirect (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite"
+      ]
+    },
+    {
+      "id": "offensive-parameter-pollution",
+      "category": "web",
+      "source_path": "Skills/web/offensive-parameter-pollution/SKILL.md",
+      "source_sha256": "2e592bd02971ea873d74fbb980063ef6ae4e48aa8c10ca69af2b6f5386e318b7",
+      "source_bytes": 16743,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-parameter-pollution (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite"
+      ]
+    },
+    {
+      "id": "offensive-race-condition",
+      "category": "web",
+      "source_path": "Skills/web/offensive-race-condition/SKILL.md",
+      "source_sha256": "802e2f87e90c0f43f910e3440c4e57fd732d3ac24622c9ca3211fea62d1c5d27",
+      "source_bytes": 29346,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-race-condition (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite",
+        "tool-kubectl"
+      ]
+    },
+    {
+      "id": "offensive-rce",
+      "category": "web",
+      "source_path": "Skills/web/offensive-rce/SKILL.md",
+      "source_sha256": "0a4b1fb7c2ad469c56aa78ecd6ddc26dfd5c485666f31eb2b2db0153cda416ff",
+      "source_bytes": 26602,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-rce (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite",
+        "tool-kubectl",
+        "tool-nuclei",
+        "tool-tplmap",
+        "tool-ysoserial"
+      ]
+    },
+    {
+      "id": "offensive-request-smuggling",
+      "category": "web",
+      "source_path": "Skills/web/offensive-request-smuggling/SKILL.md",
+      "source_sha256": "67c54307ca8760a7c3d270bc708a9675f2c8d474d3715b64567a2e9a32db1f9c",
+      "source_bytes": 21842,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-request-smuggling (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite"
+      ]
+    },
+    {
+      "id": "offensive-sqli",
+      "category": "web",
+      "source_path": "Skills/web/offensive-sqli/SKILL.md",
+      "source_sha256": "e9f37270d2cf9093ebec8cee29a12040133078aca7407570fd715f6e7649cb37",
+      "source_bytes": 9880,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-sqli (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite",
+        "tool-sqlmap"
+      ]
+    },
+    {
+      "id": "offensive-ssrf",
+      "category": "web",
+      "source_path": "Skills/web/offensive-ssrf/SKILL.md",
+      "source_sha256": "44c7b71e1b18a33b9d0f4695d44f8dfa43f1bd6e052116ccab928f6e546daeb5",
+      "source_bytes": 25890,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-ssrf (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite",
+        "tool-tcpdump",
+        "tool-wireshark"
+      ]
+    },
+    {
+      "id": "offensive-ssti",
+      "category": "web",
+      "source_path": "Skills/web/offensive-ssti/SKILL.md",
+      "source_sha256": "9d32478c4b80f3f9c78da1165e0c7523e2443b8f92ed0ae169860322537bf668",
+      "source_bytes": 22984,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-ssti (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite",
+        "tool-ffuf",
+        "tool-tplmap"
+      ]
+    },
+    {
+      "id": "offensive-waf-bypass",
+      "category": "web",
+      "source_path": "Skills/web/offensive-waf-bypass/SKILL.md",
+      "source_sha256": "0485e6ebf76ff726a024b73c4d1059e2d692ac0d65ff78739101acc7b40a6712",
+      "source_bytes": 37738,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-waf-bypass (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-inql",
+        "tool-shodan",
+        "tool-sqlmap"
+      ]
+    },
+    {
+      "id": "offensive-xss",
+      "category": "web",
+      "source_path": "Skills/web/offensive-xss/SKILL.md",
+      "source_sha256": "6c688051d7e82ebcf3da3ec53aa25f49bdb4e332895d49132e0117462fa3ffb4",
+      "source_bytes": 24895,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-xss (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite"
+      ]
+    },
+    {
+      "id": "offensive-xxe",
+      "category": "web",
+      "source_path": "Skills/web/offensive-xxe/SKILL.md",
+      "source_sha256": "b56c15801faa3f3046d86071cab344fdda55dd97de266b06ed0bbaae54659685",
+      "source_bytes": 28487,
+      "format": "legacy",
+      "description": "Reference metadata for offensive-xxe (web).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-burp-suite",
+        "tool-kubectl",
+        "tool-semgrep"
+      ]
+    },
+    {
+      "id": "offensive-bluetooth-ble",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-bluetooth-ble/SKILL.md",
+      "source_sha256": "46b1d69a6e6e578af1ee5d43a273a97250142d35ec7e08b30efe2badd2835ed6",
+      "source_bytes": 6694,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-bluetooth-ble (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-bettercap",
+        "tool-jadx",
+        "tool-ubertooth",
+        "tool-wireshark"
+      ]
+    },
+    {
+      "id": "offensive-bluetooth-classic",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-bluetooth-classic/SKILL.md",
+      "source_sha256": "0cb51a900fe75514531ad847ab7363a2c33a8cd47615087bc6c7b3290dc1da1a",
+      "source_bytes": 5463,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-bluetooth-classic (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": []
+    },
+    {
+      "id": "offensive-deauth-disassoc",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-deauth-disassoc/SKILL.md",
+      "source_sha256": "c29e7db48d4f646cdd3c9b79f16de80e6305147fde30e9e673da585617021f73",
+      "source_bytes": 4621,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-deauth-disassoc (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aircrack-ng",
+        "tool-aireplay-ng",
+        "tool-airodump-ng",
+        "tool-mdk4"
+      ]
+    },
+    {
+      "id": "offensive-evil-twin",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-evil-twin/SKILL.md",
+      "source_sha256": "dec52fa1cc0b36eb9e322c93f8cb91093f68cc2ade8aaf3f8354ee4bf02f1974",
+      "source_bytes": 8093,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-evil-twin (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aireplay-ng",
+        "tool-airgeddon",
+        "tool-airodump-ng",
+        "tool-bettercap",
+        "tool-eaphammer",
+        "tool-hcxdumptool",
+        "tool-hostapd-mana",
+        "tool-wifiphisher"
+      ]
+    },
+    {
+      "id": "offensive-krack-fragattacks",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-krack-fragattacks/SKILL.md",
+      "source_sha256": "12dea4e775fa3f28d89ab1223bb4810bce21a5ac13cf300dbe54583abbd28316",
+      "source_bytes": 4542,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-krack-fragattacks (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aireplay-ng",
+        "tool-hostapd-mana"
+      ]
+    },
+    {
+      "id": "offensive-lorawan-sub-ghz",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-lorawan-sub-ghz/SKILL.md",
+      "source_sha256": "566cd87eb0b630e62988db82003f5a1894eaf3747901d9d912edbd9a50dbb244",
+      "source_bytes": 6929,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-lorawan-sub-ghz (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-hackrf",
+        "tool-inspectrum",
+        "tool-rtl-sdr",
+        "tool-universal-radio-hacker"
+      ]
+    },
+    {
+      "id": "offensive-wifi-recon",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-wifi-recon/SKILL.md",
+      "source_sha256": "e9504bac7e1479593ca36674ae4807e8983bb744ac300840c9e07c0c599e5408",
+      "source_bytes": 6857,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-wifi-recon (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aircrack-ng",
+        "tool-aireplay-ng",
+        "tool-airodump-ng",
+        "tool-kismet",
+        "tool-wireshark"
+      ]
+    },
+    {
+      "id": "offensive-wifi",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-wifi/SKILL.md",
+      "source_sha256": "49a0bdc0e0dc208ce71ae5bf2180e160ba08077df494e53c5568c600a235dfaa",
+      "source_bytes": 11053,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-wifi (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aircrack-ng",
+        "tool-aireplay-ng",
+        "tool-airgeddon",
+        "tool-airodump-ng",
+        "tool-bettercap",
+        "tool-bully",
+        "tool-eaphammer",
+        "tool-hackrf",
+        "tool-hashcat",
+        "tool-hcxdumptool",
+        "tool-hcxpcapngtool",
+        "tool-hostapd-mana",
+        "tool-killerbee",
+        "tool-kismet",
+        "tool-mdk4",
+        "tool-netexec",
+        "tool-reaver",
+        "tool-tcpdump",
+        "tool-tshark",
+        "tool-wifiphisher"
+      ]
+    },
+    {
+      "id": "offensive-wpa-enterprise",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-wpa-enterprise/SKILL.md",
+      "source_sha256": "a744c80d312a30fc7040f73e782cda3d171dce68767e74630ac8f1a8b3320dba",
+      "source_bytes": 7687,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-wpa-enterprise (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-airodump-ng",
+        "tool-eaphammer",
+        "tool-frida",
+        "tool-hashcat",
+        "tool-netexec",
+        "tool-tshark",
+        "tool-wireshark"
+      ]
+    },
+    {
+      "id": "offensive-wpa2-psk",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-wpa2-psk/SKILL.md",
+      "source_sha256": "27fdd98164101ed4f46b7ef1b89ead36ab1b08a3b0ac1c5aa66f2b6fcb835c6d",
+      "source_bytes": 6280,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-wpa2-psk (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-aireplay-ng",
+        "tool-airodump-ng",
+        "tool-hashcat",
+        "tool-hcxdumptool",
+        "tool-hcxpcapngtool"
+      ]
+    },
+    {
+      "id": "offensive-wpa3-sae",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-wpa3-sae/SKILL.md",
+      "source_sha256": "7c42c538cd6609fc8b9e431c9383346fad3e1539e1f58dd8f9f6fba14f42d4e7",
+      "source_bytes": 6439,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-wpa3-sae (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-airodump-ng",
+        "tool-hostapd-mana",
+        "tool-mdk4",
+        "tool-wireshark"
+      ]
+    },
+    {
+      "id": "offensive-wps",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-wps/SKILL.md",
+      "source_sha256": "4cc089a78b4793a15d9b5bcce4916840db48480dc8eb88c057d6ebd1555501dc",
+      "source_bytes": 5874,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-wps (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-airodump-ng",
+        "tool-bully",
+        "tool-reaver"
+      ]
+    },
+    {
+      "id": "offensive-z-wave",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-z-wave/SKILL.md",
+      "source_sha256": "e99dc89ed0345f87860355f47c731d9b0b292ef9829d774793e8e05c4d1fe0e1",
+      "source_bytes": 5400,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-z-wave (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-hackrf",
+        "tool-rtl-sdr",
+        "tool-wireshark"
+      ]
+    },
+    {
+      "id": "offensive-zigbee-thread-matter",
+      "category": "wireless",
+      "source_path": "Skills/wireless/offensive-zigbee-thread-matter/SKILL.md",
+      "source_sha256": "89809281dd4b1e86e619297e990a10fd5c0c153d88721b476f7c875d823607e2",
+      "source_bytes": 5864,
+      "format": "frontmatter",
+      "description": "Reference metadata for offensive-zigbee-thread-matter (wireless).",
+      "provenance": "provenance-unverified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "tool-hackrf",
+        "tool-killerbee",
+        "tool-wireshark"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "id": "tool-aflplusplus",
+      "aliases": [
+        "AFL++",
+        "afl-fuzz"
+      ]
+    },
+    {
+      "id": "tool-aircrack-ng",
+      "aliases": [
+        "aircrack-ng"
+      ]
+    },
+    {
+      "id": "tool-aireplay-ng",
+      "aliases": [
+        "aireplay-ng"
+      ]
+    },
+    {
+      "id": "tool-airgeddon",
+      "aliases": [
+        "airgeddon"
+      ]
+    },
+    {
+      "id": "tool-airodump-ng",
+      "aliases": [
+        "airodump-ng"
+      ]
+    },
+    {
+      "id": "tool-amass",
+      "aliases": [
+        "amass"
+      ]
+    },
+    {
+      "id": "tool-apktool",
+      "aliases": [
+        "apktool"
+      ]
+    },
+    {
+      "id": "tool-bettercap",
+      "aliases": [
+        "Bettercap"
+      ]
+    },
+    {
+      "id": "tool-binwalk",
+      "aliases": [
+        "binwalk"
+      ]
+    },
+    {
+      "id": "tool-bloodhound",
+      "aliases": [
+        "BloodHound"
+      ]
+    },
+    {
+      "id": "tool-bully",
+      "aliases": [
+        "bully"
+      ]
+    },
+    {
+      "id": "tool-burp-suite",
+      "aliases": [
+        "Burp Suite",
+        "Burp"
+      ]
+    },
+    {
+      "id": "tool-certipy",
+      "aliases": [
+        "Certipy"
+      ]
+    },
+    {
+      "id": "tool-chisel",
+      "aliases": [
+        "chisel"
+      ]
+    },
+    {
+      "id": "tool-codeql",
+      "aliases": [
+        "CodeQL"
+      ]
+    },
+    {
+      "id": "tool-crackmapexec",
+      "aliases": [
+        "CrackMapExec",
+        "cme"
+      ]
+    },
+    {
+      "id": "tool-eaphammer",
+      "aliases": [
+        "eaphammer"
+      ]
+    },
+    {
+      "id": "tool-evilginx",
+      "aliases": [
+        "Evilginx"
+      ]
+    },
+    {
+      "id": "tool-ffuf",
+      "aliases": [
+        "ffuf"
+      ]
+    },
+    {
+      "id": "tool-flashrom",
+      "aliases": [
+        "flashrom"
+      ]
+    },
+    {
+      "id": "tool-frida",
+      "aliases": [
+        "frida"
+      ]
+    },
+    {
+      "id": "tool-gdb",
+      "aliases": [
+        "gdb"
+      ]
+    },
+    {
+      "id": "tool-ghidra",
+      "aliases": [
+        "Ghidra"
+      ]
+    },
+    {
+      "id": "tool-gitleaks",
+      "aliases": [
+        "Gitleaks"
+      ]
+    },
+    {
+      "id": "tool-gophish",
+      "aliases": [
+        "Gophish"
+      ]
+    },
+    {
+      "id": "tool-graphql-cop",
+      "aliases": [
+        "graphql-cop"
+      ]
+    },
+    {
+      "id": "tool-grype",
+      "aliases": [
+        "Grype"
+      ]
+    },
+    {
+      "id": "tool-hackrf",
+      "aliases": [
+        "HackRF"
+      ]
+    },
+    {
+      "id": "tool-hashcat",
+      "aliases": [
+        "hashcat"
+      ]
+    },
+    {
+      "id": "tool-hcxdumptool",
+      "aliases": [
+        "hcxdumptool"
+      ]
+    },
+    {
+      "id": "tool-hcxpcapngtool",
+      "aliases": [
+        "hcxpcapngtool"
+      ]
+    },
+    {
+      "id": "tool-hostapd-mana",
+      "aliases": [
+        "hostapd-mana"
+      ]
+    },
+    {
+      "id": "tool-impacket",
+      "aliases": [
+        "impacket"
+      ]
+    },
+    {
+      "id": "tool-inql",
+      "aliases": [
+        "InQL"
+      ]
+    },
+    {
+      "id": "tool-inspectrum",
+      "aliases": [
+        "Inspectrum"
+      ]
+    },
+    {
+      "id": "tool-jadx",
+      "aliases": [
+        "jadx"
+      ]
+    },
+    {
+      "id": "tool-john-the-ripper",
+      "aliases": [
+        "John the Ripper",
+        "john"
+      ]
+    },
+    {
+      "id": "tool-killerbee",
+      "aliases": [
+        "KillerBee"
+      ]
+    },
+    {
+      "id": "tool-king-phisher",
+      "aliases": [
+        "King Phisher"
+      ]
+    },
+    {
+      "id": "tool-kismet",
+      "aliases": [
+        "Kismet"
+      ]
+    },
+    {
+      "id": "tool-kubectl",
+      "aliases": [
+        "kubectl"
+      ]
+    },
+    {
+      "id": "tool-libfuzzer",
+      "aliases": [
+        "libFuzzer"
+      ]
+    },
+    {
+      "id": "tool-ligolo-ng",
+      "aliases": [
+        "ligolo-ng"
+      ]
+    },
+    {
+      "id": "tool-linpeas",
+      "aliases": [
+        "linPEAS"
+      ]
+    },
+    {
+      "id": "tool-lldb",
+      "aliases": [
+        "lldb"
+      ]
+    },
+    {
+      "id": "tool-maltego",
+      "aliases": [
+        "Maltego"
+      ]
+    },
+    {
+      "id": "tool-mdk4",
+      "aliases": [
+        "mdk4"
+      ]
+    },
+    {
+      "id": "tool-mobsf",
+      "aliases": [
+        "MobSF"
+      ]
+    },
+    {
+      "id": "tool-netexec",
+      "aliases": [
+        "NetExec",
+        "nxc"
+      ]
+    },
+    {
+      "id": "tool-nikto",
+      "aliases": [
+        "nikto"
+      ]
+    },
+    {
+      "id": "tool-nmap",
+      "aliases": [
+        "nmap"
+      ]
+    },
+    {
+      "id": "tool-nuclei",
+      "aliases": [
+        "nuclei"
+      ]
+    },
+    {
+      "id": "tool-objection",
+      "aliases": [
+        "objection"
+      ]
+    },
+    {
+      "id": "tool-openocd",
+      "aliases": [
+        "OpenOCD"
+      ]
+    },
+    {
+      "id": "tool-phpggc",
+      "aliases": [
+        "phpggc"
+      ]
+    },
+    {
+      "id": "tool-procdump",
+      "aliases": [
+        "ProcDump"
+      ]
+    },
+    {
+      "id": "tool-pwntools",
+      "aliases": [
+        "pwntools"
+      ]
+    },
+    {
+      "id": "tool-pypykatz",
+      "aliases": [
+        "pypykatz"
+      ]
+    },
+    {
+      "id": "tool-radare2",
+      "aliases": [
+        "radare2"
+      ]
+    },
+    {
+      "id": "tool-reaver",
+      "aliases": [
+        "reaver"
+      ]
+    },
+    {
+      "id": "tool-recon-ng",
+      "aliases": [
+        "recon-ng"
+      ]
+    },
+    {
+      "id": "tool-responder",
+      "aliases": [
+        "Responder"
+      ]
+    },
+    {
+      "id": "tool-rtl-sdr",
+      "aliases": [
+        "RTL-SDR"
+      ]
+    },
+    {
+      "id": "tool-rubeus",
+      "aliases": [
+        "Rubeus"
+      ]
+    },
+    {
+      "id": "tool-semgrep",
+      "aliases": [
+        "Semgrep"
+      ]
+    },
+    {
+      "id": "tool-sharphound",
+      "aliases": [
+        "SharpHound"
+      ]
+    },
+    {
+      "id": "tool-sherlock",
+      "aliases": [
+        "Sherlock"
+      ]
+    },
+    {
+      "id": "tool-shodan",
+      "aliases": [
+        "Shodan"
+      ]
+    },
+    {
+      "id": "tool-socat",
+      "aliases": [
+        "socat"
+      ]
+    },
+    {
+      "id": "tool-spiderfoot",
+      "aliases": [
+        "SpiderFoot"
+      ]
+    },
+    {
+      "id": "tool-sqlmap",
+      "aliases": [
+        "sqlmap"
+      ]
+    },
+    {
+      "id": "tool-subfinder",
+      "aliases": [
+        "subfinder"
+      ]
+    },
+    {
+      "id": "tool-tcpdump",
+      "aliases": [
+        "tcpdump"
+      ]
+    },
+    {
+      "id": "tool-testssl",
+      "aliases": [
+        "testssl.sh"
+      ]
+    },
+    {
+      "id": "tool-theharvester",
+      "aliases": [
+        "theHarvester"
+      ]
+    },
+    {
+      "id": "tool-tplmap",
+      "aliases": [
+        "tplmap"
+      ]
+    },
+    {
+      "id": "tool-trivy",
+      "aliases": [
+        "Trivy"
+      ]
+    },
+    {
+      "id": "tool-tshark",
+      "aliases": [
+        "tshark"
+      ]
+    },
+    {
+      "id": "tool-ubertooth",
+      "aliases": [
+        "Ubertooth"
+      ]
+    },
+    {
+      "id": "tool-universal-radio-hacker",
+      "aliases": [
+        "Universal Radio Hacker"
+      ]
+    },
+    {
+      "id": "tool-wifiphisher",
+      "aliases": [
+        "wifiphisher"
+      ]
+    },
+    {
+      "id": "tool-winpeas",
+      "aliases": [
+        "winPEAS"
+      ]
+    },
+    {
+      "id": "tool-winrm",
+      "aliases": [
+        "Evil-WinRM"
+      ]
+    },
+    {
+      "id": "tool-wireshark",
+      "aliases": [
+        "Wireshark"
+      ]
+    },
+    {
+      "id": "tool-ysoserial",
+      "aliases": [
+        "ysoserial"
+      ]
+    }
+  ]
+}

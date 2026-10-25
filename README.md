@@ -82,6 +82,8 @@ cp .env.example .env   # 填 POSTGRES_PASSWORD(不要用 # 字符)
 docker compose up -d --build
 ```
 
+HTTP 后端现在默认只发布到宿主机 `127.0.0.1:8787`（包括未设置 `ARTEX_BIND_IP` 的旧 `.env`）。远程访问请使用 HTTPS 反向代理；Cloudflare Proxy、Nginx strict SNI 与升级步骤见 [HARDENING.md](HARDENING.md)。
+
 ⚠️ 不要把这个 compose 的镜像改成 `autumn27/artex`——那是**上游原版**，不含二开代码（2026-09 实测踩坑：照抄上游 compose 部署会得到原版）。
 ⚠️ 构建需要访问 apt/npm/Go 模块源，国内机器请先给 Docker 配代理（`~/.docker/config.json` 的 proxies 段）或镜像站。
 
@@ -92,7 +94,7 @@ docker compose up -d --build
 二开版默认开启**反测绘伪装门控**：非 loopback 监听时，直接访问 `http://<IP>:8787` 看到的是 nginx 欢迎页（正常现象）。
 
 1. 启动日志会打印入口路径，形如 `[gate] 伪装门控已启用,入口路径: /g-xxxxxxxx`（也写入 `data/gate.path`);
-2. 浏览器访问 `http://<IP>:8787/g-xxxxxxxx`，输入门控口令（默认同入口路径随机串）;
+2. 远程浏览器通过已配置的 HTTPS 反向代理访问 `https://<configured-domain>/g-xxxxxxxx`，输入门控口令（默认同入口路径随机串）。Docker 默认只发布到 loopback，不能直接使用远程主机的 `IP:8787`；在服务器本机或已建立 SSH 本地端口转发时，可使用 `http://127.0.0.1:8787/g-xxxxxxxx`。原生 loopback 部署若要使用 Gate，须按 [HARDENING.md](HARDENING.md) 明确设置 `ARTEX_GATE=on`;
 3. 首次进入 `/setup` 设置管理员密码。
 
 ## 外部工具（军火库）与部署自检
@@ -119,6 +121,12 @@ docker compose up -d --build
 - **部署预检**：装完/升级后跑 `./artex doctor`——检查 PG、LLM profile、data 可写、隧道工具、军火库、门控、回连地址，FAIL 退出码 1。
 - 工具在「工具」页注册为自定义工具（`kind=shell`）后 agent 才能调用。
 
+### Claude-Red 安全測試知識庫
+
+已將 [SnailSploit/Claude-Red](https://github.com/SnailSploit/Claude-Red) 的 **79 項 Markdown Skills**（23 類）以 ARTEX 原生 Skill 格式納入 `skills/offensive-*/`，並鎖定上游版本。完整原文在各 Skill 的 `references/source.md`；`SKILL.md` 是精簡入口，避免將超大型文件直接塞進 LLM context。
+
+**預設不授權任何 Agent**：在「系統 → Skills」個別啟用需要的項目即可；它不是新的掃描執行檔，也不會自動啟用攻擊工具。來源、MIT 授權及完整性檢查請見 [Claude-Red 整合說明](docs/CLAUDE-RED.md)。
+
 ## 升级
 
 - **重启即迁移**:schema 每次启动幂等重跑，升级只换程序不动数据（备份 `./data` 与数据库仍是好习惯）。
@@ -143,6 +151,8 @@ docker compose up -d --build
 **并发**：每任务 work agent 数在「系统设置」里配置（默认 3)。
 
 ### 反向代理部署（HTTPS / 只开放 443）
+
+公网部署请使用 [Cloudflare / Nginx hardening 指南](HARDENING.md)及 [`packaging/nginx/artex-cloudflare.conf.example`](packaging/nginx/artex-cloudflare.conf.example)：包含 Cloudflare IPv4/IPv6 来源检查、可信客户端 IP 转发及未知／缺少 SNI 的 TLS 握手拒绝。Nginx 对应 `sniStrict` 行为的指令是 `ssl_reject_handshake on`，需要搭配独立的 `default_server`；仅设置 HTTP `return 444` 不能阻止发送证书。下方仅为基础 SSE 反代示例，不包含完整公网防护。
 
 前端和 API/SSE 都由同一个后端端口（默认 `:8787`）提供，实时活动流默认走**同源**地址，因此**无需配置 `NEXT_PUBLIC_SSE_BASE`**，公网只开放 443、把 8787 留在内网即可。
 
@@ -214,6 +224,7 @@ ARTEX 是一套 **LLM 多 agent 驱动的自主渗透系统**:Go 单体后端（
 
 | 文档 | 内容 |
 | --- | --- |
+| [HARDENING.md](HARDENING.md) | Cloudflare Proxy / Full (strict)、Nginx strict SNI、来源边界、部署与验证 |
 | `README-FORK.md` | 二开完整说明（与上游关系、新增能力清单、验证情况） |
 | `HONEYPOT-DETECTION-DESIGN.md` | 蜜罐识别模块调研与设计（含反 AI 代理蜜罐） |
 | `HONEYPOT-DETECTION-DESIGN.md` | 蜜罐识别模块调研与设计（含反 AI 代理蜜罐） |
