@@ -94,7 +94,7 @@ HTTP 后端现在默认只发布到宿主机 `127.0.0.1:8787`（包括未设置 
 二开版默认开启**反测绘伪装门控**：非 loopback 监听时，直接访问 `http://<IP>:8787` 看到的是 nginx 欢迎页（正常现象）。
 
 1. 启动日志会打印入口路径，形如 `[gate] 伪装门控已启用,入口路径: /g-xxxxxxxx`（也写入 `data/gate.path`);
-2. 浏览器访问 `http://<IP>:8787/g-xxxxxxxx`，输入门控口令（默认同入口路径随机串）;
+2. 远程浏览器通过已配置的 HTTPS 反向代理访问 `https://<configured-domain>/g-xxxxxxxx`，输入门控口令（默认同入口路径随机串）。Docker 默认只发布到 loopback，不能直接使用远程主机的 `IP:8787`；在服务器本机或已建立 SSH 本地端口转发时，可使用 `http://127.0.0.1:8787/g-xxxxxxxx`。原生 loopback 部署若要使用 Gate，须按 [HARDENING.md](HARDENING.md) 明确设置 `ARTEX_GATE=on`;
 3. 首次进入 `/setup` 设置管理员密码。
 
 ## 外部工具（军火库）与部署自检
