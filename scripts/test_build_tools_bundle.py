@@ -112,13 +112,32 @@ class BundleTests(unittest.TestCase):
         manifest = json.loads((b.ROOT / 'packaging/tools-manifest.json').read_text())
         b.validate_lock(lock, manifest)
         self.assertEqual(len(lock['bundled']), 14)
-        self.assertEqual(set(lock['external']), {'impacket', 'pypykatz', 'nxc'})
+        self.assertEqual(set(lock['external']), {'impacket', 'pypykatz', 'nxc',
+                                                'subfinder', 'nuclei', 'nuclei-templates'})
         self.assertTrue(all('/latest/' not in x['url'] for x in lock['downloads']))
         self.assertEqual({output['path']: output.get('check')
                           for spec in lock['downloads'] for output in spec['files']
                           if output['path'].endswith('.exe')},
                          {'mimikatz.exe': 'pe-amd64', 'laZagne.exe': 'pe-amd64',
                           'peass/winPEASx64.exe': 'pe-amd64'})
+
+    def test_repository_discovery_resources_require_explicit_installation(self):
+        lock = json.loads((b.ROOT / 'packaging/tools-sources.lock.json').read_text())
+        manifest = json.loads((b.ROOT / 'packaging/tools-manifest.json').read_text())
+        discovery = json.loads((b.ROOT / 'packaging/projectdiscovery-lock.json').read_text())
+        sources = {entry['name']: entry['repository'] for entry in discovery['tools']}
+        for name in ('subfinder', 'nuclei', 'nuclei-templates'):
+            with self.subTest(tool=name):
+                self.assertIn(name, lock['external'])
+                self.assertNotIn(name, lock['bundled'])
+                self.assertEqual(lock['external'][name]['upstream'],
+                                 'https://github.com/' + sources[name])
+                # The actual runtime inventory must remain fully classified;
+                # omitting any newly declared external resource fails closed.
+                incomplete = copy.deepcopy(lock)
+                del incomplete['external'][name]
+                with self.assertRaisesRegex(b.BundleError, 'every runtime-manifest tool'):
+                    b.validate_lock(incomplete, manifest)
 
     def test_missing_coverage(self):
         del self.lock['external']['python-tool']

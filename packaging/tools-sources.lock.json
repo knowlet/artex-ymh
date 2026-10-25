@@ -25,7 +25,10 @@
   "external": {
     "impacket": {"reason":"Install in a deployment-local Python virtualenv as documented; virtualenv entry points are not portable.","upstream":"https://github.com/fortra/impacket"},
     "pypykatz": {"reason":"Install in a deployment-local Python virtualenv as documented; virtualenv entry points are not portable.","upstream":"https://github.com/skelsec/pypykatz"},
-    "nxc": {"reason":"Install in a deployment-local Python virtualenv as documented; virtualenv entry points are not portable.","upstream":"https://github.com/Pennyw0rth/NetExec","version":"1.5.1"}
+    "nxc": {"reason":"Install in a deployment-local Python virtualenv as documented; virtualenv entry points are not portable.","upstream":"https://github.com/Pennyw0rth/NetExec","version":"1.5.1"},
+    "subfinder": {"reason":"Install explicitly with scripts/install_projectdiscovery.py using packaging/projectdiscovery-lock.json; not included in this bundle or installed at startup.","upstream":"https://github.com/projectdiscovery/subfinder"},
+    "nuclei": {"reason":"Install explicitly with scripts/install_projectdiscovery.py using packaging/projectdiscovery-lock.json; executable templates require a separate reviewed installation.","upstream":"https://github.com/projectdiscovery/nuclei"},
+    "nuclei-templates": {"reason":"Install a separately reviewed template directory at the commit in packaging/projectdiscovery-lock.json; the bundled CVE metadata index contains no executable templates or archive hash.","upstream":"https://github.com/projectdiscovery/nuclei-templates"}
   },
   "downloads": [
     {"url":"https://raw.githubusercontent.com/zema1/suo5/v2.2.0/LICENSE","format":"raw","git_blob_sha1":"12d794009f0e833c02d3796747c314288769892a","files":[{"path":"licenses/suo5/LICENSE","mode":"0644","check":"text"}]},

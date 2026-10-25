@@ -17,6 +17,9 @@ on:
       - 'packaging/discovery-data-manifest.json'
       - 'packaging/discovery/**'
       - 'packaging/tools-manifest.json'
+      - 'packaging/tools-sources.lock.json'
+      - 'scripts/build_tools_bundle.py'
+      - 'scripts/test_build_tools_bundle.py'
       - 'scripts/*projectdiscovery*'
       - 'scripts/*vulnerability_intel*'
       - 'scripts/*nuclei_index*'
@@ -45,6 +48,10 @@ jobs:
           cache: true
       - name: Offline updater and installer contracts
         run: python3 -m unittest discover -s scripts -p 'test_*projectdiscovery.py' -v
+      - name: Tool bundle inventory compatibility
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_build_tools_bundle.py' -v
+          python3 scripts/build_tools_bundle.py --validate
       - name: Offline vulnerability feed contracts
         run: python3 -m unittest discover -s scripts -p 'test_update_vulnerability_intel.py' -v
       - name: Nuclei metadata and data pack contracts
