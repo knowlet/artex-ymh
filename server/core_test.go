@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -22,9 +21,9 @@ func TestCoreTaskLifecyclePG(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer m.Close()
+	t.Cleanup(func() { _ = m.Close() })
 	td := t.TempDir()
-	s := New(context.Background(), m, td, td, td)
+	s := newLifecycleTestServer(t, m, td, td, t.TempDir())
 	h := s.Handler()
 	tok, err := signJWT(s.jwtKey, 0)
 	if err != nil {

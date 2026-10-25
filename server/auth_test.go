@@ -243,13 +243,13 @@ func TestRequireAuthTicketPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue ticket: %v", err)
 	}
-	r = httptest.NewRequest("GET", "/api/anything?ticket="+ticket, nil)
+	r = httptest.NewRequest("GET", "/api/logs/stream?ticket="+ticket, nil)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 	if rec.Code != 200 {
 		t.Fatalf("ticket: want 200, got %d", rec.Code)
 	}
-	r = httptest.NewRequest("GET", "/api/anything?ticket="+ticket, nil)
+	r = httptest.NewRequest("GET", "/api/logs/stream?ticket="+ticket, nil)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 	if rec.Code != 401 {
@@ -341,4 +341,15 @@ func TestAuthLogoutRevokes(t *testing.T) {
 	if !cleared {
 		t.Fatal("logout must clear the refresh cookie")
 	}
+}
+
+func (k *memKV) TakeSetting(key string) (string, bool, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.err != nil {
+		return "", false, k.err
+	}
+	value, ok := k.m[key]
+	delete(k.m, key)
+	return value, ok, nil
 }

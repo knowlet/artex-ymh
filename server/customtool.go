@@ -14,10 +14,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/guard"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -338,6 +341,9 @@ func (s *Server) runCommandTool(ctx context.Context, execRaw json.RawMessage, pa
 	// 复用 Bash 也在用的底层 run(经 Bash CoreTool.Call):自动继承安全 floor/超时/
 	// 代理 env/输出溢出。工具与 Bash 平级、共用底层,不经过 Bash 这个工具让模型调。
 	bashIn, _ := json.Marshal(map[string]any{"command": cmd})
+	if err := s.guardCustomInput(ctx, "Bash", bashIn); err != nil {
+		return actool.Errorf(err.Error()), nil
+	}
 	if spec.TimeoutMs > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeoutOr(spec.TimeoutMs, 120000))
@@ -353,6 +359,11 @@ func (s *Server) runScriptTool(ctx context.Context, key string, execRaw json.Raw
 	_ = json.Unmarshal(execRaw, &spec)
 	if strings.TrimSpace(spec.Code) == "" {
 		return actool.Errorf("script code 为空"), nil
+	}
+	// Script source and params are opaque execution, not a statically known destination.
+	scriptInput, _ := json.Marshal(map[string]any{"command": "python3\n" + spec.Code + "\n" + valToStr(params)})
+	if err := s.guardCustomInput(ctx, "Bash", scriptInput); err != nil {
+		return actool.Errorf(err.Error()), nil
 	}
 	interp := s.pythonInterpreter()
 	if interp == "" {
@@ -441,7 +452,34 @@ func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, param
 	for k, v := range spec.Headers {
 		req.Header.Set(k, renderTemplate(v, params, identity))
 	}
-	client := &http.Client{Timeout: timeoutOr(spec.TimeoutMs, 30000)}
+	// Inspect rendered bytes before the first request and every redirect. The
+	// outer custom tool name does not expose its effective network destination.
+	checkRequest := func(r *http.Request) error {
+		body := ""
+		if r.GetBody != nil {
+			reader, err := r.GetBody()
+			if err != nil {
+				return err
+			}
+			b, err := io.ReadAll(reader)
+			reader.Close()
+			if err != nil {
+				return err
+			}
+			body = string(b)
+		}
+		input, _ := json.Marshal(map[string]any{"url": r.URL.String(), "body": body, "headers": r.Header})
+		return s.guardCustomInput(ctx, "WebFetch", input)
+	}
+	if err := checkRequest(req); err != nil {
+		return actool.Errorf(err.Error()), nil
+	}
+	client := &http.Client{Timeout: timeoutOr(spec.TimeoutMs, 30000), CheckRedirect: func(r *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("too many redirects")
+		}
+		return checkRequest(r)
+	}}
 	if tr := s.httpProxyTransport(spec); tr != nil {
 		client.Transport = tr
 	}
@@ -528,4 +566,36 @@ func scalarStr(v any) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// guardCustomInput applies the same guard as the task's outer hook to the
+// effective, rendered operation. CoreTool.Call alone never runs hook.Registry.
+// A missing task guard fails closed; non-task editor/chat runs retain their
+// no-scope semantics but still receive the shared egress/intercept checks.
+func (s *Server) guardCustomInput(ctx context.Context, tool string, input []byte) error {
+	var g *guard.Guard
+	if id := agent.RunInfoFrom(ctx).TaskID; id > 0 {
+		if s.m == nil {
+			return fmt.Errorf("task guard unavailable")
+		}
+		task, ok := s.m.Task(strconv.FormatInt(id, 10))
+		if !ok || task.Guard == nil {
+			return fmt.Errorf("task guard unavailable")
+		}
+		g = task.Guard
+	} else if s.m != nil {
+		g = guard.NewWithInterceptor(s.m.interceptor)
+		g.SetEgress(s.m.egress)
+	} else {
+		return nil
+	} // standalone executor tests; no running manager
+	blocked, reason, rewritten := g.Hooks().PreToolUse(ctx, tool, input)
+	if blocked {
+		return fmt.Errorf("%s", reason)
+	}
+	// Never execute unreviewed original bytes if a future guard rewrites inputs.
+	if len(rewritten) > 0 && !bytes.Equal(rewritten, input) {
+		return fmt.Errorf("custom tool guard input rewrite is unsupported")
+	}
+	return nil
 }

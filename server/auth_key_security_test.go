@@ -1,0 +1,184 @@
+package server
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestPersistedKeySurvivesContainerRecreation(t *testing.T) {
+	base := t.TempDir()
+	data := filepath.Join(base, "data")
+	secrets := filepath.Join(base, "secrets")
+	os.Mkdir(data, 0700)
+	os.Mkdir(secrets, 0700)
+	t.Setenv("ARTEX_KEY_DIR", secrets)
+	key, err := loadOrCreateJWTKey(filepath.Join(base, "container-one"), data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := loadOrCreateJWTKey(filepath.Join(base, "container-two"), data)
+	if err != nil || !bytes.Equal(key, next) {
+		t.Fatalf("key changed: %v", err)
+	}
+}
+func TestInvalidKeyNeverReplaced(t *testing.T) {
+	t.Setenv("ARTEX_KEY_DIR", "")
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "current", true: "legacy"}[legacy], func(t *testing.T) {
+			base := t.TempDir()
+			keyDir := filepath.Join(base, "private")
+			data := filepath.Join(base, "data")
+			os.Mkdir(keyDir, 0700)
+			os.Mkdir(data, 0700)
+			path := filepath.Join(keyDir, jwtKeyFilename)
+			if legacy {
+				path = filepath.Join(data, jwtKeyFilename)
+			}
+			os.WriteFile(path, []byte("broken"), 0600)
+			if _, err := loadOrCreateJWTKey(keyDir, data); err == nil {
+				t.Fatal("invalid key accepted or replaced")
+			}
+			got, _ := os.ReadFile(path)
+			if string(got) != "broken" {
+				t.Fatal("invalid key was modified")
+			}
+		})
+	}
+}
+func TestKeyOverrideMigratesPriorContainerKey(t *testing.T) {
+	base := t.TempDir()
+	data := filepath.Join(base, "data")
+	old := filepath.Join(base, "old")
+	os.Mkdir(data, 0700)
+	os.Mkdir(old, 0700)
+	key := bytes.Repeat([]byte("k"), 32)
+	os.WriteFile(filepath.Join(old, jwtKeyFilename), key, 0600)
+	os.Mkdir(filepath.Join(base, "secrets"), 0700)
+	t.Setenv("ARTEX_KEY_DIR", filepath.Join(base, "secrets"))
+	got, err := loadOrCreateJWTKey(old, data)
+	if err != nil || !bytes.Equal(key, got) {
+		t.Fatalf("legacy migration: %v", err)
+	}
+}
+
+func TestKeyDirectorySymlinkIntoWorkspaceRejected(t *testing.T) {
+	base := t.TempDir()
+	data := filepath.Join(base, "data")
+	if err := os.Mkdir(data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "secrets")
+	if err := os.Symlink(data, alias); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ARTEX_KEY_DIR", alias)
+	if _, err := loadOrCreateJWTKey(base, data); err == nil {
+		t.Fatal("key directory resolves into browsable workspace")
+	}
+	if _, err := os.Stat(filepath.Join(data, jwtKeyFilename)); !os.IsNotExist(err) {
+		t.Fatal("created key in workspace")
+	}
+}
+func TestMissingKeyOverrideFailsWithoutGenerating(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("ARTEX_KEY_DIR", filepath.Join(base, "missing"))
+	if _, err := loadOrCreateJWTKey(base, filepath.Join(base, "data")); err == nil {
+		t.Fatal("missing persistent mount accepted")
+	}
+}
+
+func TestLegacyKeyMigrationRemovesSymlinkedWorkspaceCopy(t *testing.T) {
+	t.Setenv("ARTEX_KEY_DIR", "")
+	base := t.TempDir()
+	data := filepath.Join(base, "real-data")
+	keyDir := filepath.Join(base, "private")
+	for _, dir := range []string{data, keyDir} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(base, "data-link")
+	if err := os.Symlink(data, alias); err != nil {
+		t.Fatal(err)
+	}
+	original := bytes.Repeat([]byte("s"), 32)
+	legacy := filepath.Join(data, jwtKeyFilename)
+	if err := os.WriteFile(legacy, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := loadOrCreateJWTKey(keyDir, alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(key, original) {
+		t.Fatal("legacy key was not preserved")
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("browsable legacy key remains: %v", err)
+	}
+	stored, err := os.ReadFile(filepath.Join(keyDir, jwtKeyFilename))
+	if err != nil || !bytes.Equal(stored, original) {
+		t.Fatalf("persisted key mismatch: %v", err)
+	}
+}
+
+// A prior migration may have persisted the private copy before removal failed.
+// Retrying startup must not leave that signing key downloadable in the workspace.
+func TestExistingPrivateKeyRemovesMatchingWorkspaceCopy(t *testing.T) {
+	t.Setenv("ARTEX_KEY_DIR", "")
+	base := t.TempDir()
+	data := filepath.Join(base, "data")
+	keyDir := filepath.Join(base, "private")
+	for _, dir := range []string{data, keyDir} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := bytes.Repeat([]byte("r"), 32)
+	privatePath := filepath.Join(keyDir, jwtKeyFilename)
+	legacyPath := filepath.Join(data, jwtKeyFilename)
+	for _, path := range []string{privatePath, legacyPath} {
+		if err := os.WriteFile(path, key, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := loadOrCreateJWTKey(keyDir, data)
+	if err != nil || !bytes.Equal(got, key) {
+		t.Fatalf("persisted private key changed: %v", err)
+	}
+	if _, err := os.Lstat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("browsable signing-key copy survived startup: %v", err)
+	}
+}
+
+func TestExistingPrivateKeyPreservesConflictingWorkspaceCopy(t *testing.T) {
+	t.Setenv("ARTEX_KEY_DIR", "")
+	base := t.TempDir()
+	data := filepath.Join(base, "data")
+	keyDir := filepath.Join(base, "private")
+	for _, dir := range []string{data, keyDir} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	private := bytes.Repeat([]byte("p"), 32)
+	legacy := bytes.Repeat([]byte("l"), 32)
+	privatePath := filepath.Join(keyDir, jwtKeyFilename)
+	legacyPath := filepath.Join(data, jwtKeyFilename)
+	for path, key := range map[string][]byte{privatePath: private, legacyPath: legacy} {
+		if err := os.WriteFile(path, key, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := loadOrCreateJWTKey(keyDir, data); err == nil {
+		t.Fatal("startup accepted conflicting private and workspace keys")
+	}
+	for path, want := range map[string][]byte{privatePath: private, legacyPath: legacy} {
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("conflicting key was changed at %s: %v", path, err)
+		}
+	}
+}

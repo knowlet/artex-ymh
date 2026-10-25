@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -37,13 +39,19 @@ func TestAddOneIntentChainTags(t *testing.T) {
 	if err != nil || n == nil {
 		t.Fatalf("取意图节点: %v", err)
 	}
-	payload := string(n.Payload)
-	if !strings.Contains(payload, `"chain_tags":["web","priv"]`) {
-		t.Fatalf("payload 应含规整后的 chain_tags, got: %s", payload)
+	var payload struct {
+		Summary string   `json:"summary"`
+		Tags    []string `json:"chain_tags"`
 	}
-	// 原有字段不受影响
-	if !strings.Contains(payload, `"summary"`) {
-		t.Fatalf("payload 缺 summary: %s", payload)
+	if err := json.Unmarshal(n.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(payload.Tags, []string{"web", "priv"}) {
+		t.Fatalf("payload 应含规整后的 chain_tags, got: %s", n.Payload)
+	}
+	// 原有字段不受影响；PostgreSQL JSONB 可以改变空白格式。
+	if payload.Summary != "对 example.com 登录口做 sql 注入测试" {
+		t.Fatalf("payload summary changed: %s", n.Payload)
 	}
 }
 

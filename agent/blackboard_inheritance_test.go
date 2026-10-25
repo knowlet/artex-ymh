@@ -25,7 +25,7 @@ func callReadJSON(t *testing.T, tool actool.CoreTool, input string) any {
 	return out
 }
 
-func TestGraphOverviewExpandsAssociatedCompanyScope(t *testing.T) {
+func TestGraphOverviewAndCompanyScopeReadOnDemand(t *testing.T) {
 	d := testDB(t)
 	defer d.Close()
 
@@ -82,26 +82,33 @@ func TestGraphOverviewExpandsAssociatedCompanyScope(t *testing.T) {
 	if !ok {
 		t.Fatalf("coverage missing: %#v", overview["coverage"])
 	}
-	scopeRows, ok := coverage["scope"].([]map[string]any)
-	if !ok || len(scopeRows) != 1 {
-		t.Fatalf("task scope missing: %#v", coverage["scope"])
+	// graph_overview intentionally stopped repeating scope in 9e06d89. The
+	// on-demand company tool must still expose every configured scope input.
+	if _, exists := coverage["scope"]; exists {
+		t.Fatal("compact graph overview repeated company scope")
 	}
-	companyScope, ok := scopeRows[0]["company_scope"].([]map[string]any)
-	if !ok || len(companyScope) != len(inputs) {
-		t.Fatalf("company scope not expanded: %#v", scopeRows[0])
+	query, _ := json.Marshal(map[string]string{"search": companiesName(t, companies, companyID)})
+	companyList := callReadJSON(t, tools.listCompanies(), string(query)).(map[string]any)
+	companyRows, ok := companyList["companies"].([]any)
+	if !ok || len(companyRows) != 1 {
+		t.Fatalf("on-demand company scope missing: %#v", companyList)
 	}
-	kinds := make(map[string]string, len(companyScope))
-	for _, rule := range companyScope {
-		kinds[fmt.Sprint(rule["kind"])] = fmt.Sprint(rule["value"])
+	companyRow := companyRows[0].(map[string]any)
+	if companyRow["id"] != float64(companyID) || companyRow["asset_count"] != float64(1) {
+		t.Fatalf("wrong on-demand company: %#v", companyRow)
+	}
+	scopeValues, ok := companyRow["scope"].([]any)
+	if !ok || len(scopeValues) != len(inputs) {
+		t.Fatalf("on-demand company scope incomplete: %#v", companyRow)
+	}
+	values := make(map[string]bool, len(scopeValues))
+	for _, value := range scopeValues {
+		values[fmt.Sprint(value)] = true
 	}
 	for _, input := range inputs {
-		if kinds[input.Kind] != input.Value {
-			t.Errorf("scope %s=%q want %q", input.Kind, kinds[input.Kind], input.Value)
+		if !values[input.Value] {
+			t.Errorf("on-demand company scope missing %s=%q", input.Kind, input.Value)
 		}
-	}
-	keywords, ok := scopeRows[0]["company_keywords"].([]string)
-	if !ok || len(keywords) != 1 || keywords[0] != keyword {
-		t.Fatalf("company keywords missing: %#v", scopeRows[0]["company_keywords"])
 	}
 	if hc, _ := coverage["host_count"].(int); hc < 1 {
 		t.Fatalf("company asset host not counted in agent context: %#v", coverage["host_count"])

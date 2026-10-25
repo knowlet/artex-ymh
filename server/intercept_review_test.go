@@ -51,6 +51,12 @@ func TestReviewCompletionSendsCurrentCallWithoutHistory(t *testing.T) {
 		t.Fatal("review request cannot return a complete explanation")
 	}
 	body := p.request.Messages[0].Content[0].Text
+	const prefix = "<untrusted-data source=\"tool-input\">\n"
+	const suffix = "\n</untrusted-data>"
+	if !strings.HasPrefix(body, prefix) || !strings.HasSuffix(body, suffix) || strings.Count(body, "<untrusted-data ") != 1 {
+		t.Fatalf("review input lost its untrusted-data boundary: %s", body)
+	}
+	body = strings.TrimSuffix(strings.TrimPrefix(body, prefix), suffix)
 	var got intercept.ReviewInput
 	if err := json.Unmarshal([]byte(body), &got); err != nil {
 		t.Fatal(err)

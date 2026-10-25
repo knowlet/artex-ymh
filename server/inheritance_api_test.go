@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,7 +15,7 @@ func TestInheritedActivityDetailAndRelationDeletion(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
-	defer m.Close()
+	t.Cleanup(func() { _ = m.Close() })
 
 	source, err := m.CreateTaskWithOptions("detail source", "source goal", db.TaskCreateOptions{})
 	if err != nil {
@@ -52,7 +51,7 @@ func TestInheritedActivityDetailAndRelationDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := New(context.Background(), m, t.TempDir(), t.TempDir(), t.TempDir())
+	s := newLifecycleTestServer(t, m, t.TempDir(), t.TempDir(), t.TempDir())
 	token, err := signJWT(s.jwtKey, 0)
 	if err != nil {
 		t.Fatal(err)

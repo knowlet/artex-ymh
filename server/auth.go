@@ -1,12 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
+	"io"
 	"math/big"
 	"net/http"
 	"os"
@@ -36,28 +38,124 @@ const (
 	keyChars          = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
 
-// loadOrCreateJWTKey reads the 32-byte signing key from keyDir/jwt.key. keyDir is
-// the project base dir (next to the executable), NOT the browsable workspace root
-// (dataDir) — the signing key must never be listable/downloadable via the file
-// manager. Legacy installs kept it at dataDir/jwt.key; if present there and not yet
-// at the new location, it is migrated (key preserved, so sessions stay valid) and
-// the old file removed so it disappears from the workspace. On first run a random
-// key is generated and persisted.
+// loadOrCreateJWTKey keeps signing/encryption key material outside the browsable
+// workspace. ARTEX_KEY_DIR selects a separately persisted directory in Docker.
+// Existing keys are never silently replaced on read/validation failures.
 func loadOrCreateJWTKey(keyDir, dataDir string) ([]byte, error) {
-	path := filepath.Join(keyDir, jwtKeyFilename)
-	// one-time migration out of the old in-workspace location.
-	if legacy := filepath.Join(dataDir, jwtKeyFilename); legacy != path {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			if data, rerr := os.ReadFile(legacy); rerr == nil {
-				if werr := os.WriteFile(path, data, 0o600); werr == nil {
-					_ = os.Remove(legacy)
-					log.Printf("[auth] JWT key 已从 %s 迁移到 %s（移出可浏览工作区）", legacy, path)
-				}
-			}
-		}
+	oldKeyDir := keyDir
+	if configured := strings.TrimSpace(os.Getenv("ARTEX_KEY_DIR")); configured != "" {
+		keyDir = configured
 	}
-	if data, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(data))) >= 32 {
-		return []byte(strings.TrimSpace(string(data))), nil
+	keyDir, err := filepath.Abs(keyDir)
+	if err != nil {
+		return nil, err
+	}
+	dataAbs, err := filepath.Abs(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	if rel, err := filepath.Rel(dataAbs, keyDir); err == nil && (rel == "." || filepath.IsLocal(rel)) {
+		return nil, fmt.Errorf("JWT key directory must be outside the browsable workspace")
+	}
+	// The deployment must provision the key directory; do not silently create
+	// a typo in an intended persistent mount and generate an ephemeral key there.
+	keyDir, err = filepath.EvalSymlinks(keyDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve JWT key directory: %w", err)
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(dataAbs); resolveErr == nil {
+		dataAbs = resolved
+	} else if !os.IsNotExist(resolveErr) {
+		return nil, resolveErr
+	}
+	if rel, err := filepath.Rel(dataAbs, keyDir); err == nil && (rel == "." || filepath.IsLocal(rel)) {
+		return nil, fmt.Errorf("JWT key directory must be outside the browsable workspace")
+	}
+	path := filepath.Join(keyDir, jwtKeyFilename)
+	read := func(path string) ([]byte, error) {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("JWT key must be a regular file: %s", path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		key := strings.TrimSpace(string(data))
+		if len(key) < 32 {
+			return nil, fmt.Errorf("invalid JWT key at %s: refusing replacement", path)
+		}
+		return []byte(key), nil
+	}
+	removeWorkspaceCopy := func(key []byte) error {
+		legacy := filepath.Join(dataDir, jwtKeyFilename)
+		copy, err := read(legacy)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(copy, key) {
+			return fmt.Errorf("workspace JWT key differs from private key: refusing startup")
+		}
+		return os.Remove(legacy)
+	}
+	if key, err := read(path); err == nil {
+		// A previous migration may have persisted this copy before removing
+		// the browsable one failed. Never skip that cleanup on a retry.
+		if err := removeWorkspaceCopy(key); err != nil {
+			return nil, err
+		}
+		return key, nil
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	persist := func(key []byte) error {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		_, err = f.Write(key)
+		if err == nil {
+			err = f.Sync()
+		}
+		cerr := f.Close()
+		if err == nil {
+			err = cerr
+		}
+		return err
+	}
+	// Preserve both known legacy locations. A malformed or unreadable legacy key
+	// is an operator recovery problem, never permission to destroy ciphertext.
+	for _, legacy := range []string{filepath.Join(oldKeyDir, jwtKeyFilename), filepath.Join(dataDir, jwtKeyFilename)} {
+		abs, err := filepath.Abs(legacy)
+		if err != nil {
+			return nil, err
+		}
+		if abs == path {
+			continue
+		}
+		key, err := read(legacy)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err := persist(key); err != nil {
+			return nil, err
+		}
+		// Remove only a matching workspace copy after durable private writing.
+		// This also handles dataDir spelling that traverses a symlink and a
+		// duplicate left beside a prior container key.
+		if err := removeWorkspaceCopy(key); err != nil {
+			return nil, err
+		}
+		return key, nil
 	}
 	buf := make([]byte, 32)
 	for i := range buf {
@@ -67,10 +165,9 @@ func loadOrCreateJWTKey(keyDir, dataDir string) ([]byte, error) {
 		}
 		buf[i] = keyChars[n.Int64()]
 	}
-	if err := os.WriteFile(path, buf, 0600); err != nil {
+	if err := persist(buf); err != nil {
 		return nil, fmt.Errorf("write jwt key: %w", err)
 	}
-	log.Printf("[auth] 新 JWT key 已写入 %s", path)
 	return buf, nil
 }
 
@@ -156,7 +253,7 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
-		if t := r.URL.Query().Get("ticket"); t != "" && s.tickets.consume(t) {
+		if t := r.URL.Query().Get("ticket"); t != "" && isSSERequest(r) && s.tickets.consume(t) {
 			h.ServeHTTP(w, r)
 			return
 		}
@@ -166,11 +263,56 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 
 // ---------- refresh token(随机 32 字节,哈希存 settings) ----------
 
+// isSSERequest restricts URL capabilities to the application's read-only streams.
+// Keep this allowlist in sync with the registered EventSource routes.
+func isSSERequest(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	switch r.URL.Path {
+	case "/api/logs/stream", "/api/update/stream", "/api/exploration/activity/stream":
+		return true
+	}
+	parts := strings.Split(r.URL.Path, "/")
+	return len(parts) == 5 && parts[1] == "api" && parts[2] == "side-questions" && parts[3] != "" && parts[4] == "events"
+}
+
+const maxAuthBodyBytes = 4096
+
+// Bound both bytes and time before parsing public authentication bodies. A
+// per-request read deadline does not impose a write timeout on long-lived SSE.
+func decodeAuth(w http.ResponseWriter, r *http.Request, v any) bool {
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(10 * time.Second))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAuthBodyBytes))
+	if err != nil {
+		// net/http may drain or close an unread body after the handler returns.
+		// Do not let that read block again after a timeout or an early size
+		// rejection. An incomplete body also makes this connection unusable.
+		_ = controller.SetReadDeadline(time.Now())
+		w.Header().Set("Connection", "close")
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeErr(w, http.StatusRequestEntityTooLarge, "请求内容过大")
+		} else {
+			writeErr(w, http.StatusBadRequest, "请求格式错误")
+		}
+		return false
+	}
+	_ = controller.SetReadDeadline(time.Time{})
+	if json.Unmarshal(body, v) != nil {
+		writeErr(w, http.StatusBadRequest, "请求格式错误")
+		return false
+	}
+	return true
+}
+
 // authKV 是 auth 持久层的最小接口:*db.DB 天然满足,测试注入内存实现。
 type authKV interface {
 	GetSetting(key string) (value string, ok bool, err error)
 	SetSetting(key, value string) error
 	DeleteSetting(key string) error
+	TakeSetting(key string) (value string, ok bool, err error)
 }
 
 // authSettings returns the auth KV store: the test-injected one if set,
@@ -374,7 +516,11 @@ func (s *Server) authInit(w http.ResponseWriter, r *http.Request) {
 	if pg == nil {
 		return
 	}
-	existing, _, _ := pg.GetSetting(authPassKey)
+	existing, _, err := pg.GetSetting(authPassKey)
+	if err != nil {
+		writeErr(w, 500, "读取密码状态失败")
+		return
+	}
 	if existing != "" {
 		writeErr(w, 403, "密码已设置")
 		return
@@ -382,7 +528,10 @@ func (s *Server) authInit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Password string `json:"password"`
 	}
-	if err := decode(r, &req); err != nil || req.Password == "" {
+	if !decodeAuth(w, r, &req) {
+		return
+	}
+	if req.Password == "" {
 		writeErr(w, 400, "密码不能为空")
 		return
 	}
@@ -391,8 +540,13 @@ func (s *Server) authInit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "密码加密失败")
 		return
 	}
-	if err := pg.SetSetting(authPassKey, string(hash)); err != nil {
-		writeErr(w, 500, "保存失败: "+err.Error())
+	created, err := pg.SetSettingIfAbsent(authPassKey, string(hash))
+	if err != nil {
+		writeErr(w, 500, "保存失败")
+		return
+	}
+	if !created {
+		writeErr(w, 403, "密码已设置")
 		return
 	}
 	s.issueSession(w, r, pg)
@@ -414,8 +568,7 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 		OldPassword string `json:"old_password"`
 		NewPassword string `json:"new_password"`
 	}
-	if err := decode(r, &req); err != nil {
-		writeErr(w, 400, "请求格式错误")
+	if !decodeAuth(w, r, &req) {
 		return
 	}
 	if req.NewPassword == "" {
@@ -467,13 +620,19 @@ func (s *Server) authRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "读取密钥版本失败")
 		return
 	}
-	if _, ok := validateRefreshToken(kv, c.Value, ver); !ok {
+	// Consume atomically: only one concurrent caller can obtain this record.
+	raw, found, err := kv.TakeSetting(refreshSettingKey(hashRefreshToken(c.Value)))
+	if err != nil {
+		writeErr(w, 500, "吊销旧凭证失败")
+		return
+	}
+	var rec refreshRecord
+	if !found || json.Unmarshal([]byte(raw), &rec) != nil || time.Now().Unix() >= rec.Exp || rec.Ver != ver {
 		clearRefreshCookie(w, r)
 		writeErr(w, 401, "refresh token 无效或已过期")
 		return
 	}
-	// 滑动续期:作废旧票再签新票(旋转),旧票泄漏重放即失效。
-	_ = kv.DeleteSetting(refreshSettingKey(hashRefreshToken(c.Value)))
+	// A successor-write failure leaves the old token consumed (fail closed).
 	rt, err := issueRefreshToken(kv, ver)
 	if err != nil {
 		writeErr(w, 500, "refresh token 生成失败: "+err.Error())
@@ -510,8 +669,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := decode(r, &req); err != nil {
-		writeErr(w, 400, "请求格式错误")
+	if !decodeAuth(w, r, &req) {
 		return
 	}
 	if req.Username != "ARTEX" {
