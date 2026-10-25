@@ -121,6 +121,12 @@ HTTP 后端现在默认只发布到宿主机 `127.0.0.1:8787`（包括未设置 
 - **部署预检**：装完/升级后跑 `./artex doctor`——检查 PG、LLM profile、data 可写、隧道工具、军火库、门控、回连地址，FAIL 退出码 1。
 - 工具在「工具」页注册为自定义工具（`kind=shell`）后 agent 才能调用。
 
+### Claude-Red 安全測試知識庫
+
+已將 [SnailSploit/Claude-Red](https://github.com/SnailSploit/Claude-Red) 的 **79 項 Markdown Skills**（23 類）以 ARTEX 原生 Skill 格式納入 `skills/offensive-*/`，並鎖定上游版本。完整原文在各 Skill 的 `references/source.md`；`SKILL.md` 是精簡入口，避免將超大型文件直接塞進 LLM context。
+
+**預設不授權任何 Agent**：在「系統 → Skills」個別啟用需要的項目即可；它不是新的掃描執行檔，也不會自動啟用攻擊工具。來源、MIT 授權及完整性檢查請見 [Claude-Red 整合說明](docs/CLAUDE-RED.md)。
+
 ## 升级
 
 - **重启即迁移**:schema 每次启动幂等重跑，升级只换程序不动数据（备份 `./data` 与数据库仍是好习惯）。
