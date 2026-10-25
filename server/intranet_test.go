@@ -3,12 +3,16 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/session"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 func TestParseLsLa(t *testing.T) {
@@ -172,7 +176,7 @@ func TestBuildTopologyEdgeEndpoints(t *testing.T) {
 		{ID: 21, Kind: "socks", ViaSessionID: 11, State: db.TunnelAlive},
 		{ID: 22, Kind: "portfwd", ViaSessionID: 11, TargetHost: "10.0.0.5", TargetPort: 3306, State: db.TunnelAlive}, // 命中资产
 		{ID: 23, Kind: "portfwd", ViaSessionID: 11, TargetHost: "10.0.0.8", TargetPort: 445, State: db.TunnelAlive},  // 合成 pf 节点
-		{ID: 24, Kind: "socks", ViaSessionID: 99, State: db.TunnelAlive},                                            // 会话不在视图 → 跳过
+		{ID: 24, Kind: "socks", ViaSessionID: 99, State: db.TunnelAlive},                                             // 会话不在视图 → 跳过
 	}
 	topo := buildTopology(assets, recs, tuns, "")
 
@@ -316,7 +320,29 @@ func TestIntranetListTunnelsTaskFilter(t *testing.T) {
 
 // TestIntranetListCredentialsTaskFilter ?task_id= 走 ListByTask;不传保持全局。
 func TestIntranetListCredentialsTaskFilter(t *testing.T) {
-	pg := openIntranetTestDB(t)
+	admin := openIntranetTestDB(t)
+	dsn, _, err := db.DSN()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Other package fixtures encrypt credentials with different synthetic
+	// master keys. A global-list test needs its own table, not their ciphertext.
+	schema := fmt.Sprintf("intranet_credentials_%d", time.Now().UnixNano())
+	if _, err := admin.Exec("CREATE SCHEMA " + schema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec("DROP SCHEMA " + schema + " CASCADE") })
+	if _, err := admin.Exec("CREATE TABLE " + schema + ".credentials (LIKE credentials INCLUDING ALL)"); err != nil {
+		t.Fatal(err)
+	}
+	cfg.RuntimeParams["search_path"] = schema + ",public"
+	pool := stdlib.OpenDB(*cfg)
+	t.Cleanup(func() { _ = pool.Close() })
+	pg := &db.DB{DB: pool}
 	cs := db.NewCredentialStore(pg, []byte("intranet-test-master-key"))
 	s := &Server{credStore: cs}
 	ctx := context.Background()
