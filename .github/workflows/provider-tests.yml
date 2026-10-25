@@ -12,10 +12,23 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/provider-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'skillprovider/**'
+      - 'providers/**'
+      - 'cmd/artex/**'
+      - 'server/assembly.go'
+      - 'server/skill_usage.go'
+      - 'server/provider_integration_test.go'
+      - 'db/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/provider-tests.yml'
 permissions:
   contents: read
 concurrency:
-  group: provider-${{ github.event.pull_request.number }}
+  group: provider-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
   provider:
