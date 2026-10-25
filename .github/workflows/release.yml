@@ -114,9 +114,15 @@ jobs:
           name: bin-linux-${{ matrix.goarch }}
           path: dist/artex-linux-${{ matrix.goarch }}/artex
 
-  # ④ 汇总所有 zip → 签名校验和 → 创建 GitHub Release
+  # 工具包独立构建，不接收发版密钥；普通 PR/手动运行也能下载 artifact。
+  tools:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/tools-bundle.yml
+
+  # ④ 汇总所有 zip 与工具包 → 签名校验和 → 创建 GitHub Release
   release:
-    needs: binaries
+    needs: [binaries, tools]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -124,9 +130,15 @@ jobs:
           pattern: pkg-*
           merge-multiple: true
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: tools-linux-amd64
+          path: dist
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum *.zip > SHA256SUMS
+        run: |
+          sha256sum -c tools.tar.gz.sha256
+          sha256sum *.zip tools.tar.gz > SHA256SUMS
       # 用 minisign 给 SHA256SUMS 签名，客户端（selfupdate）内置公钥验签，
       # 缺签名或验不过一律拒装。MINISIGN_KEY 是 minisign 无口令私钥文件的完整
       # 内容（两行），公钥硬编码在 selfupdate/minisign.go，两者必须成对更换。
@@ -148,6 +160,8 @@ jobs:
         with:
           files: |
             dist/*.zip
+            dist/tools.tar.gz
+            dist/tools.tar.gz.sha256
             dist/SHA256SUMS
             dist/SHA256SUMS.minisig
           generate_release_notes: true
