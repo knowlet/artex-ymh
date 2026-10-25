@@ -1,0 +1,54 @@
+name: hardening
+
+on:
+  pull_request:
+    paths:
+      - packaging/nginx/**
+      - scripts/test_nginx_hardening.py
+      - docker-compose.yml
+      - .env.example
+      - .github/workflows/hardening.yml
+  push:
+    branches: [main]
+    paths:
+      - packaging/nginx/**
+      - scripts/test_nginx_hardening.py
+      - docker-compose.yml
+      - .env.example
+      - .github/workflows/hardening.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hardening-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nginx:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install local proxy test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends nginx openssl
+      - name: Exercise TLS, origin trust and proxy behavior
+        run: python3 scripts/test_nginx_hardening.py
+      - name: Check Docker publishes application ports only on loopback by default
+        env:
+          POSTGRES_PASSWORD: ci-placeholder-not-a-real-password
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+
+          config = json.loads(subprocess.check_output(
+              ["docker", "compose", "config", "--format", "json"], text=True,
+          ))
+          ports = config["services"]["artex"]["ports"]
+          assert {port["target"] for port in ports} == {8787, 8788}, ports
+          assert all(port["host_ip"] == "127.0.0.1" for port in ports), ports
+          PY

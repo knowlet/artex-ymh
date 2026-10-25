@@ -36,7 +36,9 @@ services:
       ARTEX_LLM_BASE_URL: ${ARTEX_LLM_BASE_URL:-}
       ARTEX_LLM_PROXY: ${ARTEX_LLM_PROXY:-}
     ports:
-      - "8787:8787"
+      # Host Nginx proxies to loopback; do not expose the HTTP backend publicly.
+      # Set ARTEX_BIND_IP explicitly only for a reviewed private-network setup.
+      - "${ARTEX_BIND_IP:-127.0.0.1}:8787:8787"
       - "127.0.0.1:8788:8788"
     volumes:
       # 把数据目录（含 jwt.key、SQLite 等）绑定到项目根目录的 data/，
