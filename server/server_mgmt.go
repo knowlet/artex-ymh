@@ -25,6 +25,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/skillprovider"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/skill"
 )
@@ -492,7 +493,12 @@ func (s *Server) pgGetAgent(w http.ResponseWriter, r *http.Request) {
 		vers = []db.PromptVersion{}
 	}
 	mcp, _ := pg.AgentVisible(a.ID, "mcp")
-	sk, _ := pg.AgentSkillNames(a.ID)
+	var sk []string
+	if libraryID, err := skillprovider.LibraryIdentity(s.skillDir); err == nil {
+		sk, _ = pg.AgentSkillNamesInLibrary(a.ID, libraryID)
+	} else {
+		log.Printf("[skills] library identity: %v", err)
+	}
 	if sk == nil {
 		sk = []string{}
 	}
@@ -720,7 +726,12 @@ func (s *Server) pgGetAgentVisibility(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mcp, _ := pg.AgentVisible(a.ID, "mcp")
-	sk, _ := pg.AgentSkillNames(a.ID)
+	libraryID, err := skillprovider.LibraryIdentity(s.skillDir)
+	if err != nil {
+		writeErr(w, 409, err.Error())
+		return
+	}
+	sk, _ := pg.AgentSkillNamesInLibrary(a.ID, libraryID)
 	if sk == nil {
 		sk = []string{}
 	}
@@ -740,11 +751,16 @@ func (s *Server) pgSetAgentVisibility(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	libraryID, err := skillprovider.LibraryIdentity(s.skillDir)
+	if err != nil {
+		writeErr(w, 409, err.Error())
+		return
+	}
 	if err := pg.SetAgentVisibilityKind(a.ID, "mcp", body.MCP); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	if err := pg.SetAgentSkillVisibility(a.ID, body.Skill); err != nil {
+	if err := pg.SetAgentSkillVisibilityInLibrary(a.ID, body.Skill, libraryID); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
@@ -1718,7 +1734,12 @@ func (s *Server) pgSkillVisibility(w http.ResponseWriter, r *http.Request) {
 	if pg == nil {
 		return
 	}
-	agents, err := pg.SkillAgents(r.PathValue("name"))
+	libraryID, err := skillprovider.LibraryIdentity(s.skillDir)
+	if err != nil {
+		writeErr(w, 409, err.Error())
+		return
+	}
+	agents, err := pg.SkillAgentsInLibrary(r.PathValue("name"), libraryID)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -1740,7 +1761,12 @@ func (s *Server) pgToggleSkillVisibility(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 400, err.Error())
 		return
 	}
-	if err := pg.ToggleSkillVisibility(body.AgentID, body.SkillName, body.Visible); err != nil {
+	libraryID, err := skillprovider.LibraryIdentity(s.skillDir)
+	if err != nil {
+		writeErr(w, 409, err.Error())
+		return
+	}
+	if err := pg.ToggleSkillVisibilityInLibrary(body.AgentID, body.SkillName, body.Visible, libraryID); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
