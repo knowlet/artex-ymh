@@ -1,12 +1,14 @@
 package traffic
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -162,13 +164,14 @@ func (t *Traffic) ImportArchive(dir string) (int64, error) {
 			return 0, fmt.Errorf("traffic blob checksum mismatch: %s", hash)
 		}
 		destination := filepath.Join(t.dir, "_blobs", "sha256", hash[:2], hash+".bin")
-		if _, err := os.Stat(destination); os.IsNotExist(err) {
-			if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		if _, err := os.Lstat(destination); err == nil {
+			if err := verifyArchiveBlob(destination, hash, int64(len(data))); err != nil {
 				return 0, err
 			}
-			if err := os.WriteFile(destination, data, 0o644); err != nil {
-				return 0, err
-			}
+		} else if !os.IsNotExist(err) {
+			return 0, err
+		} else if err := writeArchiveBlob(destination, bytes.NewReader(data), hash, int64(len(data))); err != nil {
+			return 0, err
 		}
 	}
 	tx, err := t.db.Begin()
@@ -216,6 +219,76 @@ VALUES(?,?,?,?,?,?,?)`, item.ID, item.ReqHead, item.ReqBody, nullIfEmpty(item.Re
 		return imported, err
 	}
 	return imported, nil
+}
+
+// An existing filename is not proof of a complete prior restore. Never replace
+// damaged evidence implicitly: fail before committing any exchange metadata.
+func verifyArchiveBlob(path, hash string, length int64) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() != length {
+		return fmt.Errorf("existing traffic blob is not a complete regular file: %s", hash)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	sum := sha256.New()
+	n, err := io.Copy(sum, f)
+	if err != nil {
+		return err
+	}
+	if n != length || hex.EncodeToString(sum.Sum(nil)) != hash {
+		return fmt.Errorf("existing traffic blob checksum mismatch: %s", hash)
+	}
+	return nil
+}
+
+// Stage on the destination filesystem, and publish only after a complete write
+// and Sync/Close. A private directory keeps partial bytes out of the blob lookup
+// path; OpenFile preserves the old 0644 mode subject to the process umask.
+// The caller must hold t.wmu and have verified the source bytes against hash.
+func writeArchiveBlob(destination string, body io.Reader, hash string, length int64) error {
+	dir := filepath.Dir(destination)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	stage, err := os.MkdirTemp(dir, ".archive-blob-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	path := filepath.Join(stage, "body.bin")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	n, err := io.Copy(f, body)
+	if err != nil {
+		return err
+	}
+	if n != length {
+		return fmt.Errorf("incomplete archived traffic blob: %s", hash)
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	// Recheck after staging rather than replacing any newly observed bytes.
+	// The traffic writer lock serializes supported in-process writers; as with
+	// the evidence store, unrelated processes must not mutate this data tree.
+	if _, err := os.Lstat(destination); err == nil {
+		return verifyArchiveBlob(destination, hash, length)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(path, destination)
 }
 
 func uniqueArchiveHosts(hosts []string) []string {
