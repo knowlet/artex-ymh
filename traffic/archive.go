@@ -151,6 +151,7 @@ func (t *Traffic) ImportArchive(dir string) (int64, error) {
 	}
 	t.wmu.Lock()
 	defer t.wmu.Unlock()
+	verifiedBlobs := make(map[string]struct{}, len(snapshot.Blobs))
 	for _, hash := range snapshot.Blobs {
 		if !blobHashRe.MatchString(hash) {
 			return 0, fmt.Errorf("invalid archived traffic blob %q", hash)
@@ -173,6 +174,7 @@ func (t *Traffic) ImportArchive(dir string) (int64, error) {
 		} else if err := writeArchiveBlob(destination, bytes.NewReader(data), hash, int64(len(data))); err != nil {
 			return 0, err
 		}
+		verifiedBlobs[hash] = struct{}{}
 	}
 	tx, err := t.db.Begin()
 	if err != nil {
@@ -190,6 +192,14 @@ VALUES(?,?,?,?,?,?,?,?,?,?,'')`, item.ID, item.TS, item.Host, item.Method, item.
 		n, _ := res.RowsAffected()
 		if n == 0 {
 			continue
+		}
+		// Only selected rows need their references resolved: current rows and
+		// earlier occurrences of an ID keep winning over ignored archive data.
+		for _, hash := range []string{item.ReqBlob, item.RespBlob} {
+			if err := t.verifyArchiveReference(hash, verifiedBlobs); err != nil {
+				// The transaction rolls back even rows inserted before this one.
+				return 0, fmt.Errorf("archived exchange %q: %w", item.ID, err)
+			}
 		}
 		if _, err := tx.Exec(`INSERT INTO exchange_bodies(id,req_head,req_body,req_blob,resp_head,resp_body,resp_blob)
 VALUES(?,?,?,?,?,?,?)`, item.ID, item.ReqHead, item.ReqBody, nullIfEmpty(item.ReqBlob),
@@ -219,6 +229,34 @@ VALUES(?,?,?,?,?,?,?)`, item.ID, item.ReqHead, item.ReqBody, nullIfEmpty(item.Re
 		return imported, err
 	}
 	return imported, nil
+}
+
+// An unlisted reference can reuse a valid local body, including the legacy
+// layout, but existence alone is insufficient. The caller holds t.wmu so these
+// verified hashes remain valid against supported in-process writers.
+func (t *Traffic) verifyArchiveReference(hash string, verified map[string]struct{}) error {
+	if hash == "" {
+		return nil
+	}
+	if !blobHashRe.MatchString(hash) {
+		return fmt.Errorf("invalid archived traffic blob reference %q", hash)
+	}
+	if _, ok := verified[hash]; ok {
+		return nil
+	}
+	path, err := t.blobPath(hash)
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if err := verifyArchiveBlob(path, hash, info.Size()); err != nil {
+		return err
+	}
+	verified[hash] = struct{}{}
+	return nil
 }
 
 // An existing filename is not proof of a complete prior restore. Never replace
