@@ -28,7 +28,7 @@ jobs:
           ref: main
           persist-credentials: false
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Set up Go for offline runtime checks
@@ -109,8 +109,6 @@ jobs:
             before merging. No PoC, executable template, scanner command,
             deployment, or production test was run by the refresh process.
             Installing scanners or changing ARTEX tool permissions is separate.
-          labels: |
-            dependencies
           add-paths: |
             packaging/vulnerability-intel.json
             packaging/projectdiscovery-lock.json
