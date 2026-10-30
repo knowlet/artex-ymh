@@ -121,6 +121,15 @@ HTTP 后端现在默认只发布到宿主机 `127.0.0.1:8787`（包括未设置 
 - **部署预检**：装完/升级后跑 `./artex doctor`——检查 PG、LLM profile、data 可写、隧道工具、军火库、门控、回连地址，FAIL 退出码 1。
 - 工具在「工具」页注册为自定义工具（`kind=shell`）后 agent 才能调用。
 
+### 自動更新 CVE 與掃描工具來源（PR 審核制）
+
+新增 [安全情資／工具來源更新流程](docs/SECURITY-SOURCE-REFRESH.md)：
+每日定期同步 CISA KEV、Nuclei CVE 索引、ProjectDiscovery 的穩定
+release 及 Naabu/HTTPx/Katana 工具包來源鎖定；同時追蹤仍在維護的
+PHP2Shell Scanner、OSV-Scanner、Trivy、ZAP、ffuf。
+只有驗證成功才提出 PR，**不自動 merge、部署或執行外部弱點測試**。
+來源追蹤不是工具安裝，CVE 命中也不是已確認的目標漏洞。
+
 ### Claude-Red 安全測試知識庫
 
 已將 [SnailSploit/Claude-Red](https://github.com/SnailSploit/Claude-Red) 的 **79 項 Markdown Skills**（23 類）以 ARTEX 原生 Skill 格式納入 `skills/offensive-*/`，並鎖定上游版本。完整原文在各 Skill 的 `references/source.md`；`SKILL.md` 是精簡入口，避免將超大型文件直接塞進 LLM context。
