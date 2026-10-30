@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "scope": "Pinned public security testing projects; metadata only, not installed or executable.",
+  "projects": [
+    {
+      "repository": "assetnote/php2shell-scanner",
+      "license": "MIT",
+      "tracking": "commit",
+      "role": "php2shell-detection",
+      "ref": "master",
+      "commit": "052b56ef4f9bf674aa31ac645068144747bade3d",
+      "source_url": "https://github.com/assetnote/php2shell-scanner/tree/052b56ef4f9bf674aa31ac645068144747bade3d",
+      "released_at": null
+    },
+    {
+      "repository": "google/osv-scanner",
+      "license": "Apache-2.0",
+      "tracking": "release",
+      "role": "dependency-scanning",
+      "ref": "v2.7.0",
+      "commit": "bfe2f84abd2f09fe0b83ba7f6dad40d296762f40",
+      "source_url": "https://github.com/google/osv-scanner/tree/bfe2f84abd2f09fe0b83ba7f6dad40d296762f40",
+      "released_at": "2026-10-12T01:32:07Z"
+    },
+    {
+      "repository": "aquasecurity/trivy",
+      "license": "Apache-2.0",
+      "tracking": "release",
+      "role": "container-sbom-iac",
+      "ref": "v0.76.1",
+      "commit": "e713f67f7d54decdcd9b3132c9751833dcced698",
+      "source_url": "https://github.com/aquasecurity/trivy/tree/e713f67f7d54decdcd9b3132c9751833dcced698",
+      "released_at": "2026-10-21T11:18:34Z"
+    },
+    {
+      "repository": "zaproxy/zaproxy",
+      "license": "Apache-2.0",
+      "tracking": "release",
+      "role": "web-security-testing",
+      "ref": "v2.17.0",
+      "commit": "8a1bff313f4d183dba5aa154ecbe89ad751c9153",
+      "source_url": "https://github.com/zaproxy/zaproxy/tree/8a1bff313f4d183dba5aa154ecbe89ad751c9153",
+      "released_at": "2025-12-15T14:41:51Z"
+    },
+    {
+      "repository": "ffuf/ffuf",
+      "license": "MIT",
+      "tracking": "release",
+      "role": "web-fuzzing",
+      "ref": "v2.3.0",
+      "commit": "256c1b02499f5f8672af965d4ad7a321d606bc65",
+      "source_url": "https://github.com/ffuf/ffuf/tree/256c1b02499f5f8672af965d4ad7a321d606bc65",
+      "released_at": "2026-09-09T19:16:19Z"
+    }
+  ]
+}
