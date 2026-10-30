@@ -51,8 +51,9 @@ class BundlePinSyncTests(unittest.TestCase):
             sync.unique_download(updated, "mimikatz.exe"),
             sync.unique_download(self.bundle, "mimikatz.exe"),
         )
-        self.assertEqual(self.bundle["bundled"]["naabu"]["upstream"],
-                         "https://github.com/projectdiscovery/naabu/tree/v2.6.1")
+        self.assertEqual(updated["bundled"]["naabu"]["upstream"],
+                         next(x["source_url"] for x in self.releases["tools"]
+                              if x["name"] == "naabu"))
 
     def test_fails_closed_on_license_body_identity_mismatch(self):
         def bad(url):
