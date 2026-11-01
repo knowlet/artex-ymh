@@ -113,6 +113,9 @@ import type {
   UsageStats,
   WorkspaceFile,
   WorkspaceListing,
+  XAIOAuthLogin,
+  XAIOAuthLoginState,
+  XAIOAuthStatus,
 } from "@/lib/types";
 
 function getToken(): string | null {
@@ -907,6 +910,11 @@ export const api = {
   gc: (ttl = 86400) => post<{ removed: number }>(`/gc?ttl=${ttl}`, {}),
 
   // ---- LLM ----
+  xaiOAuthStatus: () => get<XAIOAuthStatus>("/llm/xai-oauth/status"),
+  startXAIOAuthLogin: () => post<XAIOAuthLogin>("/llm/xai-oauth/login", {}),
+  xaiOAuthLoginState: (id: string) => get<XAIOAuthLoginState>(`/llm/xai-oauth/login/${encodeURIComponent(id)}`),
+  cancelXAIOAuthLogin: (id: string) => del<{ ok: boolean }>(`/llm/xai-oauth/login/${encodeURIComponent(id)}`),
+  logoutXAIOAuth: () => post<{ ok: boolean }>("/llm/xai-oauth/logout", {}),
   getLLM: () =>
     get<{
       configured: boolean;

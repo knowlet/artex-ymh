@@ -7,6 +7,7 @@ import (
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/llmpool"
+	"github.com/Autumn-27/artex/xaioauth"
 	"github.com/Autumn-27/norma/llm"
 )
 
@@ -78,6 +79,10 @@ func (s *Server) poolMember(p *db.LLMProfile, rank int) *llmpool.Member {
 // Returns nil when failover is off or the chain has fewer than two usable members
 // — callers then use the bare provider, which is byte-for-byte the old behavior.
 func (s *Server) poolChain(headID int64, headProv llm.Provider, headCfg agent.Config) *llmpool.Pool {
+	// Subscription exhaustion or logout must never trigger API-key billing.
+	if headCfg.IsSubscription() {
+		return nil
+	}
 	if s.m == nil || s.m.pg == nil || !s.m.LLMPoolEnabled() {
 		return nil
 	}
@@ -106,7 +111,9 @@ func (s *Server) poolChain(headID int64, headProv llm.Provider, headCfg agent.Co
 		WindowTokens: headCfg.CompactionWindow(), Prov: headProv,
 	}}
 	for _, p := range profs {
-		if p.ID == headID {
+		if p.ID == headID || p.Format == xaioauth.Provider {
+			// A later pool member could rotate again to a paid profile. Keep
+			// subscription profiles explicit, even for pre-existing pool settings.
 			continue
 		}
 		// The globally active profile outranks the others when it isn't the head

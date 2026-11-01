@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/xaioauth"
 )
 
 type taskLLMResolution struct {
@@ -29,8 +31,13 @@ func (s *Server) resolutionFromProfile(p *db.LLMProfile, source string) taskLLMR
 		Model:     p.Model,
 		Source:    source,
 	}
-	if p.APIKey == "" {
+	cfg := agent.ConfigFrom(p.Format, p.Model, p.BaseURL, p.APIKey, p.Proxy)
+	s.configureSubscription(&cfg)
+	if !cfg.HasCredentials() {
 		result.Reason = "LLM 配置未设置 API Key"
+		if cfg.IsSubscription() {
+			result.Reason = "请先登入 Grok 订阅"
+		}
 		return result
 	}
 	if _, _, ok := s.providerForProfile(p.ID); !ok {
@@ -59,7 +66,7 @@ func (s *Server) resolveTaskRoleLLM(t *Task, agentKey string) (taskLLMResolution
 		}
 		if p != nil {
 			resolved := s.resolutionFromProfile(p, "agent_binding")
-			if resolved.Available {
+			if resolved.Available || p.Format == xaioauth.Provider {
 				return resolved, nil
 			}
 		}
@@ -81,7 +88,7 @@ func (s *Server) resolveTaskRoleLLM(t *Task, agentKey string) (taskLLMResolution
 	}
 	if p != nil {
 		resolved := s.resolutionFromProfile(p, "global_profile")
-		if resolved.Available {
+		if resolved.Available || p.Format == xaioauth.Provider {
 			return resolved, nil
 		}
 	}

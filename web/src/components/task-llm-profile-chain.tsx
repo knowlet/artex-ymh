@@ -59,12 +59,14 @@ export function TaskLLMProfileChain({
   const currentProfileID = activeProfileId && value.includes(activeProfileId) ? activeProfileId : value[0];
   const currentIndex = value.indexOf(currentProfileID);
   // api_key_hint is display-only and is empty for valid keys shorter than four
-  // characters. The task API remains authoritative for profile validation.
+  // characters, and subscription profiles have no API key at all. The task API
+  // remains authoritative for profile validation.
 
   const profileLabel = React.useCallback(
     (id: string) => {
       const profile = profilesByID.get(id);
-      return profile ? `${profile.name} ${profile.model}` : `配置 #${id}`;
+      if (!profile) return `配置 #${id}`;
+      return `${profile.name} ${profile.model}${profile.format === "xai-oauth" ? " Grok 订阅" : ""}`;
     },
     [profilesByID],
   );
@@ -125,6 +127,7 @@ export function TaskLLMProfileChain({
                         {profile?.name ?? `配置 #${id}`}
                         {profile?.is_default ? "（激活）" : ""}
                       </span>
+                      {profile?.format === "xai-oauth" && <Badge variant="outline">订阅</Badge>}
                     </span>
                     {profile && <span className="truncate text-muted-foreground text-xs">{profile.model}</span>}
                   </div>
@@ -151,6 +154,7 @@ export function TaskLLMProfileChain({
                   <p className="truncate font-medium text-sm">{profile?.name ?? `配置 #${id}`}</p>
                   <div className="flex min-w-0 items-center gap-2">
                     <p className="truncate text-muted-foreground text-xs">{profile?.model ?? "配置已不可用"}</p>
+                    {profile?.format === "xai-oauth" && <Badge variant="outline">订阅</Badge>}
                   </div>
                 </div>
                 <ProfileRoleBadge index={index} currentIndex={currentIndex} />
@@ -190,6 +194,12 @@ export function TaskLLMProfileChain({
             );
           })}
         </div>
+      )}
+
+      {value.some((id) => profilesByID.get(id)?.format === "xai-oauth") && (
+        <p className="text-muted-foreground text-xs">
+          Grok 订阅使用服务器共享登录。订阅额度用尽或授权失败时停止，不会自动转到后续按量计费配置；可手动切换当前配置。
+        </p>
       )}
 
       {onActiveProfileChange && value.length > 0 && (

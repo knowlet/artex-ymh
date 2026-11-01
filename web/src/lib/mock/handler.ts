@@ -1941,6 +1941,11 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   }
   if (path === "/llm" && m === "GET") return D.llmConfig;
   if (path === "/llm" && m === "POST") return { ok: true };
+  if (path === "/llm/xai-oauth/status" && m === "GET") return { connected: false, reauth_required: false };
+  if (path === "/llm/xai-oauth/login" && m === "POST") {
+    throw new Error("演示模式不连接 xAI，请在运行中的 ARTEX 服务上登录。");
+  }
+  if (path === "/llm/xai-oauth/logout" && m === "POST") return { ok: true };
   if (path === "/llm/test")
     return { ok: true, latency_ms: 128, model: String(b.model ?? "claude-opus-4-8"), reply: "OK" };
   if (path === "/llm/profiles" && m === "GET") return { profiles: D.llmProfiles };

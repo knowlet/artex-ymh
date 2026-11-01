@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/Autumn-27/artex/xaioauth"
 )
 
 // ---------- LLM profiles ----------
@@ -158,6 +161,24 @@ ORDER BY is_default DESC, priority DESC, id ASC`)
 
 // SaveProfile inserts (id==0) or updates a profile. Empty apiKey on update keeps existing.
 func (d *DB) SaveProfile(p *LLMProfile) (int64, error) {
+	if p.Format == xaioauth.Provider {
+		if p.APIKey != "" {
+			return 0, fmt.Errorf("Grok subscription profiles use OAuth, not an API key")
+		}
+		p.BaseURL = strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
+		p.BaseURL = strings.TrimSuffix(p.BaseURL, "/responses")
+		if p.BaseURL == "" {
+			p.BaseURL = xaioauth.APIBaseURL
+		}
+		if p.BaseURL != xaioauth.APIBaseURL || p.SessionHeaderKey != "" {
+			return 0, fmt.Errorf("Grok subscription requires its official endpoint without a custom session header")
+		}
+		if p.Model == "" {
+			p.Model = xaioauth.DefaultModel
+		}
+		p.APIKeyHint = ""
+		p.PoolExclude = true // subscription quota must not join an implicit paid pool
+	}
 	hint := p.APIKeyHint
 	if len(p.APIKey) >= 4 {
 		hint = "…" + p.APIKey[len(p.APIKey)-4:]
@@ -172,7 +193,7 @@ VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,NULLIF($6,''),NULLIF($7,''),$8,$9,$
 		return id, err
 	}
 	if p.APIKey == "" {
-		_, err := d.Exec(`UPDATE llm_profiles SET name=$1,format=$2,base_url=NULLIF($3,''),proxy=NULLIF($4,''),model=$5,rate_per_second=$6,rate_per_minute=$7,context_window_k=$8,reasoning_effort=$9,priority=$10,pool_exclude=$11,thinking_type=$12,streaming=$13,max_tokens=$14,max_tokens_field=$15,session_header_key=$16,retry_connect_attempts=$17,retry_connect_interval_ms=$18,retry_empty_attempts=$19,retry_empty_interval_ms=$20,retry_stream_attempts=$21,retry_stream_interval_ms=$22 WHERE id=$23`,
+		_, err := d.Exec(`UPDATE llm_profiles SET name=$1,format=$2,base_url=NULLIF($3,''),proxy=NULLIF($4,''),model=$5,api_key=CASE WHEN $2='xai-oauth' OR format='xai-oauth' THEN NULL ELSE api_key END,api_key_hint=CASE WHEN $2='xai-oauth' OR format='xai-oauth' THEN NULL ELSE api_key_hint END,rate_per_second=$6,rate_per_minute=$7,context_window_k=$8,reasoning_effort=$9,priority=$10,pool_exclude=$11,thinking_type=$12,streaming=$13,max_tokens=$14,max_tokens_field=$15,session_header_key=$16,retry_connect_attempts=$17,retry_connect_interval_ms=$18,retry_empty_attempts=$19,retry_empty_interval_ms=$20,retry_stream_attempts=$21,retry_stream_interval_ms=$22 WHERE id=$23`,
 			p.Name, p.Format, p.BaseURL, p.Proxy, p.Model, p.RatePerSecond, p.RatePerMinute, p.ContextWindowK, p.ReasoningEffort, p.Priority, p.PoolExclude, p.ThinkingType, p.Streaming, p.MaxTokens, p.MaxTokensField, p.SessionHeaderKey,
 			r.Connect.Attempts, r.Connect.IntervalMS, r.Empty.Attempts, r.Empty.IntervalMS, r.Stream.Attempts, r.Stream.IntervalMS, p.ID)
 		return p.ID, err

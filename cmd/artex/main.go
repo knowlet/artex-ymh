@@ -52,6 +52,11 @@ func main() {
 }
 
 func run() int {
+	// Subscription administration must work without starting PostgreSQL,
+	// agents, the web server, or the update subsystem.
+	if len(os.Args) > 1 && os.Args[1] == "auth" {
+		return runAuthCLI(os.Args[2:])
+	}
 	if len(os.Args) > 1 && os.Args[1] == "provider" {
 		return runProvider(os.Args[2:])
 	}

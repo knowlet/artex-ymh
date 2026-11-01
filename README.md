@@ -24,6 +24,14 @@ AI 自主渗透测试系统 · 二开版（Go 后端 + Next.js 前端 + PostgreS
 
 详细二开说明见 `README-FORK.md`。
 
+### Grok 訂閱登入
+
+LLM 設定新增 **Grok 訂閱（OAuth）**：透過 xAI 官方 device-code 授權流程，
+使用帳號訂閱權限接上 Responses API，支援串流與工具呼叫、自動更新 token、
+登入狀態及登出。無須貼上瀏覽器 cookie 或 API key；訂閱失效不會自動切換
+到付費 API。使用方式、CLI、憑證保存與訂閱限制見
+[Grok 訂閱接入說明](docs/GROK-SUBSCRIPTION.md)。
+
 ---
 
 ## 安装

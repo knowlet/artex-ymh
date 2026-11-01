@@ -29,6 +29,7 @@ import (
 	stagepkg "github.com/Autumn-27/artex/stage"
 	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/artex/tunnel"
+	"github.com/Autumn-27/artex/xaioauth"
 	"github.com/Autumn-27/norma/llm"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
@@ -57,6 +58,11 @@ type Server struct {
 	reverse   *PenelopeHandler    // 反弹 shell handler(期 5,见 reverse.go);nil = DB 未就绪
 	tickets   sseTicketStore      // SSE 一次性票据(F6,见 auth.go),零值可用
 	authkv    authKV              // auth 持久层注入(测试用);nil = 走 m.pg
+
+	xaiOAuth     *xaioauth.Manager
+	xaiOAuthPath string
+	xaiFlowAuth  xaiFlowAuth // optional offline authorization implementation for tests
+	xaiLogin     xaiLoginState
 
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
@@ -163,8 +169,10 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		profChatAgents: map[int64]*agent.ChatAgent{},
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
 		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1)}
+	s.xaiOAuthPath = oauthPrivatePath(keyDir)
+	s.xaiOAuth = xaioauth.NewManager(s.xaiOAuthPath)
 	s.initSideQuestions()
-	s.initStage(dataDir) // 受管文件投递暂存(F13);失败降级为关闭,不影响启动
+	s.initStage(dataDir)        // 受管文件投递暂存(F13);失败降级为关闭,不影响启动
 	checkToolsManifest(dataDir) // 期 6 外部工具清单自检(缺失常态,只打汇总日志)
 	// 熔断阈值/冷却是失败路径上的热参数，启动时把全局重试策略推给 Registry 一次；
 	// 之后每次保存策略再推一次（saveLLMRetryPolicy）。
@@ -269,7 +277,15 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		} else {
 			log.Printf("[engine] LLM configured from DB: %s / %s", cfg.Provider(), cfg.Model)
 		}
+	} else if cfg.IsSubscription() {
+		// A saved subscription with missing credentials never falls through to a paid env key.
+		s.llmCfg = cfg
+		log.Printf("[engine] Grok subscription requires login — engine idle")
 	} else if cfg, ok := agent.FromEnv(); ok {
+		s.configureSubscription(&cfg)
+		if cfg.IsSubscription() {
+			s.llmCfg = cfg
+		}
 		if err := s.applyLLM(cfg); err != nil {
 			log.Printf("[engine] env provider init failed — engine idle: %v", err)
 		} else {
@@ -355,6 +371,7 @@ func (s *Server) loadLLMConfig() (agent.Config, bool) {
 		return agent.Config{}, false
 	}
 	cfg := agent.ConfigFrom(p.Format, p.Model, p.BaseURL, p.APIKey, p.Proxy)
+	s.configureSubscription(&cfg)
 	cfg.RatePerSecond, cfg.RatePerMinute = p.RatePerSecond, p.RatePerMinute
 	cfg.ContextWindowK = p.ContextWindowK
 	cfg.ThinkingType = p.ThinkingType
@@ -363,7 +380,7 @@ func (s *Server) loadLLMConfig() (agent.Config, bool) {
 	cfg.MaxTokens, cfg.MaxTokensField = p.MaxTokens, p.MaxTokensField
 	cfg.SessionHeaderKey = p.SessionHeaderKey
 	s.applyProfileRetry(&cfg, p)
-	if cfg.APIKey == "" {
+	if !cfg.HasCredentials() {
 		return cfg, false
 	}
 	s.cfgMu.Lock()
@@ -374,8 +391,8 @@ func (s *Server) loadLLMConfig() (agent.Config, bool) {
 
 // saveLLMConfig persists the LLM config as the active "default" profile in PG.
 func (s *Server) saveLLMConfig(cfg agent.Config) error {
-	// cfg.Provider() already returns one of the three valid format strings
-	// (anthropic / openai / openai-responses), matching the DB CHECK constraint.
+	// cfg.Provider() returns a persisted format, including xai-oauth.
+	// Subscription credentials are kept separately from the profile table.
 	format := cfg.Provider()
 	var id int64
 	// 这个 legacy 端点的请求体不含轮询/收发/输出上限参数,故把库里已存的值原样带回 —
@@ -399,6 +416,10 @@ func (s *Server) saveLLMConfig(cfg agent.Config) error {
 			}
 		}
 	}
+	if cfg.IsSubscription() {
+		sessionHeaderKey, maxTokensField = "", ""
+		poolExclude = true
+	}
 	newID, err := s.m.pg.SaveProfile(&db.LLMProfile{
 		ID: id, Name: "default", Format: format, Model: cfg.Model, BaseURL: cfg.BaseURL, Proxy: cfg.Proxy,
 		APIKey: cfg.APIKey, RatePerSecond: cfg.RatePerSecond, RatePerMinute: cfg.RatePerMinute,
@@ -415,13 +436,28 @@ func (s *Server) saveLLMConfig(cfg agent.Config) error {
 
 // reapplyActiveProfile hot-reloads the engine from the active DB profile so that
 // saving or activating a profile takes effect without a restart. Best-effort:
-// logs on failure and leaves the running engine untouched.
+// API-key-only failures preserve the previous engine. Transitions involving a
+// subscription fail closed so a previous billing source cannot keep running.
 func (s *Server) reapplyActiveProfile() {
 	cfg, ok := s.loadLLMConfig()
+	// Completing a web login also wakes an explicitly selected environment
+	// subscription when there is no persisted active profile.
+	if !ok && !cfg.IsSubscription() {
+		if active, err := s.m.pg.ActiveProfile(); err == nil && active == nil {
+			if env, enabled := agent.FromEnv(); enabled && env.IsSubscription() {
+				s.configureSubscription(&env)
+				cfg, ok = env, env.HasCredentials()
+			}
+		}
+	}
 	if !ok {
+		s.clearInvalidSubscriptionTransition(cfg)
 		return
 	}
 	if err := s.applyLLM(cfg); err != nil {
+		// A rejected subscription selection must not leave the old paid
+		// provider running. The reverse transition must also stop old OAuth.
+		s.clearInvalidSubscriptionTransition(cfg)
 		log.Printf("[engine] reapply active profile failed: %v", err)
 		return
 	}
@@ -542,6 +578,7 @@ func (s *Server) loadProfileConfig(id int64) (agent.Config, bool) {
 		return agent.Config{}, false
 	}
 	cfg := agent.ConfigFrom(p.Format, p.Model, p.BaseURL, p.APIKey, p.Proxy)
+	s.configureSubscription(&cfg)
 	cfg.RatePerSecond, cfg.RatePerMinute = p.RatePerSecond, p.RatePerMinute
 	cfg.ContextWindowK = p.ContextWindowK
 	cfg.ThinkingType = p.ThinkingType
@@ -550,7 +587,7 @@ func (s *Server) loadProfileConfig(id int64) (agent.Config, bool) {
 	cfg.MaxTokens, cfg.MaxTokensField = p.MaxTokens, p.MaxTokensField
 	cfg.SessionHeaderKey = p.SessionHeaderKey
 	s.applyProfileRetry(&cfg, p)
-	if cfg.APIKey == "" {
+	if !cfg.HasCredentials() {
 		return cfg, false
 	}
 	return cfg, true
@@ -581,6 +618,8 @@ func (s *Server) resolveChatAgent(c *db.Conversation) *agent.ChatAgent {
 	if eff := s.effectiveProfileForAgent(c.AgentKey, c.LLMProfileID); eff != nil {
 		if pa := s.chatAgentForProfile(*eff); pa != nil {
 			ca = pa
+		} else if p, err := s.m.pg.ProfileByID(*eff); err == nil && p != nil && p.Format == xaioauth.Provider {
+			return nil
 		}
 	}
 	return ca
@@ -614,12 +653,12 @@ func (s *Server) providerForProfile(id int64) (llm.Provider, agent.Config, bool)
 	s.provCacheMu.Unlock()
 	cfg, ok := s.loadProfileConfig(id)
 	if !ok {
-		return nil, agent.Config{}, false
+		return nil, cfg, false
 	}
 	prov, err := cfg.NewProvider()
 	if err != nil {
 		log.Printf("[engine] build provider for LLM profile %d failed: %v", id, err)
-		return nil, agent.Config{}, false
+		return nil, cfg, false
 	}
 	// Wrap with recorder, tagged with this profile's name.
 	if p, _ := s.m.pg.ProfileByID(id); p != nil {
@@ -767,8 +806,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/scope", s.taskScopeList)
 	mux.HandleFunc("POST /api/tasks/{id}/scope", s.taskScopeAdd)
 	mux.HandleFunc("DELETE /api/tasks/{id}/scope/{sid}", s.taskScopeDelete)
-	mux.HandleFunc("GET /api/tasks/{id}/pending-scope", s.pendingScopeList)   // 期 4:待授权网段列表
-	mux.HandleFunc("POST /api/pending-scope/{id}/decide", s.pendingScopeDecide) // 期 4:审批扩 scope
+	mux.HandleFunc("GET /api/tasks/{id}/pending-scope", s.pendingScopeList)        // 期 4:待授权网段列表
+	mux.HandleFunc("POST /api/pending-scope/{id}/decide", s.pendingScopeDecide)    // 期 4:审批扩 scope
 	mux.HandleFunc("GET /api/tasks/{id}/goals", s.listGoals)                       // 目标管理:列出本任务全部目标
 	mux.HandleFunc("POST /api/tasks/{id}/goals", s.addGoal)                        // 目标管理:人工新增目标(复活任务)
 	mux.HandleFunc("PATCH /api/tasks/{id}/goals/{gid}", s.editGoal)                // 目标管理:修改目标(复活任务)
@@ -948,6 +987,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/visibility/skill/{name}", s.pgSkillVisibility)
 	mux.HandleFunc("POST /api/visibility/skill/toggle", s.pgToggleSkillVisibility)
 	// LLM 多 profile
+	s.registerXAIOAuthRoutes(mux)
 	mux.HandleFunc("GET /api/llm/profiles", s.pgListProfiles)
 	mux.HandleFunc("POST /api/llm/profiles", s.pgSaveProfile)
 	mux.HandleFunc("DELETE /api/llm/profiles/{id}", s.pgDeleteProfile)
@@ -1399,6 +1439,7 @@ func (s *Server) getLLM(w http.ResponseWriter, r *http.Request) {
 		"base_url":         s.llmCfg.BaseURL,
 		"proxy":            s.llmCfg.Proxy,
 		"key_set":          s.llmCfg.APIKey != "",
+		"auth_connected":   s.llmCfg.HasCredentials(),
 		"rate_per_second":  s.llmCfg.RatePerSecond,
 		"rate_per_minute":  s.llmCfg.RatePerMinute,
 		"context_window_k": s.llmCfg.ContextWindowK,
@@ -1426,6 +1467,7 @@ func (s *Server) setLLM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := agent.ConfigFrom(req.Provider, req.Model, req.BaseURL, req.APIKey, req.Proxy)
+	s.configureSubscription(&cfg)
 	cfg.RatePerSecond, cfg.RatePerMinute = req.RatePerSecond, req.RatePerMinute
 	cfg.ThinkingType = req.ThinkingType
 	cfg.ReasoningEffort = req.ReasoningEffort
@@ -1435,13 +1477,19 @@ func (s *Server) setLLM(w http.ResponseWriter, r *http.Request) {
 		}
 		cfg.ContextWindowK = k
 	}
-	if cfg.APIKey == "" {
+	if !cfg.IsSubscription() && cfg.APIKey == "" {
 		s.cfgMu.Lock()
 		cfg.APIKey = s.llmCfg.APIKey // keep existing key if not re-entered
 		s.cfgMu.Unlock()
 	}
-	if cfg.APIKey == "" {
-		writeErr(w, 400, "api_key required")
+	if cfg.IsSubscription() {
+		if err := validateXAIProfile(req.BaseURL, req.APIKey, ""); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+	}
+	if !cfg.HasCredentials() {
+		writeErr(w, 400, "API key or Grok subscription login required")
 		return
 	}
 	// Validate provider construction before persisting it as the active profile.
@@ -1485,6 +1533,7 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := agent.ConfigFrom(req.Provider, req.Model, req.BaseURL, req.APIKey, req.Proxy)
+	s.configureSubscription(&cfg)
 	// mirror production: send the SAME thinking params so a provider that rejects the
 	// reasoning_effort/thinking field fails the test too (no false "test ok, run 400").
 	cfg.ThinkingType = req.ThinkingType
@@ -1501,7 +1550,7 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 	// API Key 解析优先级：表单输入 > 指定 profile 存的 key > 全局配置的 key。
 	// 已存 profile 的 key 不回传浏览器，所以测试已存配置时表单为空，需从 DB 取。
 	// 会话头名同理：表单未带时用已存 profile 的值兜底。
-	if req.ProfileID != nil && (cfg.APIKey == "" || cfg.SessionHeaderKey == "") {
+	if !cfg.IsSubscription() && req.ProfileID != nil && (cfg.APIKey == "" || cfg.SessionHeaderKey == "") {
 		if p, err := s.m.pg.ProfileByID(*req.ProfileID); err == nil && p != nil {
 			if cfg.APIKey == "" {
 				cfg.APIKey = p.APIKey
@@ -1511,13 +1560,19 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if cfg.APIKey == "" {
+	if !cfg.IsSubscription() && cfg.APIKey == "" {
 		s.cfgMu.Lock()
 		cfg.APIKey = s.llmCfg.APIKey
 		s.cfgMu.Unlock()
 	}
-	if cfg.APIKey == "" {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": "未提供 API Key"})
+	if cfg.IsSubscription() {
+		if err := validateXAIProfile(req.BaseURL, req.APIKey, req.SessionHeaderKey); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+	}
+	if !cfg.HasCredentials() {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": "未提供 API Key 或尚未登入 Grok 订阅"})
 		return
 	}
 	// 重试参数【不】带进连接测试:测试有 30s 硬超时,把配置的重试次数/长间隔叠上去

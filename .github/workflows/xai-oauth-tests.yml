@@ -1,0 +1,104 @@
+name: Grok subscription OAuth
+
+on:
+  pull_request:
+    paths:
+      - 'xaioauth/**'
+      - 'agent/provider*'
+      - 'cmd/artex/auth*'
+      - 'cmd/artex/main.go'
+      - 'db/config*'
+      - 'db/schema.sql'
+      - 'server/**'
+      - 'web/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/xai-oauth-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'xaioauth/**'
+      - 'agent/provider*'
+      - 'cmd/artex/auth*'
+      - 'cmd/artex/main.go'
+      - 'db/config*'
+      - 'db/schema.sql'
+      - 'server/**'
+      - 'web/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/xai-oauth-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xai-oauth-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oauth-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
+        env:
+          POSTGRES_USER: artex_test
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: artex_oauth
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U artex_test -d artex_oauth"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ARTEX_PG_DSN: postgres://artex_test:fixture-only@127.0.0.1:5432/artex_oauth?sslmode=disable
+      ARTEX_XAI_REQUIRE_PG: '1'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: OAuth lifecycle and Responses/profile/routing contracts (no live xAI account)
+        run: |
+          go test -race ./xaioauth -count=1 -v
+          go test -race -p=1 ./agent ./db ./server ./cmd/artex -run '^TestXAI' -count=1 -v
+      - name: Vet and actual CLI dispatch without service initialization
+        run: |
+          go vet ./xaioauth ./agent ./db ./server ./cmd/artex
+          go build -o "$RUNNER_TEMP/artex" ./cmd/artex
+          mkdir -m 700 "$RUNNER_TEMP/xai-key-dir"
+          ARTEX_PG_DSN=unavailable "$RUNNER_TEMP/artex" auth status xai-oauth --key-dir "$RUNNER_TEMP/xai-key-dir" > "$RUNNER_TEMP/xai-status.json"
+          python3 - <<'PY'
+          import json, os, pathlib
+          status = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'xai-status.json').read_text())
+          assert status['connected'] is False
+          assert not {'access_token', 'refresh_token', 'device_code'} & status.keys()
+          print('PASS: built CLI reports disconnected without a database or credential disclosure')
+          PY
+
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npx tsc --noEmit --incremental false
+      - run: node --experimental-strip-types --test src/lib/auth-refresh.test.mjs src/lib/xai-oauth.test.mjs
+      - run: npm run build:static

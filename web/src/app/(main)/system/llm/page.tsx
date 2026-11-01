@@ -27,10 +27,12 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
-import type { LLMPoolMember, LLMPoolStatus, LLMProfile, LLMRetryOverride } from "@/lib/types";
+import type { LLMPoolMember, LLMPoolStatus, LLMProfile, LLMRetryOverride, XAIOAuthStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { XAI_OAUTH_BASE_URL, XAI_OAUTH_DEFAULT_MODEL } from "@/lib/xai-oauth";
 
 import { ProfileRetryFields, RetryPolicyPanel, ZERO_OVERRIDE } from "./_components/retry";
+import { XAIOAuthPanel } from "./_components/xai-oauth";
 
 // 思考开关(thinking.type)与思考强度(reasoning_effort)是两个【互相独立】的字段，
 // 各自单独设置——有些接口没有 thinking 字段、只靠强度参数就能激活思考，故需解耦。
@@ -55,6 +57,7 @@ const MAX_TOKENS_FIELD_HINTS: Record<string, string> = {
     "上限发哪个键。max_tokens 是默认，绝大多数兼容网关只认它；OpenAI 官方推理模型（o 系列 / GPT-5）反过来只认 max_completion_tokens，收到 max_tokens 会直接报 unsupported_parameter。",
   anthropic: "仅 openai 格式可选。Anthropic 的字段名固定为 max_tokens。",
   "openai-responses": "仅 openai 格式可选。Responses API 的字段名固定为 max_output_tokens。",
+  "xai-oauth": "Grok 订阅使用 Responses API，输出上限字段为 max_output_tokens。",
 };
 const EFFORT_LEVELS: { value: string; label: string }[] = [
   { value: NONE, label: "不发送（默认）" },
@@ -74,8 +77,17 @@ function cooldownText(secs: number) {
 // 一个配置在卡片上显示的「是否正常」。没填 Key 的配置根本发不出请求，比熔断更该先说；
 // 其余状态来自轮询的熔断记录（轮询关着时不会产生新记录，此时「正常」= 没有已知故障）。
 type Health = { label: string; cls: string; hint?: string };
-function healthOf(p: LLMProfile, m?: LLMPoolMember): Health {
-  if (!p.api_key_hint) {
+function healthOf(p: LLMProfile, m?: LLMPoolMember, xaiStatus?: XAIOAuthStatus | null): Health {
+  if (p.format === "xai-oauth" && (!xaiStatus?.connected || xaiStatus.reauth_required)) {
+    let label = xaiStatus ? "未登录订阅" : "登录状态未知";
+    if (xaiStatus?.reauth_required) label = "需要重新登录";
+    return {
+      label,
+      cls: "border-muted-foreground/40 text-muted-foreground",
+      hint: "编辑配置并登录 Grok 订阅；无需 API Key。",
+    };
+  }
+  if (p.format !== "xai-oauth" && !p.api_key_hint) {
     return {
       label: "未配置 Key",
       cls: "border-muted-foreground/40 text-muted-foreground",
@@ -96,7 +108,11 @@ function healthOf(p: LLMProfile, m?: LLMPoolMember): Health {
       hint: m.last_error,
     };
   }
-  return { label: "正常", cls: "border-emerald-500/50 text-emerald-600 dark:text-emerald-400" };
+  return {
+    label: p.format === "xai-oauth" ? "订阅已登录" : "正常",
+    cls: "border-emerald-500/50 text-emerald-600 dark:text-emerald-400",
+    hint: p.format === "xai-oauth" ? "登录完成；模型权限和额度仍由 xAI 决定，可在配置中测试连接。" : undefined,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,7 +182,7 @@ function PoolSheet({
           </SheetTitle>
           <SheetDescription>
             开启后，<b>未指定模型</b>的 Agent 在当前配置不可用（余额不足 / Key 失效 / 限流 /
-            服务异常）时自动切到下一个配置。
+            服务异常）时自动切到下一个配置。Grok 订阅配置不会自动切换至其他计费来源。
           </SheetDescription>
         </SheetHeader>
 
@@ -303,15 +319,19 @@ function ProfileSheet({
   open,
   onOpenChange,
   onSaved,
+  xaiStatus,
+  onAuthRefresh,
 }: {
   profile: LLMProfile | null; // null = 新建
   open: boolean;
   onOpenChange: (o: boolean) => void;
   onSaved: (id: string) => void;
+  xaiStatus: XAIOAuthStatus | null;
+  onAuthRefresh: () => Promise<void>;
 }) {
   const isNew = !profile;
   const [name, setName] = React.useState("");
-  const [format, setFormat] = React.useState<"anthropic" | "openai" | "openai-responses">("anthropic");
+  const [format, setFormat] = React.useState<LLMProfile["format"]>("anthropic");
   const [model, setModel] = React.useState("");
   const [baseUrl, setBaseUrl] = React.useState("");
   const [proxy, setProxy] = React.useState("");
@@ -334,13 +354,15 @@ function ProfileSheet({
   const [models, setModels] = React.useState<string[]>([]);
   const [loadingModels, setLoadingModels] = React.useState(false);
   const [modelsOpen, setModelsOpen] = React.useState(false);
+  const formGeneration = React.useRef(0);
 
   // 每次打开时从传入的 profile 灌一遍表单（新建则重置为默认值）。抽屉关掉再打开
   // 就是一次干净的开始，不会留下上一个配置的残影。
   React.useEffect(() => {
+    formGeneration.current += 1;
     if (!open) return;
     setName(profile?.name ?? "");
-    setFormat(profile?.format === "openai" || profile?.format === "openai-responses" ? profile.format : "anthropic");
+    setFormat(profile?.format ?? "anthropic");
     setModel(profile?.model ?? "");
     setBaseUrl(profile?.base_url ?? "");
     setProxy(profile?.proxy ?? "");
@@ -360,16 +382,54 @@ function ProfileSheet({
     setKeyHint(profile?.api_key_hint ?? "");
     setModels([]);
     setModelsOpen(false);
+    setLoadingModels(false);
+    setTesting(false);
+    setSaving(false);
   }, [open, profile]);
 
   const profileId = profile ? Number(profile.id) : undefined;
+  const subscription = format === "xai-oauth";
+  const subscriptionConnected = Boolean(xaiStatus?.connected && !xaiStatus.reauth_required);
+
+  function changeFormat(next: string) {
+    formGeneration.current += 1;
+    const nextFormat = next as LLMProfile["format"];
+    setFormat(nextFormat);
+    setModels([]);
+    setModelsOpen(false);
+    setLoadingModels(false);
+    setTesting(false);
+    if (nextFormat === "xai-oauth") {
+      setModel(XAI_OAUTH_DEFAULT_MODEL);
+      setBaseUrl(XAI_OAUTH_BASE_URL);
+      setApiKey("");
+      setKeyHint("");
+      setSessionHeaderKey("");
+      setThinkingType(NONE);
+      setEffort(NONE);
+      setPoolExclude(true);
+    } else if (subscription) {
+      setModel("");
+      setBaseUrl("");
+      setApiKey("");
+      setKeyHint("");
+    }
+  }
 
   async function loadModels() {
     if (loadingModels) return;
     setLoadingModels(true);
     setModels([]);
+    const currentGeneration = formGeneration.current;
     try {
-      const r = await api.fetchLLMModels(format, baseUrl, apiKey, proxy, profileId);
+      const r = await api.fetchLLMModels(
+        format,
+        subscription ? XAI_OAUTH_BASE_URL : baseUrl,
+        subscription ? "" : apiKey,
+        proxy,
+        profileId,
+      );
+      if (formGeneration.current !== currentGeneration) return;
       if (r.ok && r.models && r.models.length > 0) {
         setModels(r.models);
         setModelsOpen(true);
@@ -378,30 +438,32 @@ function ProfileSheet({
         toast.error(`加载模型失败：${r.error ?? "未获取到模型"}`);
       }
     } catch (e) {
-      toast.error(`加载模型出错：${(e as Error).message}`);
+      if (formGeneration.current === currentGeneration) toast.error(`加载模型出错：${(e as Error).message}`);
     } finally {
-      setLoadingModels(false);
+      if (formGeneration.current === currentGeneration) setLoadingModels(false);
     }
   }
 
   async function testConnection() {
     if (testing) return;
     setTesting(true);
+    const currentGeneration = formGeneration.current;
     try {
       // 用配置实际会跑的思考参数来测，这样不支持该字段的模型在这里就失败，
       // 而不是等到跑任务时才炸。传 profile id：Key 输入框留空时用已存的 Key。
       const r = await api.testLLM(
         format,
         model,
-        baseUrl,
-        apiKey,
+        subscription ? XAI_OAUTH_BASE_URL : baseUrl,
+        subscription ? "" : apiKey,
         proxy,
-        toStore(thinkingType),
-        toStore(effort),
+        subscription ? "" : toStore(thinkingType),
+        subscription ? "" : toStore(effort),
         profileId,
         streaming,
-        sessionHeaderKey.trim(),
+        subscription ? "" : sessionHeaderKey.trim(),
       );
+      if (formGeneration.current !== currentGeneration) return;
       // 回复内容一并展示：看得见模型确实说了话，才算和会话里跑通是一回事。
       if (r.ok)
         toast.success(`连接成功 · ${r.latency_ms ?? "?"}ms · ${r.model ?? model}`, {
@@ -409,9 +471,9 @@ function ProfileSheet({
         });
       else toast.error(`连接失败：${r.error ?? "未知"}`);
     } catch (e) {
-      toast.error(`测试出错：${(e as Error).message}`);
+      if (formGeneration.current === currentGeneration) toast.error(`测试出错：${(e as Error).message}`);
     } finally {
-      setTesting(false);
+      if (formGeneration.current === currentGeneration) setTesting(false);
     }
   }
 
@@ -428,22 +490,22 @@ function ProfileSheet({
         name: name.trim(),
         format,
         model: model.trim(),
-        base_url: baseUrl.trim(),
+        base_url: subscription ? XAI_OAUTH_BASE_URL : baseUrl.trim(),
         proxy: proxy.trim(),
-        api_key: apiKey,
+        api_key: subscription ? "" : apiKey,
         rate_per_second: Number(rps) || 0,
         rate_per_minute: Number(rpm) || 0,
         context_window_k: Number(cw) || 0,
-        thinking_type: toStore(thinkingType),
-        reasoning_effort: toStore(effort),
+        thinking_type: subscription ? "" : toStore(thinkingType),
+        reasoning_effort: subscription ? "" : toStore(effort),
         priority: Number(priority) || 0,
-        pool_exclude: poolExclude,
+        pool_exclude: subscription || poolExclude,
         streaming,
         max_tokens: Math.max(0, Number(maxTokens) || 0),
         // 字段名开关只对 openai(Chat Completions) 有意义，其它格式一律回落到默认；
         // 后端也会再做一次同样的归一化，这里只是别让 UI 送出自相矛盾的值。
         max_tokens_field: format === "openai" ? toStore(maxTokensField) : "",
-        session_header_key: sessionHeaderKey.trim(),
+        session_header_key: subscription ? "" : sessionHeaderKey.trim(),
         retry,
       });
       if (isNew) toast.success(`已新建：${name.trim()}（在卡片上「设为激活」以启用）`);
@@ -491,8 +553,8 @@ function ProfileSheet({
               />
             </div>
             <div className="grid gap-2">
-              <Label>格式</Label>
-              <Select value={format} onValueChange={(v) => setFormat(v as "anthropic" | "openai" | "openai-responses")}>
+              <Label>接入方式</Label>
+              <Select value={format} onValueChange={changeFormat} disabled={saving}>
                 <SelectTrigger>
                   <SelectValue placeholder="选择格式" />
                 </SelectTrigger>
@@ -500,10 +562,13 @@ function ProfileSheet({
                   <SelectItem value="anthropic">Anthropic</SelectItem>
                   <SelectItem value="openai">OpenAI (Chat Completions)</SelectItem>
                   <SelectItem value="openai-responses">OpenAI (Responses API)</SelectItem>
+                  <SelectItem value="xai-oauth">Grok 订阅（OAuth）</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
+
+          {subscription && open && <XAIOAuthPanel status={xaiStatus} onRefresh={onAuthRefresh} />}
 
           <div className="grid gap-2">
             <Label htmlFor="p-model">模型</Label>
@@ -511,7 +576,7 @@ function ProfileSheet({
               <Input
                 id="p-model"
                 className="font-mono"
-                placeholder="claude-opus-4-8"
+                placeholder={subscription ? XAI_OAUTH_DEFAULT_MODEL : "claude-opus-4-8"}
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
               />
@@ -524,7 +589,7 @@ function ProfileSheet({
                     variant="outline"
                     size="icon"
                     className="shrink-0"
-                    disabled={loadingModels}
+                    disabled={loadingModels || (subscription && !subscriptionConnected)}
                     onClick={loadModels}
                     title="从 API 加载可用模型"
                   >
@@ -552,16 +617,18 @@ function ProfileSheet({
             </div>
           </div>
 
-          <div className="grid gap-2">
-            <Label htmlFor="p-base-url">Base URL（可选）</Label>
-            <Input
-              id="p-base-url"
-              className="font-mono"
-              placeholder="https://api.openai.com/v1"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-            />
-          </div>
+          {!subscription && (
+            <div className="grid gap-2">
+              <Label htmlFor="p-base-url">Base URL（可选）</Label>
+              <Input
+                id="p-base-url"
+                className="font-mono"
+                placeholder="https://api.openai.com/v1"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+              />
+            </div>
+          )}
 
           <div className="grid gap-2">
             <Label htmlFor="p-proxy">代理（可选）</Label>
@@ -578,32 +645,36 @@ function ProfileSheet({
             </p>
           </div>
 
-          <div className="grid gap-2">
-            <Label htmlFor="p-session-header">自定义会话头（可选）</Label>
-            <Input
-              id="p-session-header"
-              className="font-mono"
-              placeholder="如 x-session-id（留空=不发送）"
-              value={sessionHeaderKey}
-              onChange={(e) => setSessionHeaderKey(e.target.value)}
-            />
-            <p className="text-muted-foreground text-xs">
-              填写头名后，每次请求都会带上这个 HTTP 头，头值自动填为 <b>当前会话的 session id</b>（chat 会话如
-              conv-12、worker 如 exp3-worker-i87）。用于按 session-id 头做提示缓存 /
-              粘性路由的网关；同一会话多轮稳定、不同会话互不相同。留空则不发送。
-            </p>
-          </div>
+          {!subscription && (
+            <div className="grid gap-2">
+              <Label htmlFor="p-session-header">自定义会话头（可选）</Label>
+              <Input
+                id="p-session-header"
+                className="font-mono"
+                placeholder="如 x-session-id（留空=不发送）"
+                value={sessionHeaderKey}
+                onChange={(e) => setSessionHeaderKey(e.target.value)}
+              />
+              <p className="text-muted-foreground text-xs">
+                填写头名后，每次请求都会带上这个 HTTP 头，头值自动填为 <b>当前会话的 session id</b>（chat 会话如
+                conv-12、worker 如 exp3-worker-i87）。用于按 session-id 头做提示缓存 /
+                粘性路由的网关；同一会话多轮稳定、不同会话互不相同。留空则不发送。
+              </p>
+            </div>
+          )}
 
-          <div className="grid gap-2">
-            <Label htmlFor="p-api-key">API Key</Label>
-            <Input
-              id="p-api-key"
-              type="password"
-              placeholder={keyHint ? `已设置（${keyHint}），留空保持不变` : "sk-…"}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-          </div>
+          {!subscription && (
+            <div className="grid gap-2">
+              <Label htmlFor="p-api-key">API Key</Label>
+              <Input
+                id="p-api-key"
+                type="password"
+                placeholder={keyHint ? `已设置（${keyHint}），留空保持不变` : "sk-…"}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+            </div>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="grid gap-2">
@@ -633,33 +704,37 @@ function ProfileSheet({
           </p>
 
           <div className="grid gap-3 rounded-lg border p-3">
-            <div className="flex items-center justify-between gap-4">
-              <div className="grid gap-0.5">
-                <Label htmlFor="p-priority" className="text-sm">
-                  轮询优先级
-                </Label>
-                <p className="text-muted-foreground text-xs">
-                  数字越大越先被选中；激活配置恒为第 1 顺位，与本值无关。相同优先级的配置会轮流打头，天然分摊额度。
-                </p>
-              </div>
-              <Input
-                id="p-priority"
-                type="number"
-                className="w-24 shrink-0"
-                value={priority}
-                onChange={(e) => setPriority(e.target.value)}
-              />
-            </div>
-            <div className="flex items-center justify-between gap-4 border-t pt-3">
-              <div className="grid gap-0.5">
-                <Label className="text-sm">不参与轮询</Label>
-                <p className="text-muted-foreground text-xs">
-                  开启后不会被当作故障转移目标（仍可被 Agent / 任务显式指定使用）。 适合「只给某个 Agent
-                  专用、不希望别人失败时烧掉」的昂贵配置。
-                </p>
-              </div>
-              <Switch checked={poolExclude} onCheckedChange={setPoolExclude} aria-label="不参与轮询" />
-            </div>
+            {!subscription && (
+              <>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="grid gap-0.5">
+                    <Label htmlFor="p-priority" className="text-sm">
+                      轮询优先级
+                    </Label>
+                    <p className="text-muted-foreground text-xs">
+                      数字越大越先被选中；激活配置恒为第 1 顺位，与本值无关。相同优先级的配置会轮流打头，天然分摊额度。
+                    </p>
+                  </div>
+                  <Input
+                    id="p-priority"
+                    type="number"
+                    className="w-24 shrink-0"
+                    value={priority}
+                    onChange={(e) => setPriority(e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-4 border-t pt-3">
+                  <div className="grid gap-0.5">
+                    <Label className="text-sm">不参与轮询</Label>
+                    <p className="text-muted-foreground text-xs">
+                      开启后不会被当作故障转移目标（仍可被 Agent / 任务显式指定使用）。 适合「只给某个 Agent
+                      专用、不希望别人失败时烧掉」的昂贵配置。
+                    </p>
+                  </div>
+                  <Switch checked={poolExclude} onCheckedChange={setPoolExclude} aria-label="不参与轮询" />
+                </div>
+              </>
+            )}
             <div className="flex items-center justify-between gap-4 border-t pt-3">
               <div className="grid gap-0.5">
                 <Label className="text-sm">流式输出 · streaming</Label>
@@ -719,56 +794,62 @@ function ProfileSheet({
             </div>
           </div>
 
-          <div className="grid gap-3 rounded-lg border p-3">
-            <div className="flex items-center justify-between gap-4">
-              <div className="grid gap-0.5">
-                <Label className="text-sm">思考开关 · thinking.type</Label>
-                <p className="text-muted-foreground text-xs">
-                  控制是否发送 thinking 字段。不发送=不带该字段（兼容 MiniMax 等不支持 的模型）；关闭=发
-                  disabled；开启=发 enabled。与下面的强度互相独立。
-                </p>
+          {!subscription && (
+            <div className="grid gap-3 rounded-lg border p-3">
+              <div className="flex items-center justify-between gap-4">
+                <div className="grid gap-0.5">
+                  <Label className="text-sm">思考开关 · thinking.type</Label>
+                  <p className="text-muted-foreground text-xs">
+                    控制是否发送 thinking 字段。不发送=不带该字段（兼容 MiniMax 等不支持 的模型）；关闭=发
+                    disabled；开启=发 enabled。与下面的强度互相独立。
+                  </p>
+                </div>
+                <Select value={thinkingType} onValueChange={setThinkingType}>
+                  <SelectTrigger className="w-32 shrink-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {THINKING_TYPES.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-              <Select value={thinkingType} onValueChange={setThinkingType}>
-                <SelectTrigger className="w-32 shrink-0">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {THINKING_TYPES.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>
-                      {o.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center justify-between gap-4 border-t pt-3">
-              <div className="grid gap-0.5">
-                <Label className="text-sm">思考强度 · reasoning_effort</Label>
-                <p className="text-muted-foreground text-xs">
-                  独立的强度档位（OpenAI reasoning_effort / Anthropic output_config.effort）。 有些接口没有 thinking
-                  字段、只靠强度即可激活思考，故可单独设置、不发送思考开关。
-                </p>
+              <div className="flex items-center justify-between gap-4 border-t pt-3">
+                <div className="grid gap-0.5">
+                  <Label className="text-sm">思考强度 · reasoning_effort</Label>
+                  <p className="text-muted-foreground text-xs">
+                    独立的强度档位（OpenAI reasoning_effort / Anthropic output_config.effort）。 有些接口没有 thinking
+                    字段、只靠强度即可激活思考，故可单独设置、不发送思考开关。
+                  </p>
+                </div>
+                <Select value={effort} onValueChange={setEffort}>
+                  <SelectTrigger className="w-32 shrink-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {EFFORT_LEVELS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-              <Select value={effort} onValueChange={setEffort}>
-                <SelectTrigger className="w-32 shrink-0">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {EFFORT_LEVELS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>
-                      {o.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             </div>
-          </div>
+          )}
 
           <ProfileRetryFields value={retry} onChange={setRetry} />
         </div>
 
         <div className="flex gap-2 border-t px-4 py-3">
-          <Button variant="outline" onClick={testConnection} disabled={testing}>
+          <Button
+            variant="outline"
+            onClick={testConnection}
+            disabled={testing || (subscription && !subscriptionConnected)}
+          >
             {testing ? <Loader2Icon className="animate-spin" /> : <PlugZapIcon />}
             {testing ? "测试中…" : "测试连接"}
           </Button>
@@ -787,6 +868,8 @@ function ProfileSheet({
 
 export default function LLMPage() {
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
+  const [xaiStatus, setXaiStatus] = React.useState<XAIOAuthStatus | null>(null);
+  const loadGeneration = React.useRef(0);
   const [pool, setPool] = React.useState<LLMPoolStatus | null>(null);
   const [poolOpen, setPoolOpen] = React.useState(false);
   // 抽屉的开关和内容分开存：关闭时 editing 保持不变，否则关闭动画期间标题会从
@@ -807,12 +890,15 @@ export default function LLMPage() {
   }, []);
 
   const load = React.useCallback(async () => {
-    try {
-      setProfiles(await api.llmProfiles());
-    } catch {
-      /* ignore */
-    }
-    await loadPool();
+    const currentGeneration = ++loadGeneration.current;
+    const [loadedProfiles, authStatus] = await Promise.all([
+      api.llmProfiles().catch(() => null),
+      api.xaiOAuthStatus().catch(() => null),
+      loadPool(),
+    ]);
+    if (loadGeneration.current !== currentGeneration) return;
+    if (loadedProfiles) setProfiles(loadedProfiles);
+    setXaiStatus(authStatus);
   }, [loadPool]);
 
   React.useEffect(() => {
@@ -885,7 +971,7 @@ export default function LLMPage() {
         <TabsContent value="profiles" className="mt-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {profiles.map((p) => {
-              const h = healthOf(p, health.get(p.id));
+              const h = healthOf(p, health.get(p.id), xaiStatus);
               return (
                 // biome-ignore lint/a11y/useSemanticElements: 卡片内含自己的操作按钮，用原生 <button> 会造成按钮嵌套（非法 HTML）
                 <Card
@@ -916,7 +1002,7 @@ export default function LLMPage() {
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="truncate font-medium text-sm">{p.name}</span>
                           <Badge variant="outline" className="uppercase">
-                            {p.format}
+                            {p.format === "xai-oauth" ? "Grok 订阅" : p.format}
                           </Badge>
                           <Badge variant="outline" className={cn("ml-auto", h.cls)} title={h.hint}>
                             {h.label}
@@ -927,7 +1013,7 @@ export default function LLMPage() {
                     </div>
 
                     <div className="flex flex-wrap gap-x-3 gap-y-0.5 pl-6 text-muted-foreground text-xs">
-                      {p.api_key_hint && <span>{p.api_key_hint}</span>}
+                      {p.format !== "xai-oauth" && p.api_key_hint && <span>{p.api_key_hint}</span>}
                       <span>
                         {p.rate_per_second}/s · {p.rate_per_minute}/min
                       </span>
@@ -946,7 +1032,10 @@ export default function LLMPage() {
                         size="sm"
                         variant="outline"
                         className="flex-1"
-                        disabled={p.is_default}
+                        disabled={
+                          p.is_default ||
+                          (p.format === "xai-oauth" && (!xaiStatus?.connected || xaiStatus.reauth_required))
+                        }
                         onClick={(e) => {
                           e.stopPropagation();
                           void activate(p.id, p.name);
@@ -983,7 +1072,14 @@ export default function LLMPage() {
         </TabsContent>
       </Tabs>
 
-      <ProfileSheet profile={editing} open={editOpen} onOpenChange={setEditOpen} onSaved={() => void load()} />
+      <ProfileSheet
+        profile={editing}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        onSaved={() => void load()}
+        xaiStatus={xaiStatus}
+        onAuthRefresh={load}
+      />
       <PoolSheet open={poolOpen} onOpenChange={setPoolOpen} pool={pool} onReload={loadPool} />
     </div>
   );

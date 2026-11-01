@@ -86,10 +86,11 @@ func isQuotaExhaustedError(err error) bool {
 }
 
 type taskLLMSelection struct {
-	task      *Task
-	profileID int64
-	revision  int64
-	provider  llm.Provider
+	task         *Task
+	profileID    int64
+	revision     int64
+	provider     llm.Provider
+	subscription bool // never advance this selection into a paid fallback
 	// retry 是这次选中的配置解析出来的重试参数(profile 覆盖 → 全局策略 → 内置默认)。
 	// 同 provider 安全窗口重试按它走,所以换了 profile 就换一套重试节奏。
 	retry agent.RetryConfig
@@ -123,8 +124,10 @@ func (r *taskLLMRuntime) current() (taskLLMSelection, error) {
 	t, _ := r.s.m.Task(r.taskID)
 	sel := taskLLMSelection{task: t, revision: pt.LLMChainRevision}
 	if prov, cfg, ok := r.s.agentBindingProvider(r.agentKey); ok {
-		sel.provider, sel.retry = prov, cfg.Retry
+		sel.provider, sel.retry, sel.subscription = prov, cfg.Retry, cfg.IsSubscription()
 		return sel, nil
+	} else if cfg.IsSubscription() {
+		return sel, fmt.Errorf("Grok subscription login required for bound agent %s", r.agentKey)
 	}
 	if len(pt.LLMProfileIDs) > 0 {
 		if pt.ActiveLLMProfileID == nil {
@@ -135,14 +138,14 @@ func (r *taskLLMRuntime) current() (taskLLMSelection, error) {
 		if !ok {
 			return sel, fmt.Errorf("LLM profile #%d is missing or invalid", sel.profileID)
 		}
-		sel.provider, sel.retry = prov, cfg.Retry
+		sel.provider, sel.retry, sel.subscription = prov, cfg.Retry, cfg.IsSubscription()
 		return sel, nil
 	}
 	prov, cfg, ok := r.s.globalProvider()
 	if !ok {
 		return sel, fmt.Errorf("task %s has no available fallback LLM provider", r.taskID)
 	}
-	sel.provider, sel.retry = prov, cfg.Retry
+	sel.provider, sel.retry, sel.subscription = prov, cfg.Retry, cfg.IsSubscription()
 	return sel, nil
 }
 
@@ -162,6 +165,8 @@ func (r *taskLLMRuntime) activeCfg() (agent.Config, bool) {
 	}
 	if _, cfg, ok := r.s.agentBindingProvider(r.agentKey); ok {
 		return cfg, true
+	} else if cfg.IsSubscription() {
+		return cfg, false
 	}
 	if len(pt.LLMProfileIDs) > 0 && pt.ActiveLLMProfileID != nil {
 		if _, cfg, ok := r.s.providerForProfile(*pt.ActiveLLMProfileID); ok {
@@ -267,7 +272,7 @@ func completeTaskLLM(ctx context.Context, taskID string, req llm.CompletionReque
 			return msg, sr, usage, nil
 		}
 		// profileID=0: 显式链已被清空;非额度错误:透传。二者都不改任务 failover 状态。
-		if selection.profileID == 0 || !isQuotaExhaustedError(callErr) {
+		if selection.subscription || selection.profileID == 0 || !isQuotaExhaustedError(callErr) {
 			return llm.Message{}, "", llm.Usage{}, callErr
 		}
 		transition, markErr := hooks.exhaust(selection, callErr)
@@ -348,7 +353,7 @@ func streamTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest
 			// profileID=0 means the explicit chain was cleared while this stable task
 			// bundle was still in use. Agent/global fallback errors follow the legacy
 			// behavior and never mutate task failover state.
-			if selection.profileID == 0 || !isQuotaExhaustedError(streamErr) {
+			if selection.subscription || selection.profileID == 0 || !isQuotaExhaustedError(streamErr) {
 				for _, buffered := range pending {
 					if !yield(buffered, nil) {
 						return
@@ -498,7 +503,7 @@ func (s *Server) agentBindingProvider(agentKey string) (llm.Provider, agent.Conf
 	}
 	prov, cfg, ok := s.providerForProfile(*id)
 	if !ok {
-		return nil, agent.Config{}, false
+		return nil, cfg, false
 	}
 	return s.poolForBinding(*id, prov, cfg), cfg, true
 }
@@ -533,8 +538,10 @@ func (s *Server) taskRuntimeAvailable(t *Task, agentKeys ...string) bool {
 		_, _, unboundReady = s.globalProvider()
 	}
 	for _, key := range agentKeys {
-		if _, _, ok := s.agentBindingProvider(key); ok {
+		if _, cfg, ok := s.agentBindingProvider(key); ok {
 			continue
+		} else if cfg.IsSubscription() {
+			return false
 		}
 		if !unboundReady {
 			return false
@@ -599,7 +606,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	main.SetKillWork(func(intentID int64) error {
 		return s.engine.KillWorkAs(intentID, agent.AbortKilledByMainagent)
 	}) // kill_work：人立即终止运行中 work(killed_by_mainagent)
-	main.SetGuard(s.agentGuard())         // 审批门:mainagent 的工具调用同样过 PreToolUse 拦截
+	main.SetGuard(s.agentGuard()) // 审批门:mainagent 的工具调用同样过 PreToolUse 拦截
 	bundle := &taskAgentBundle{
 		runtime: goalRuntime, plannerRuntime: plannerRuntime, workerRuntime: workerRuntime,
 		mainRuntime: mainRuntime, pl: pl, wk: wk, main: main,

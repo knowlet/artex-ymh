@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/llmrec"
+	"github.com/Autumn-27/artex/xaioauth"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/compaction"
 	"github.com/Autumn-27/norma/llm"
@@ -34,6 +35,10 @@ type Config struct {
 	BaseURL string
 	APIKey  string
 	Model   string
+	// OAuth resolves the server-wide xAI subscription session for each request.
+	// It never contributes a token to configuration JSON or API-key persistence.
+	OAuth        *xaioauth.Manager
+	subscription bool
 	// Proxy routes all LLM requests through the given proxy URL (http/https/socks5,
 	// optionally with user:pass@ credentials). Empty means direct — it does NOT
 	// fall back to the standard *_PROXY environment variables.
@@ -143,7 +148,7 @@ func compactionConfig(windowTokens int) *compaction.Config {
 //	ARTEX_LLM_PROXY    = proxy URL        (optional; http/https/socks5)
 //	ANTHROPIC_API_KEY / OPENAI_API_KEY         = credentials
 func FromEnv() (Config, bool) {
-	prov := os.Getenv("ARTEX_LLM_PROVIDER")
+	prov := strings.TrimSpace(os.Getenv("ARTEX_LLM_PROVIDER"))
 	anthKey := os.Getenv("ANTHROPIC_API_KEY")
 	oaiKey := os.Getenv("OPENAI_API_KEY")
 
@@ -164,6 +169,12 @@ func FromEnv() (Config, bool) {
 		Proxy:   strings.TrimSpace(os.Getenv("ARTEX_LLM_PROXY")),
 		// 默认流式;ARTEX_LLM_STREAM=false/0/off 显式关闭走非流式。
 		Stream: !isFalsy(os.Getenv("ARTEX_LLM_STREAM")),
+	}
+	if prov == xaioauth.Provider {
+		c = ConfigFrom(prov, c.Model, c.BaseURL, "", c.Proxy)
+		c.Stream = !isFalsy(os.Getenv("ARTEX_LLM_STREAM"))
+		// The server attaches its private credential store before construction.
+		return c, true
 	}
 	switch prov {
 	case "openai":
@@ -204,6 +215,17 @@ func ConfigFrom(provider, model, baseURL, apiKey, proxy string) Config {
 		Stream:  true, // 默认流式;调用方按 profile 覆盖
 	}
 	switch strings.TrimSpace(provider) {
+	case xaioauth.Provider:
+		c.subscription = true
+		c.Format = llm.FormatOpenAIResponses
+		c.APIKey = "" // a subscription profile must never reuse a paid API key
+		c.BaseURL = strings.TrimRight(strings.TrimSuffix(c.BaseURL, "/responses"), "/")
+		if c.BaseURL == "" {
+			c.BaseURL = xaioauth.APIBaseURL
+		}
+		if c.Model == "" {
+			c.Model = xaioauth.DefaultModel
+		}
 	case "openai":
 		c.Format = llm.FormatOpenAI
 		// provider appends "/chat/completions"; tolerate a full endpoint URL.
@@ -241,6 +263,9 @@ func isFalsy(s string) bool {
 
 // Provider returns the short provider name ("anthropic"/"openai").
 func (c Config) Provider() string {
+	if c.IsSubscription() {
+		return xaioauth.Provider
+	}
 	switch c.Format {
 	case llm.FormatOpenAI:
 		return "openai"
@@ -250,10 +275,36 @@ func (c Config) Provider() string {
 	return "anthropic"
 }
 
+// IsSubscription distinguishes OAuth billing/authentication from its wire format.
+func (c Config) IsSubscription() bool { return c.subscription }
+
+// HasCredentials performs only a local status check; refresh happens at request time.
+func (c Config) HasCredentials() bool {
+	if !c.IsSubscription() {
+		return c.APIKey != ""
+	}
+	if c.OAuth == nil {
+		return false
+	}
+	status, err := c.OAuth.Status()
+	return err == nil && status.Connected && !status.ReauthRequired
+}
+
 // NewProvider builds an llm.Provider from the config. When a rate is set, the
 // limiter lives on the single provider instance — so planner + all workers +
 // main agent (which share this provider) are bounded by one shared rate limit.
 func (c Config) NewProvider() (llm.Provider, error) {
+	if c.IsSubscription() {
+		if c.BaseURL != xaioauth.APIBaseURL {
+			return nil, fmt.Errorf("Grok subscription requires %s", xaioauth.APIBaseURL)
+		}
+		if c.SessionHeaderKey != "" {
+			return nil, fmt.Errorf("Grok subscription does not support a custom session header")
+		}
+		if !c.HasCredentials() {
+			return nil, fmt.Errorf("Grok subscription is not connected; sign in with xAI OAuth")
+		}
+	}
 	client, err := quotaAwareHTTPClient(c.Proxy, c.SessionHeaderKey)
 	if err != nil {
 		return nil, err
@@ -264,6 +315,17 @@ func (c Config) NewProvider() (llm.Provider, error) {
 		APIKey:     c.APIKey,
 		Model:      c.Model,
 		HTTPClient: client,
+	}
+	if c.IsSubscription() {
+		// Prevent Norma's empty-key environment fallback. The placeholder is
+		// replaced after checking the exact official request origin.
+		lc.APIKey = "oauth-managed"
+		// Capture only the final, sanitized response. Wrapping capture inside
+		// OAuth would record raw auth-error bodies while refreshing a rejected token.
+		captureTransport := client.Transport.(quotaAwareTransport)
+		captureTransport.base = c.OAuth.Transport(captureTransport.base)
+		client.Transport = captureTransport
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	}
 	// 思考开关与强度两个字段各自透传(空 = 该字段不发送)。二者解耦:
 	// 可只发 thinking.type、只发 effort、都发、或都不发。

@@ -1000,10 +1000,30 @@ export interface NotificationDelivery {
 }
 
 // ---- LLM config ----
+export interface XAIOAuthStatus {
+  connected: boolean;
+  expires_at?: string;
+  reauth_required: boolean;
+}
+
+export interface XAIOAuthLogin {
+  flow_id: string;
+  user_code: string;
+  verification_uri: string;
+  verification_uri_complete?: string;
+  expires_at: string;
+  interval: number;
+}
+
+export interface XAIOAuthLoginState {
+  state: "pending" | "complete" | "error" | "cancelled" | "expired";
+  error?: string;
+}
+
 export interface LLMProfile {
   id: string;
   name: string;
-  format: "openai" | "anthropic" | "openai-responses";
+  format: "openai" | "anthropic" | "openai-responses" | "xai-oauth";
   base_url?: string;
   proxy?: string;
   model: string;
