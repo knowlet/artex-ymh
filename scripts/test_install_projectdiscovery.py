@@ -229,7 +229,8 @@ class InstallerTests(unittest.TestCase):
         lock = Path(self.tmp.name) / "lock.json"
         bundle.write_bytes(data)
         lock.write_text(json.dumps(lock_for(data)))
-        output = mock.Mock()
+        # argparse's color detection probes fileno()/isatty() on Python 3.14+.
+        output = mock.Mock(wraps=io.StringIO())
         output.write.side_effect = BrokenPipeError("fixture closed stdout")
         errors = io.StringIO()
         with mock.patch.object(installer.sys, "stdout", output), mock.patch.object(installer.sys, "stderr", errors):
@@ -246,7 +247,7 @@ class InstallerTests(unittest.TestCase):
         lock = Path(self.tmp.name) / "lock.json"
         bundle.write_bytes(data)
         lock.write_text(json.dumps(lock_for(data)))
-        output, errors = mock.Mock(), mock.Mock()
+        output, errors = mock.Mock(wraps=io.StringIO()), mock.Mock(wraps=io.StringIO())
         output.write.side_effect = BrokenPipeError("fixture closed stdout")
         errors.write.side_effect = BrokenPipeError("fixture closed stderr")
         with mock.patch.object(installer.sys, "stdout", output), mock.patch.object(installer.sys, "stderr", errors):
