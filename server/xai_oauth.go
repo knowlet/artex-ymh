@@ -66,19 +66,91 @@ func (s *Server) configureSubscription(cfg *agent.Config) {
 	}
 }
 
-// oauthPrivatePath shares the already-validated JWT key directory. The extra
-// private subdirectory does not tighten permissions on the installation root.
-func oauthPrivatePath(keyDir string) string {
+// oauthPrivatePath validates the credential directory itself, not just the JWT
+// key directory. For example keyDir=/app with dataDir=/app/xai-oauth is safe for
+// /app/jwt.key but would put the OAuth session inside the browsable workspace.
+func oauthPrivatePath(keyDir, dataDir string) (string, error) {
 	if configured := strings.TrimSpace(os.Getenv("ARTEX_KEY_DIR")); configured != "" {
 		keyDir = configured
 	}
-	if resolved, err := filepath.EvalSymlinks(keyDir); err == nil {
-		keyDir = resolved
+	keyDir, err := filepath.Abs(keyDir)
+	if err != nil {
+		return "", err
 	}
-	if absolute, err := filepath.Abs(keyDir); err == nil {
-		keyDir = absolute
+	keyDir, err = filepath.EvalSymlinks(keyDir)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve Grok private key directory: %w", err)
 	}
-	return filepath.Join(keyDir, "xai-oauth", "session.json")
+	privateDir := filepath.Join(keyDir, "xai-oauth")
+	if info, err := os.Lstat(privateDir); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("Grok credential directory must be a real directory")
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	workspace, err := resolveOAuthStoragePath(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve Grok workspace boundary: %w", err)
+	}
+	resolvedPrivate, err := resolveOAuthStoragePath(privateDir)
+	if err != nil {
+		return "", err
+	}
+	if rel, err := filepath.Rel(workspace, resolvedPrivate); err != nil {
+		return "", err
+	} else if rel == "." || filepath.IsLocal(rel) {
+		return "", fmt.Errorf("Grok credential directory must be outside the browsable workspace")
+	}
+	return filepath.Join(privateDir, "session.json"), nil
+}
+
+// Resolve existing symlink ancestors even when the final data/private directory
+// has not been created yet. Comparing only lexical paths or ignoring ENOENT from
+// EvalSymlinks would miss aliases such as workspace-link/xai-oauth.
+func resolveOAuthStoragePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	var missing []string
+	for {
+		resolved, err := filepath.EvalSymlinks(abs)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return resolved, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		// A dangling symlink is not a missing directory we can safely project.
+		if info, statErr := os.Lstat(abs); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("cannot resolve dangling Grok storage path")
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return "", statErr
+		}
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(abs))
+		abs = parent
+	}
+}
+
+func (s *Server) initXAIOAuth(keyDir, dataDir string) error {
+	// Validate before constructing a manager, including for an existing session.
+	// An unsafe path disables this provider without stopping API-key providers.
+	s.xaiOAuth, s.xaiOAuthPath = nil, ""
+	path, err := oauthPrivatePath(keyDir, dataDir)
+	if err != nil {
+		return err
+	}
+	s.xaiOAuthPath = path
+	s.xaiOAuth = xaioauth.NewManager(path)
+	return nil
 }
 
 func ensureOAuthDirectory(path string) error {

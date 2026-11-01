@@ -169,8 +169,9 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		profChatAgents: map[int64]*agent.ChatAgent{},
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
 		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1)}
-	s.xaiOAuthPath = oauthPrivatePath(keyDir)
-	s.xaiOAuth = xaioauth.NewManager(s.xaiOAuthPath)
+	if err := s.initXAIOAuth(keyDir, dataDir); err != nil {
+		log.Printf("[auth] Grok subscription login disabled: %v", err)
+	}
 	s.initSideQuestions()
 	s.initStage(dataDir)        // 受管文件投递暂存(F13);失败降级为关闭,不影响启动
 	checkToolsManifest(dataDir) // 期 6 外部工具清单自检(缺失常态,只打汇总日志)

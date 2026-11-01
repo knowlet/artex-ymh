@@ -120,19 +120,17 @@ func subscriptionStorePath(keyDir, dataDir string, create bool) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("key directory must already exist: %w", err)
 	}
-	dataDir, err = filepath.Abs(dataDir)
+	dataDir, err = resolveAuthStoragePath(dataDir)
 	if err != nil {
 		return "", err
-	}
-	if resolved, resolveErr := filepath.EvalSymlinks(dataDir); resolveErr == nil {
-		dataDir = resolved
-	} else if !os.IsNotExist(resolveErr) {
-		return "", resolveErr
 	}
 	if rel, err := filepath.Rel(dataDir, keyDir); err == nil && (rel == "." || filepath.IsLocal(rel)) {
 		return "", fmt.Errorf("key directory must be outside the browsable data directory")
 	}
 	dir := filepath.Join(keyDir, "xai-oauth")
+	if rel, err := filepath.Rel(dataDir, dir); err == nil && (rel == "." || filepath.IsLocal(rel)) {
+		return "", fmt.Errorf("OAuth credential directory must be outside the browsable data directory")
+	}
 	if create {
 		if err := os.Mkdir(dir, 0o700); err != nil && !os.IsExist(err) {
 			return "", err
@@ -146,4 +144,40 @@ func subscriptionStorePath(keyDir, dataDir string, create bool) (string, error) 
 		return "", err
 	}
 	return filepath.Join(dir, "session.json"), nil
+}
+
+// Resolve existing symlink ancestors before projecting missing directories.
+// A custom --data alias/xai-oauth may not exist before login, but alias can
+// already point at the key directory. Ignoring EvalSymlinks' ENOENT would then
+// create credentials in the workspace before the auth factory is called.
+func resolveAuthStoragePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	var missing []string
+	for {
+		resolved, err := filepath.EvalSymlinks(abs)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return resolved, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		// A dangling symlink is not an absent directory we can safely project.
+		if info, statErr := os.Lstat(abs); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("cannot resolve dangling OAuth storage path")
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return "", statErr
+		}
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(abs))
+		abs = parent
+	}
 }

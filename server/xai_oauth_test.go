@@ -240,7 +240,10 @@ func TestXAIOAuthFailedAuthorizationIsVisible(t *testing.T) {
 func TestXAIOAuthPrivateDirectoryBoundary(t *testing.T) {
 	parent := t.TempDir()
 	t.Setenv("ARTEX_KEY_DIR", parent)
-	path := oauthPrivatePath("unused")
+	path, err := oauthPrivatePath("unused", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if path != filepath.Join(parent, "xai-oauth", "session.json") {
 		t.Fatalf("path=%s", path)
 	}
@@ -263,6 +266,104 @@ func TestXAIOAuthPrivateDirectoryBoundary(t *testing.T) {
 		if err := ensureOAuthDirectory(filepath.Join(symlinkParent, "xai-oauth", "session.json")); err == nil {
 			t.Fatal("symlink credential directory accepted")
 		}
+	}
+}
+
+func TestXAIOAuthActualStoreMustBeOutsideWorkspace(t *testing.T) {
+	t.Setenv("ARTEX_KEY_DIR", "")
+	for _, tc := range []struct {
+		name     string
+		existing bool
+		alias    bool
+	}{
+		{name: "exact_directory_not_created"},
+		{name: "exact_directory_with_saved_session", existing: true},
+		{name: "workspace_symlink_with_saved_session", existing: true, alias: true},
+		{name: "workspace_symlink_ancestor_before_creation", alias: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keyDir := t.TempDir()
+			privateDir := filepath.Join(keyDir, "xai-oauth")
+			if tc.existing {
+				if err := os.Mkdir(privateDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				body, _ := json.Marshal(map[string]any{
+					"version": 1, "access_token": "fixture-overlap-access", "refresh_token": "fixture-overlap-refresh",
+					"expires_at": time.Now().Add(time.Hour),
+				})
+				if err := os.WriteFile(filepath.Join(privateDir, "session.json"), body, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dataDir := privateDir
+			if tc.alias {
+				alias := filepath.Join(t.TempDir(), "workspace-alias")
+				target := keyDir
+				if tc.existing {
+					target = privateDir
+				}
+				if err := os.Symlink(target, alias); err != nil {
+					if runtime.GOOS == "windows" {
+						t.Skipf("symlink unavailable: %v", err)
+					}
+					t.Fatal(err)
+				}
+				dataDir = alias
+				if !tc.existing {
+					dataDir = filepath.Join(alias, "xai-oauth")
+				}
+			}
+			s := &Server{}
+			if err := s.initXAIOAuth(keyDir, dataDir); err == nil {
+				t.Error("browsable OAuth store was accepted")
+			}
+			if s.xaiOAuth != nil || s.xaiOAuthPath != "" {
+				t.Fatal("unsafe store still created an OAuth manager")
+			}
+			cfg := agent.ConfigFrom(xaioauth.Provider, "", "", "", "")
+			s.configureSubscription(&cfg)
+			if cfg.HasCredentials() {
+				t.Fatal("existing browsable subscription credentials were loaded")
+			}
+			if _, err := os.Lstat(filepath.Join(privateDir, "session.json.lock")); !os.IsNotExist(err) {
+				t.Fatalf("unsafe credential store was touched: %v", err)
+			}
+			if !tc.existing {
+				if _, err := os.Lstat(privateDir); !os.IsNotExist(err) {
+					t.Fatal("validation created an unsafe credential directory")
+				}
+			}
+		})
+	}
+}
+
+func TestXAIOAuthSafeSiblingStoreAndKeyAlias(t *testing.T) {
+	t.Setenv("ARTEX_KEY_DIR", "")
+	keyDir := t.TempDir()
+	// The matching name prefix is not containment: this remains a safe sibling.
+	dataDir := filepath.Join(keyDir, "xai-oauth-public", "data")
+	path, err := oauthPrivatePath(keyDir, dataDir)
+	if err != nil || path != filepath.Join(keyDir, "xai-oauth", "session.json") {
+		t.Fatalf("safe sibling rejected: %q %v", path, err)
+	}
+	alias := filepath.Join(t.TempDir(), "key-alias")
+	if err := os.Symlink(keyDir, alias); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	t.Setenv("ARTEX_KEY_DIR", alias)
+	if got, err := oauthPrivatePath("unused", dataDir); err != nil || got != path {
+		t.Fatalf("key alias resolved incorrectly: %q %v", got, err)
+	}
+	s := &Server{}
+	if err := s.initXAIOAuth("unused", dataDir); err != nil || s.xaiOAuth == nil {
+		t.Fatalf("safe manager initialization failed: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Dir(path)); !os.IsNotExist(err) {
+		t.Fatal("initialization unexpectedly created the private directory")
 	}
 }
 
