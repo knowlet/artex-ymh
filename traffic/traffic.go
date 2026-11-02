@@ -2207,8 +2207,19 @@ func (t *Traffic) collectLegacyBlobRefs(refs map[string]struct{}, strict bool) e
 			}
 			return nil // skip unreadable entries
 		}
+		// Store-owned top-level trees never contain legacy reference files.
+		// Do not follow or reject their symlink representation during cleanup.
+		if filepath.Dir(p) == t.dir && (d.Name() == "_blobs" || d.Name() == "_index" || d.Name() == "_ca") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if strict && d.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("legacy reference path is a symlink: %s", p)
+		}
+		if strict && (d.Name() == "request.http" || d.Name() == "response.http") && !d.Type().IsRegular() {
+			return fmt.Errorf("legacy reference entry is not a regular file: %s", p)
 		}
 		if d.IsDir() {
 			// _blobs/_index/_ca never contain references; skip their subtrees.

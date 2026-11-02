@@ -168,10 +168,19 @@ there is no global sweep, and no promise of power-loss/filesystem transactionali
 The existing GC keeps its best-effort legacy-reader behavior; rollback cleanup
 uses a strict variant so unreadable legacy evidence cannot justify deletion.
 Tests cover late reference failure, an earlier source-loop failure, preserved
-preexisting orphans and live/legacy bodies, and query/identity/legacy-read
+preexisting orphans and live/legacy bodies, and query/identity/legacy-path
 uncertainty with explicit errors and retained bytes.
 A deferred SQLite foreign-key fixture also forces Commit failure: the ambiguous
 rollback is reported and the new blob remains intact. Panic transaction release
 was statically reviewed (retErr=nil still rolls back an open transaction); no
 runtime panic after Begin was injected. Strict legacy scanning rejects symlinks
 rather than following paths outside the store, retaining uncertain new files.
+
+Cubic follow-up tightens strict legacy collection: only regular request/response
+files are read, so FIFO/socket/device entries fail closed instead of blocking
+the writer mutex. The Linux FIFO fixture executes and returns promptly; Windows
+does not support this fixture. Store-owned top-level _blobs/_index/_ca entries
+are excluded before symlink checks and are never traversed. Ordinary legacy
+symlinks remain errors. The former read-failure fixture is accurately named as
+a symlink rejection; the generic read-error branch is statically reviewed, not
+claimed as a separately induced runtime failure.

@@ -3,6 +3,7 @@ package traffic
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -44,7 +45,7 @@ func TestArchiveRollbackCleansOnlyNewBlobs(t *testing.T) {
 }
 
 func TestArchiveCleanupProtectsLiveAndUncertainBlobs(t *testing.T) {
-	for _, kind := range []string{"live_ref", "legacy_ref", "changed_identity", "query_failure", "legacy_read_failure", "legacy_directory_symlink"} {
+	for _, kind := range []string{"live_ref", "legacy_ref", "changed_identity", "query_failure", "legacy_file_symlink", "legacy_directory_symlink", "legacy_fifo"} {
 		t.Run(kind, func(t *testing.T) {
 			tr, root := openTraffic(t)
 			body := []byte("retained body")
@@ -69,7 +70,7 @@ func TestArchiveCleanupProtectsLiveAndUncertainBlobs(t *testing.T) {
 				if _, err := tr.DB().Exec("INSERT INTO exchanges(id,path) VALUES(?,?)", "legacy", "legacy"); err != nil {
 					t.Fatal(err)
 				}
-			case "legacy_read_failure", "legacy_directory_symlink":
+			case "legacy_file_symlink", "legacy_directory_symlink":
 				dir := filepath.Join(root, "legacy")
 				if err := os.MkdirAll(dir, 0700); err != nil {
 					t.Fatal(err)
@@ -93,6 +94,24 @@ func TestArchiveCleanupProtectsLiveAndUncertainBlobs(t *testing.T) {
 				if _, err := tr.DB().Exec("INSERT INTO exchanges(id,path) VALUES(?,?)", "legacy", legacyPath); err != nil {
 					t.Fatal(err)
 				}
+			case "legacy_fifo":
+				if runtime.GOOS == "windows" {
+					t.Skip("POSIX FIFO fixture")
+				}
+				mkfifo, err := exec.LookPath("mkfifo")
+				if err != nil {
+					t.Fatal(err)
+				}
+				dir := filepath.Join(root, "legacy")
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if out, err := exec.Command(mkfifo, filepath.Join(dir, "response.http")).CombinedOutput(); err != nil {
+					t.Fatalf("FIFO fixture: %s %v", out, err)
+				}
+				if _, err := tr.DB().Exec("INSERT INTO exchanges(id,path) VALUES(?,?)", "legacy", "legacy"); err != nil {
+					t.Fatal(err)
+				}
 			case "changed_identity":
 				writeArchiveReferenceFile(t, path+".other", body)
 				if err := os.Rename(path+".other", path); err != nil {
@@ -106,7 +125,7 @@ func TestArchiveCleanupProtectsLiveAndUncertainBlobs(t *testing.T) {
 			tr.wmu.Lock()
 			err = tr.cleanupArchiveBlobs(map[string]os.FileInfo{hash: info})
 			tr.wmu.Unlock()
-			if kind == "query_failure" || kind == "changed_identity" || kind == "legacy_read_failure" || kind == "legacy_directory_symlink" {
+			if kind == "query_failure" || kind == "changed_identity" || kind == "legacy_file_symlink" || kind == "legacy_directory_symlink" || kind == "legacy_fifo" {
 				if err == nil || !strings.Contains(err.Error(), "retained") {
 					t.Fatalf("uncertainty not reported: %v", err)
 				}
@@ -141,5 +160,40 @@ func TestArchiveCommitFailureRetainsNewBlob(t *testing.T) {
 	}
 	if got, err := os.ReadFile(archiveReferenceLocalPath(root, hash, "current")); err != nil || string(got) != string(body) {
 		t.Fatalf("uncertain blob lost: %q %v", got, err)
+	}
+}
+
+func TestArchiveCleanupSkipsStoreOwnedSymlink(t *testing.T) {
+	tr, root := openTraffic(t)
+	body := []byte("unreferenced new body")
+	hash := archiveReferenceHash(body)
+	path := archiveReferenceLocalPath(root, hash, "current")
+	writeArchiveReferenceFile(t, path, body)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.DB().Exec("INSERT INTO exchanges(id,path) VALUES(?,?)", "legacy", "legacy"); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "ca")
+	if err := os.Rename(filepath.Join(root, "_ca"), target); err != nil {
+		t.Fatal(err)
+	}
+	err = os.Symlink(target, filepath.Join(root, "_ca"))
+	if runtime.GOOS == "windows" && (errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.Errno(1314)) || errors.Is(err, syscall.Errno(50))) {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr.wmu.Lock()
+	err = tr.cleanupArchiveBlobs(map[string]os.FileInfo{hash: info})
+	tr.wmu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("reserved symlink blocked cleanup: %v", err)
 	}
 }
