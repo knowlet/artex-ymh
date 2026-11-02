@@ -137,7 +137,7 @@ func (t *Traffic) ImportArchive(dir string) (int64, error) {
 
 // The verifier is passed explicitly so concurrency tests can pause a slow read
 // without process-global hooks. Production always uses full SHA-256 verification.
-func (t *Traffic) importArchive(dir string, inspect func(string, string, int64) (os.FileInfo, error)) (int64, error) {
+func (t *Traffic) importArchive(dir string, inspect func(string, string, int64) (os.FileInfo, error)) (importedCount int64, retErr error) {
 	if t == nil {
 		return 0, nil
 	}
@@ -188,8 +188,62 @@ func (t *Traffic) importArchive(dir string, inspect func(string, string, int64) 
 		}
 		verified[hash] = info
 	}
+	// Defer reference errors until a row is selected: existing rows and the
+	// first archive occurrence still win over ignored duplicate payloads.
+	references := make(map[string]archiveReferenceVerification)
+	seenIDs := make(map[string]struct{}, len(snapshot.Exchanges))
+	for _, item := range snapshot.Exchanges {
+		if _, seen := seenIDs[item.ID]; seen {
+			continue
+		}
+		seenIDs[item.ID] = struct{}{}
+		// A read snapshot avoids hashing bodies for already imported rows. If
+		// a concurrent deletion makes this row selectable later, fail closed
+		// below rather than hash while holding the recording mutex.
+		var exists bool
+		if err := t.db.QueryRow("SELECT EXISTS(SELECT 1 FROM exchanges WHERE id=?)", item.ID).Scan(&exists); err != nil {
+			return 0, err
+		}
+		if exists {
+			continue
+		}
+		for _, hash := range []string{item.ReqBlob, item.RespBlob} {
+			if hash == "" {
+				continue
+			}
+			if _, listed := verified[hash]; listed {
+				continue
+			}
+			if _, seen := references[hash]; seen {
+				continue
+			}
+			references[hash] = t.inspectArchiveReference(hash, inspect)
+		}
+	}
 	t.wmu.Lock()
 	defer t.wmu.Unlock()
+	created := make(map[string]os.FileInfo)
+	var tx *sql.Tx
+	defer func() {
+		if retErr == nil {
+			// Also release an open transaction during panic unwinding. After a
+			// successful Commit, Rollback is a harmless ErrTxDone. Do not clean
+			// filesystem state on a panic whose transaction outcome is unknown.
+			if tx != nil {
+				_ = tx.Rollback()
+			}
+			return
+		}
+		if tx != nil {
+			if err := tx.Rollback(); err != nil {
+				// Even ErrTxDone is ambiguous after a failed Commit. Retain files
+				// rather than assuming rollback when transaction state is unknown.
+				retErr = errors.Join(retErr, fmt.Errorf("archive rollback unconfirmed; newly published blobs retained: %w", err))
+				return
+			}
+		}
+		retErr = errors.Join(retErr, t.cleanupArchiveBlobs(created))
+	}()
 	for _, hash := range snapshot.Blobs {
 		if !blobHashRe.MatchString(hash) {
 			return 0, fmt.Errorf("invalid archived traffic blob %q", hash)
@@ -219,16 +273,16 @@ func (t *Traffic) importArchive(dir string, inspect func(string, string, int64) 
 			// Repeated hashes in a manifest may reuse bytes just published under
 			// this same writer lock; those source bytes were verified above.
 			verified[hash], err = os.Lstat(destination)
+			created[hash] = verified[hash]
 			if err != nil {
 				return 0, err
 			}
 		}
 	}
-	tx, err := t.db.Begin()
+	tx, err = t.db.Begin()
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback() //nolint:errcheck
 	var imported int64
 	for _, item := range snapshot.Exchanges {
 		res, err := tx.Exec(`INSERT OR IGNORE INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path)
@@ -240,6 +294,28 @@ VALUES(?,?,?,?,?,?,?,?,?,?,'')`, item.ID, item.TS, item.Host, item.Method, item.
 		n, _ := res.RowsAffected()
 		if n == 0 {
 			continue
+		}
+		for _, ref := range []struct {
+			hash   string
+			length int
+		}{{item.ReqBlob, item.ReqLen}, {item.RespBlob, item.RespLen}} {
+			if ref.hash == "" {
+				continue
+			}
+			info, listed := verified[ref.hash]
+			if !listed {
+				v, prepared := references[ref.hash]
+				if !prepared {
+					return 0, fmt.Errorf("archived exchange %q became selectable after preflight; retry import", item.ID)
+				}
+				if err := t.recheckArchiveReference(ref.hash, v); err != nil {
+					return 0, fmt.Errorf("archived exchange %q: %w", item.ID, err)
+				}
+				info = v.info
+			}
+			if info == nil || info.Size() != int64(ref.length) {
+				return 0, fmt.Errorf("archived exchange %q: blob length does not match archived metadata: %s", item.ID, ref.hash)
+			}
 		}
 		if _, err := tx.Exec(`INSERT INTO exchange_bodies(id,req_head,req_body,req_blob,resp_head,resp_body,resp_blob)
 VALUES(?,?,?,?,?,?,?)`, item.ID, item.ReqHead, item.ReqBody, nullIfEmpty(item.ReqBlob),
@@ -269,6 +345,104 @@ VALUES(?,?,?,?,?,?,?)`, item.ID, item.ReqHead, item.ReqBody, nullIfEmpty(item.Re
 		return imported, err
 	}
 	return imported, nil
+}
+
+// Remove only this import's newly published files after confirmed rollback.
+// Caller holds wmu. Reuse GC's full live-reference semantics, including legacy
+// pointers, but do not sweep pre-existing orphan files or unrelated paths.
+func (t *Traffic) cleanupArchiveBlobs(created map[string]os.FileInfo) error {
+	if len(created) == 0 {
+		return nil
+	}
+	refs := make(map[string]struct{})
+	rows, err := t.db.Query(`SELECT DISTINCT hash FROM blob_refs`)
+	if err != nil {
+		return fmt.Errorf("archive cleanup cannot verify live references; blobs retained: %w", err)
+	}
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			rows.Close()
+			return err
+		}
+		refs[hash] = struct{}{}
+	}
+	err = rows.Err()
+	closeErr := rows.Close()
+	if err != nil || closeErr != nil {
+		return errors.Join(err, closeErr)
+	}
+	if err := t.collectLegacyBlobRefs(refs, true); err != nil {
+		return fmt.Errorf("archive cleanup cannot verify legacy references; blobs retained: %w", err)
+	}
+	var cleanupErr error
+	for hash, before := range created {
+		if _, live := refs[hash]; live {
+			continue
+		}
+		path := filepath.Join(t.dir, "_blobs", "sha256", hash[:2], hash+".bin")
+		after, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			continue
+		}
+		if !sameArchiveBlob(before, after) {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("archive cleanup identity changed; blob retained: %s", hash))
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("archive cleanup failed; blob retained: %w", err))
+		}
+	}
+	return cleanupErr
+}
+
+// A reference is fully hashed outside wmu, then bound to the same selected
+// path and identity under wmu. Errors are retained for selected rows only.
+type archiveReferenceVerification struct {
+	path string
+	info os.FileInfo
+	err  error
+}
+
+func (t *Traffic) inspectArchiveReference(hash string, inspect func(string, string, int64) (os.FileInfo, error)) archiveReferenceVerification {
+	var v archiveReferenceVerification
+	if !blobHashRe.MatchString(hash) {
+		v.err = fmt.Errorf("invalid archived traffic blob reference %q", hash)
+		return v
+	}
+	v.path, v.err = t.blobPath(hash)
+	if v.err != nil {
+		return v
+	}
+	v.info, v.err = os.Lstat(v.path)
+	if v.err != nil {
+		return v
+	}
+	v.info, v.err = inspect(v.path, hash, v.info.Size())
+	return v
+}
+
+// Caller holds wmu; supported writers never edit existing canonical bodies.
+func (t *Traffic) recheckArchiveReference(hash string, v archiveReferenceVerification) error {
+	if v.err != nil {
+		return fmt.Errorf("archive reference was not verified during preflight; retry import after checking local bodies: %w", v.err)
+	}
+	path, err := t.blobPath(hash)
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if path != v.path || !sameArchiveBlob(v.info, info) {
+		return fmt.Errorf("traffic blob reference changed during verification; retry import: %s", hash)
+	}
+	return nil
 }
 
 // An existing filename is not proof of a complete prior restore. Never replace
