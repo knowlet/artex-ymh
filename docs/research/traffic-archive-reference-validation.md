@@ -110,3 +110,26 @@ setup. Its tests and final tests are byte-for-byte identical. Neither Windows
 runtime nor full PostgreSQL/server integration was executed here. The Windows
 symlink fixture only skips explicit unsupported/privilege errors; this Linux
 run skipped nothing.
+
+## Integration after PR #8 squash (2026-11-02)
+
+Base is now `4e171f347c2c28a55205f74fce20dd1661b3074c`. Merge main into
+the follow-on branch without rewriting its history. Unlike the initial design
+above, unlisted references are fully hashed before taking the recording mutex.
+Their selected path and file identity are rechecked under the mutex before any
+selected row commits; concurrent removal, replacement, or legacy-path shadowing
+fails closed and asks the caller to retry. Hash errors remain deferred until a
+row is selected, preserving current-row-wins and first duplicate wins. Repeated
+archive IDs are not scanned again. Existing local rows may still cause unused
+reference preflight work, but never additional hashing under the recording lock.
+No wire format or database schema changes. Added deterministic paused-hash tests
+cover recording, removal, replacement, layout shadowing, and concurrent current
+row insertion for both supported layouts.
+
+Integration verification on assistant-owned Linux/amd64, Go 1.27.2: full traffic
+and race runs each passed 66 top-level tests / 117 including subtests, with no
+failures or skips. Vet, affected-package build and diff whitespace checks passed.
+Concurrent replacement fixtures publish a separate inode by rename; in-place
+mtime fixtures explicitly set a different timestamp. Verification-entry waits
+also detect early return or timeout instead of silently hanging. These are local
+synthetic tests; post-push CI, external review and final rerun are separate gates.

@@ -96,3 +96,41 @@ the destination recheck before publication. A Windows symlink fixture is skipped
 only for explicit privilege/unsupported-filesystem errors; the Linux run skipped
 nothing. Whole-platform PostgreSQL integration, Windows filesystem runtime,
 process-kill/power-loss behavior, and production deployment were not tested here.
+
+## Review follow-up: recording-lock contention (2026-11-02)
+
+External review correctly identified additional capture latency from hashing
+existing destination blobs while holding `Traffic.wmu`. The base already holds
+this mutex across archive source reads, writes and the metadata transaction; that
+pre-existing limitation does not justify adding another full destination read.
+
+The destination verification now runs before acquiring `wmu`. It still checks
+regular-file type, source length and the full SHA-256, and records the verified
+file identity. Under the writer lock, import checks that identity, size, mode and
+modification time again before using those bytes. Metadata is not accepted in
+place of a hash. The existing supported writers create absent canonical blobs
+or remove them; they do not modify existing canonical bodies in place. If GC
+removes a verified body, or another import/capture publishes a different body
+at that path, import fails closed with a retry error rather than hashing again
+under the lock, overwriting evidence or committing exchange rows. A successful
+retry performs full verification again. Hostile external/in-place filesystem
+mutation remains outside the pre-existing single-writer store contract.
+
+This is intentionally not a redesign of archive restoration: source reads,
+new-blob staging and the database transaction retain their previous lock scope.
+It removes the additional destination-hashing delay; it does not promise that
+restoration as a whole is non-blocking or safe against a hung filesystem.
+
+New deterministic concurrency tests pause a real completed destination hash
+before commit and verify live `record()` can persist while verification is
+paused, GC/removal/replacement/modification reject without imported rows,
+concurrent imports preserve current-row-wins, a newly captured blob causes
+safe retry, duplicate hashes work for both fresh and reused blobs, and oversized
+damaged destinations retain the source-length early rejection. Tests use only
+synthetic data in the assistant-owned cloud, with no external targets.
+
+A five-repeat local 64 MiB valid-existing-blob probe (Go 1.27.2, all fixture
+files on the same workspace filesystem) measured waiting for the writer mutex:
+base 48.9–74.5 ms, original PR 92.0–106.8 ms, this follow-up 50.5–69.3 ms.
+Total import time still includes both hashes. These are illustrative warm-cache
+measurements, not a production latency guarantee or a slow-disk simulation.

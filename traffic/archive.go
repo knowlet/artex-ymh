@@ -132,6 +132,12 @@ FROM exchange_bodies WHERE id=?`, item.ID).Scan(&item.ReqHead, &item.ReqBody, &r
 // ImportArchive imports only missing exchange IDs. Current hot rows always win,
 // and repeated restore attempts are safe after a partial external failure.
 func (t *Traffic) ImportArchive(dir string) (int64, error) {
+	return t.importArchive(dir, inspectArchiveBlob)
+}
+
+// The verifier is passed explicitly so concurrency tests can pause a slow read
+// without process-global hooks. Production always uses full SHA-256 verification.
+func (t *Traffic) importArchive(dir string, inspect func(string, string, int64) (os.FileInfo, error)) (int64, error) {
 	if t == nil {
 		return 0, nil
 	}
@@ -149,9 +155,63 @@ func (t *Traffic) ImportArchive(dir string) (int64, error) {
 	if snapshot.Version != 1 {
 		return 0, fmt.Errorf("unsupported traffic archive version %d", snapshot.Version)
 	}
+	// Hash existing destinations before taking the recording mutex. Supported
+	// writers only create or remove canonical blobs, never edit them in place.
+	// Keep the verified identity and recheck it under wmu before committing: GC
+	// or another import/record may have changed the path during this phase.
+	verified := make(map[string]os.FileInfo, len(snapshot.Blobs))
+	for _, hash := range snapshot.Blobs {
+		if !blobHashRe.MatchString(hash) {
+			return 0, fmt.Errorf("invalid archived traffic blob %q", hash)
+		}
+		if _, seen := verified[hash]; seen {
+			continue
+		}
+		destination := filepath.Join(t.dir, "_blobs", "sha256", hash[:2], hash+".bin")
+		_, err := os.Lstat(destination)
+		if os.IsNotExist(err) {
+			verified[hash] = nil
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		// Retain the cheap size rejection before reading a damaged destination.
+		// The source bytes and length are independently verified under wmu below.
+		source, err := os.Stat(filepath.Join(dir, "blobs", hash+".bin"))
+		if err != nil {
+			return 0, err
+		}
+		info, err := inspect(destination, hash, source.Size())
+		if err != nil {
+			return 0, err
+		}
+		verified[hash] = info
+	}
+	// Defer reference errors until a row is selected: existing rows and the
+	// first archive occurrence still win over ignored duplicate payloads.
+	references := make(map[string]archiveReferenceVerification)
+	seenIDs := make(map[string]struct{}, len(snapshot.Exchanges))
+	for _, item := range snapshot.Exchanges {
+		if _, seen := seenIDs[item.ID]; seen {
+			continue
+		}
+		seenIDs[item.ID] = struct{}{}
+		for _, hash := range []string{item.ReqBlob, item.RespBlob} {
+			if hash == "" {
+				continue
+			}
+			if _, listed := verified[hash]; listed {
+				continue
+			}
+			if _, seen := references[hash]; seen {
+				continue
+			}
+			references[hash] = t.inspectArchiveReference(hash, inspect)
+		}
+	}
 	t.wmu.Lock()
 	defer t.wmu.Unlock()
-	verifiedBlobs := make(map[string]struct{}, len(snapshot.Blobs))
 	for _, hash := range snapshot.Blobs {
 		if !blobHashRe.MatchString(hash) {
 			return 0, fmt.Errorf("invalid archived traffic blob %q", hash)
@@ -165,16 +225,26 @@ func (t *Traffic) ImportArchive(dir string) (int64, error) {
 			return 0, fmt.Errorf("traffic blob checksum mismatch: %s", hash)
 		}
 		destination := filepath.Join(t.dir, "_blobs", "sha256", hash[:2], hash+".bin")
-		if _, err := os.Lstat(destination); err == nil {
-			if err := verifyArchiveBlob(destination, hash, int64(len(data))); err != nil {
-				return 0, err
+		if info, err := os.Lstat(destination); err == nil {
+			if !sameArchiveBlob(verified[hash], info) || info.Size() != int64(len(data)) {
+				return 0, fmt.Errorf("traffic blob changed during verification; retry import: %s", hash)
 			}
 		} else if !os.IsNotExist(err) {
 			return 0, err
-		} else if err := writeArchiveBlob(destination, bytes.NewReader(data), hash, int64(len(data))); err != nil {
-			return 0, err
+		} else {
+			if verified[hash] != nil {
+				return 0, fmt.Errorf("traffic blob removed during verification; retry import: %s", hash)
+			}
+			if err := writeArchiveBlob(destination, bytes.NewReader(data), hash, int64(len(data))); err != nil {
+				return 0, err
+			}
+			// Repeated hashes in a manifest may reuse bytes just published under
+			// this same writer lock; those source bytes were verified above.
+			verified[hash], err = os.Lstat(destination)
+			if err != nil {
+				return 0, err
+			}
 		}
-		verifiedBlobs[hash] = struct{}{}
 	}
 	tx, err := t.db.Begin()
 	if err != nil {
@@ -193,11 +263,14 @@ VALUES(?,?,?,?,?,?,?,?,?,?,'')`, item.ID, item.TS, item.Host, item.Method, item.
 		if n == 0 {
 			continue
 		}
-		// Only selected rows need their references resolved: current rows and
-		// earlier occurrences of an ID keep winning over ignored archive data.
 		for _, hash := range []string{item.ReqBlob, item.RespBlob} {
-			if err := t.verifyArchiveReference(hash, verifiedBlobs); err != nil {
-				// The transaction rolls back even rows inserted before this one.
+			if hash == "" {
+				continue
+			}
+			if _, listed := verified[hash]; listed {
+				continue
+			}
+			if err := t.recheckArchiveReference(hash, references[hash]); err != nil {
 				return 0, fmt.Errorf("archived exchange %q: %w", item.ID, err)
 			}
 		}
@@ -231,18 +304,36 @@ VALUES(?,?,?,?,?,?,?)`, item.ID, item.ReqHead, item.ReqBody, nullIfEmpty(item.Re
 	return imported, nil
 }
 
-// An unlisted reference can reuse a valid local body, including the legacy
-// layout, but existence alone is insufficient. The caller holds t.wmu so these
-// verified hashes remain valid against supported in-process writers.
-func (t *Traffic) verifyArchiveReference(hash string, verified map[string]struct{}) error {
-	if hash == "" {
-		return nil
-	}
+// A reference is fully hashed outside wmu, then bound to the same selected
+// path and identity under wmu. Errors are retained for selected rows only.
+type archiveReferenceVerification struct {
+	path string
+	info os.FileInfo
+	err  error
+}
+
+func (t *Traffic) inspectArchiveReference(hash string, inspect func(string, string, int64) (os.FileInfo, error)) archiveReferenceVerification {
+	var v archiveReferenceVerification
 	if !blobHashRe.MatchString(hash) {
-		return fmt.Errorf("invalid archived traffic blob reference %q", hash)
+		v.err = fmt.Errorf("invalid archived traffic blob reference %q", hash)
+		return v
 	}
-	if _, ok := verified[hash]; ok {
-		return nil
+	v.path, v.err = t.blobPath(hash)
+	if v.err != nil {
+		return v
+	}
+	v.info, v.err = os.Lstat(v.path)
+	if v.err != nil {
+		return v
+	}
+	v.info, v.err = inspect(v.path, hash, v.info.Size())
+	return v
+}
+
+// Caller holds wmu; supported writers never edit existing canonical bodies.
+func (t *Traffic) recheckArchiveReference(hash string, v archiveReferenceVerification) error {
+	if v.err != nil {
+		return v.err
 	}
 	path, err := t.blobPath(hash)
 	if err != nil {
@@ -252,37 +343,64 @@ func (t *Traffic) verifyArchiveReference(hash string, verified map[string]struct
 	if err != nil {
 		return err
 	}
-	if err := verifyArchiveBlob(path, hash, info.Size()); err != nil {
-		return err
+	if path != v.path || !sameArchiveBlob(v.info, info) {
+		return fmt.Errorf("traffic blob reference changed during verification; retry import: %s", hash)
 	}
-	verified[hash] = struct{}{}
 	return nil
 }
 
 // An existing filename is not proof of a complete prior restore. Never replace
 // damaged evidence implicitly: fail before committing any exchange metadata.
 func verifyArchiveBlob(path, hash string, length int64) error {
+	_, err := inspectArchiveBlob(path, hash, length)
+	return err
+}
+
+// File metadata is not a substitute for hashing: it binds a completed hash to
+// the same file at commit time. Hostile in-place writes by unrelated processes
+// are outside the store's existing single-writer contract.
+func sameArchiveBlob(before, after os.FileInfo) bool {
+	return before != nil && after != nil && before.Mode().IsRegular() && after.Mode().IsRegular() &&
+		os.SameFile(before, after) && before.Size() == after.Size() &&
+		before.Mode() == after.Mode() && before.ModTime().Equal(after.ModTime())
+}
+
+func inspectArchiveBlob(path, hash string, length int64) (os.FileInfo, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !info.Mode().IsRegular() || info.Size() != length {
-		return fmt.Errorf("existing traffic blob is not a complete regular file: %s", hash)
+		return nil, fmt.Errorf("existing traffic blob is not a complete regular file: %s", hash)
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !sameArchiveBlob(info, opened) {
+		return nil, fmt.Errorf("traffic blob changed before verification: %s", hash)
+	}
 	sum := sha256.New()
 	n, err := io.Copy(sum, f)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if n != length || hex.EncodeToString(sum.Sum(nil)) != hash {
-		return fmt.Errorf("existing traffic blob checksum mismatch: %s", hash)
+		return nil, fmt.Errorf("existing traffic blob checksum mismatch: %s", hash)
 	}
-	return nil
+	after, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !sameArchiveBlob(opened, after) {
+		return nil, fmt.Errorf("traffic blob changed during verification: %s", hash)
+	}
+	return after, nil
 }
 
 // Stage on the destination filesystem, and publish only after a complete write
