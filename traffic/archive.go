@@ -168,7 +168,7 @@ func (t *Traffic) importArchive(dir string, inspect func(string, string, int64) 
 			continue
 		}
 		destination := filepath.Join(t.dir, "_blobs", "sha256", hash[:2], hash+".bin")
-		info, err := os.Lstat(destination)
+		_, err := os.Lstat(destination)
 		if os.IsNotExist(err) {
 			verified[hash] = nil
 			continue
@@ -182,7 +182,7 @@ func (t *Traffic) importArchive(dir string, inspect func(string, string, int64) 
 		if err != nil {
 			return 0, err
 		}
-		info, err = inspect(destination, hash, source.Size())
+		info, err := inspect(destination, hash, source.Size())
 		if err != nil {
 			return 0, err
 		}
