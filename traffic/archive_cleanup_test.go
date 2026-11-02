@@ -165,6 +165,7 @@ func TestArchiveCommitFailureRetainsNewBlob(t *testing.T) {
 
 func TestArchiveCleanupSkipsStoreOwnedSymlink(t *testing.T) {
 	tr, root := openTraffic(t)
+	tr.dir = root + string(os.PathSeparator) // Open preserves caller-supplied trailing separators.
 	body := []byte("unreferenced new body")
 	hash := archiveReferenceHash(body)
 	path := archiveReferenceLocalPath(root, hash, "current")
@@ -195,5 +196,35 @@ func TestArchiveCleanupSkipsStoreOwnedSymlink(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("reserved symlink blocked cleanup: %v", err)
+	}
+}
+
+func TestArchiveCleanupTraversesReferenceNamedDirectories(t *testing.T) {
+	for _, name := range []string{"request.http", "response.http"} {
+		t.Run(name, func(t *testing.T) {
+			tr, root := openTraffic(t)
+			body := []byte("legacy nested body")
+			hash := archiveReferenceHash(body)
+			path := archiveReferenceLocalPath(root, hash, "current")
+			writeArchiveReferenceFile(t, path, body)
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rel := filepath.Join("legacy", name, "nested")
+			writeArchiveReferenceFile(t, filepath.Join(root, rel, "response.http"), []byte("HTTP 200\n\n@blob sha256:"+hash))
+			if _, err := tr.DB().Exec("INSERT INTO exchanges(id,path) VALUES(?,?)", "legacy", rel); err != nil {
+				t.Fatal(err)
+			}
+			tr.wmu.Lock()
+			err = tr.cleanupArchiveBlobs(map[string]os.FileInfo{hash: info})
+			tr.wmu.Unlock()
+			if err != nil {
+				t.Fatalf("valid legacy directory rejected: %v", err)
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("legacy referenced body lost: %v", err)
+			}
+		})
 	}
 }

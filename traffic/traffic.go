@@ -2200,7 +2200,8 @@ func (t *Traffic) collectLegacyBlobRefs(refs map[string]struct{}, strict bool) e
 		return nil
 	}
 	blobRe := regexp.MustCompile(`@blob sha256:([0-9a-f]{64})`)
-	return filepath.WalkDir(t.dir, func(p string, d fs.DirEntry, err error) error {
+	root := filepath.Clean(t.dir)
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d == nil {
 			if strict {
 				return err
@@ -2209,7 +2210,7 @@ func (t *Traffic) collectLegacyBlobRefs(refs map[string]struct{}, strict bool) e
 		}
 		// Store-owned top-level trees never contain legacy reference files.
 		// Do not follow or reject their symlink representation during cleanup.
-		if filepath.Dir(p) == t.dir && (d.Name() == "_blobs" || d.Name() == "_index" || d.Name() == "_ca") {
+		if filepath.Dir(p) == root && (d.Name() == "_blobs" || d.Name() == "_index" || d.Name() == "_ca") {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -2218,18 +2219,18 @@ func (t *Traffic) collectLegacyBlobRefs(refs map[string]struct{}, strict bool) e
 		if strict && d.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("legacy reference path is a symlink: %s", p)
 		}
-		if strict && (d.Name() == "request.http" || d.Name() == "response.http") && !d.Type().IsRegular() {
-			return fmt.Errorf("legacy reference entry is not a regular file: %s", p)
-		}
 		if d.IsDir() {
 			// _blobs/_index/_ca never contain references; skip their subtrees.
-			if p != t.dir && strings.HasPrefix(d.Name(), "_") {
+			if p != root && strings.HasPrefix(d.Name(), "_") {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if nm := d.Name(); nm != "request.http" && nm != "response.http" {
 			return nil
+		}
+		if strict && !d.Type().IsRegular() {
+			return fmt.Errorf("legacy reference entry is not a regular file: %s", p)
 		}
 		b, err := os.ReadFile(p)
 		if err != nil {
