@@ -1,0 +1,145 @@
+package traffic
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"syscall"
+	"testing"
+)
+
+func TestArchiveRollbackCleansOnlyNewBlobs(t *testing.T) {
+	for _, failure := range []string{"bad_reference", "later_source"} {
+		t.Run(failure, func(t *testing.T) {
+			tr, root := openTraffic(t)
+			body := []byte("new body")
+			hash := archiveReferenceHash(body)
+			old := []byte("preexisting orphan")
+			oldHash := archiveReferenceHash(old)
+			oldPath := archiveReferenceLocalPath(root, oldHash, "current")
+			writeArchiveReferenceFile(t, oldPath, old)
+			snapshot := ArchiveSnapshot{Version: 1, Blobs: []string{hash, oldHash}}
+			files := map[string][]byte{hash: body, oldHash: old}
+			if failure == "bad_reference" {
+				bad := archiveReferenceExchange("bad")
+				bad.RespBlob = archiveReferenceHash([]byte("missing"))
+				snapshot.Exchanges = []ArchiveExchange{bad}
+			} else {
+				snapshot.Blobs = append(snapshot.Blobs, archiveReferenceHash([]byte("missing source")))
+			}
+			arc := writeArchiveReferenceFixture(t, snapshot, files)
+			if _, err := tr.ImportArchive(arc); err == nil {
+				t.Fatal("expected failed import")
+			}
+			if _, err := os.Stat(archiveReferenceLocalPath(root, hash, "current")); !os.IsNotExist(err) {
+				t.Fatalf("new blob retained: %v", err)
+			}
+			if got, err := os.ReadFile(oldPath); err != nil || string(got) != string(old) {
+				t.Fatalf("existing orphan changed %q %v", got, err)
+			}
+		})
+	}
+}
+
+func TestArchiveCleanupProtectsLiveAndUncertainBlobs(t *testing.T) {
+	for _, kind := range []string{"live_ref", "legacy_ref", "changed_identity", "query_failure", "legacy_read_failure", "legacy_directory_symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			tr, root := openTraffic(t)
+			body := []byte("retained body")
+			hash := archiveReferenceHash(body)
+			path := archiveReferenceLocalPath(root, hash, "current")
+			writeArchiveReferenceFile(t, path, body)
+			info, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "live_ref":
+				if _, err := tr.DB().Exec("INSERT INTO blob_refs(hash,exchange_id) VALUES(?,?)", hash, "live"); err != nil {
+					t.Fatal(err)
+				}
+			case "legacy_ref":
+				dir := filepath.Join(root, "legacy")
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				writeArchiveReferenceFile(t, filepath.Join(dir, "response.http"), []byte("HTTP 200\n\n@blob sha256:"+hash))
+				if _, err := tr.DB().Exec("INSERT INTO exchanges(id,path) VALUES(?,?)", "legacy", "legacy"); err != nil {
+					t.Fatal(err)
+				}
+			case "legacy_read_failure", "legacy_directory_symlink":
+				dir := filepath.Join(root, "legacy")
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				linkPath := filepath.Join(dir, "response.http")
+				target := filepath.Join(root, "missing-target")
+				legacyPath := "legacy"
+				if kind == "legacy_directory_symlink" {
+					linkPath = filepath.Join(root, "legacy-link")
+					legacyPath = "legacy-link"
+					target = t.TempDir()
+					writeArchiveReferenceFile(t, filepath.Join(target, "response.http"), []byte("HTTP 200\n\n@blob sha256:"+hash))
+				}
+				err := os.Symlink(target, linkPath)
+				if runtime.GOOS == "windows" && (errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.Errno(1314)) || errors.Is(err, syscall.Errno(50))) {
+					t.Skipf("symlink fixture unavailable: %v", err)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := tr.DB().Exec("INSERT INTO exchanges(id,path) VALUES(?,?)", "legacy", legacyPath); err != nil {
+					t.Fatal(err)
+				}
+			case "changed_identity":
+				writeArchiveReferenceFile(t, path+".other", body)
+				if err := os.Rename(path+".other", path); err != nil {
+					t.Fatal(err)
+				}
+			case "query_failure":
+				if err := tr.DB().Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tr.wmu.Lock()
+			err = tr.cleanupArchiveBlobs(map[string]os.FileInfo{hash: info})
+			tr.wmu.Unlock()
+			if kind == "query_failure" || kind == "changed_identity" || kind == "legacy_read_failure" || kind == "legacy_directory_symlink" {
+				if err == nil || !strings.Contains(err.Error(), "retained") {
+					t.Fatalf("uncertainty not reported: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("protected blob removed: %v", err)
+			}
+		})
+	}
+}
+
+func TestArchiveCommitFailureRetainsNewBlob(t *testing.T) {
+	tr, root := openTraffic(t)
+	tr.DB().SetMaxOpenConns(1)
+	for _, statement := range []string{
+		"PRAGMA foreign_keys=ON",
+		"CREATE TABLE archive_test_parent(id TEXT PRIMARY KEY)",
+		"CREATE TABLE archive_test_child(id TEXT REFERENCES archive_test_parent(id) DEFERRABLE INITIALLY DEFERRED)",
+		"CREATE TRIGGER archive_test_commit_failure AFTER INSERT ON exchanges BEGIN INSERT INTO archive_test_child(id) VALUES('missing-parent'); END",
+	} {
+		if _, err := tr.DB().Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body := []byte("retained after uncertain commit")
+	arc, hash := archiveBlobFixture(t, body)
+	_, err := tr.ImportArchive(arc)
+	if err == nil || !strings.Contains(err.Error(), "rollback unconfirmed") {
+		t.Fatalf("expected uncertain transaction: %v", err)
+	}
+	if got, err := os.ReadFile(archiveReferenceLocalPath(root, hash, "current")); err != nil || string(got) != string(body) {
+		t.Fatalf("uncertain blob lost: %q %v", got, err)
+	}
+}

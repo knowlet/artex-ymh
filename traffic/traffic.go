@@ -2186,6 +2186,12 @@ func (t *Traffic) gcBlobs() error {
 // points at. Skipped entirely once no legacy rows remain — the steady state — so
 // the tree walk is transitional rather than a permanent cost.
 func (t *Traffic) legacyBlobRefs(refs map[string]struct{}) error {
+	return t.collectLegacyBlobRefs(refs, false)
+}
+
+// Strict collection is used before targeted rollback cleanup: unreadable legacy
+// evidence cannot be treated as proof that a new blob is unreferenced.
+func (t *Traffic) collectLegacyBlobRefs(refs map[string]struct{}, strict bool) error {
 	var n int
 	if err := t.db.QueryRow(`SELECT COUNT(*) FROM exchanges WHERE path<>''`).Scan(&n); err != nil {
 		return err
@@ -2196,7 +2202,13 @@ func (t *Traffic) legacyBlobRefs(refs map[string]struct{}) error {
 	blobRe := regexp.MustCompile(`@blob sha256:([0-9a-f]{64})`)
 	return filepath.WalkDir(t.dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d == nil {
+			if strict {
+				return err
+			}
 			return nil // skip unreadable entries
+		}
+		if strict && d.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("legacy reference path is a symlink: %s", p)
 		}
 		if d.IsDir() {
 			// _blobs/_index/_ca never contain references; skip their subtrees.
@@ -2210,6 +2222,9 @@ func (t *Traffic) legacyBlobRefs(refs map[string]struct{}) error {
 		}
 		b, err := os.ReadFile(p)
 		if err != nil {
+			if strict {
+				return err
+			}
 			return nil
 		}
 		for _, m := range blobRe.FindAllSubmatch(b, -1) {

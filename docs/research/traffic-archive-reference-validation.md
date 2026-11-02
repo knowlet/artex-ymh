@@ -120,8 +120,9 @@ Their selected path and file identity are rechecked under the mutex before any
 selected row commits; concurrent removal, replacement, or legacy-path shadowing
 fails closed and asks the caller to retry. Hash errors remain deferred until a
 row is selected, preserving current-row-wins and first duplicate wins. Repeated
-archive IDs are not scanned again. Existing local rows may still cause unused
-reference preflight work, but never additional hashing under the recording lock.
+archive IDs are not scanned again. A read-only existence check skips reference hashing for already-present rows.
+If concurrent deletion makes an unprepared row selectable, import fails closed
+with an explicit retry error; it never hashes under the recording lock.
 No wire format or database schema changes. Added deterministic paused-hash tests
 cover recording, removal, replacement, layout shadowing, and concurrent current
 row insertion for both supported layouts.
@@ -133,3 +134,44 @@ Concurrent replacement fixtures publish a separate inode by rename; in-place
 mtime fixtures explicitly set a different timestamp. Verification-entry waits
 also detect early return or timeout instead of silently hanging. These are local
 synthetic tests; post-push CI, external review and final rerun are separate gates.
+
+## External-review follow-up (2026-11-02)
+
+- Body-backed metadata lengths are now compared with the fully verified file
+  size for selected rows only. The version-1 producer has always exported full
+  lengths from the exchange table, and record/spill use the same full bytes.
+  A public-API probe previously accepted a 15-byte body with RespLen=0 and Get
+  displayed the wrong length. Genuine zero-byte blobs with length zero remain
+  valid; inline and legacy HTTP-head rows are unchanged.
+- Re-importing existing rows no longer hashes their unlisted references. A
+  concurrent deletion or a body created after a missing-file preflight requires
+  an explicit retry, which re-verifies outside the lock. Tests prove the first
+  attempt commits no rows and a subsequent retry succeeds.
+- Review reproduced that SQL rollback did not remove newly published listed blobs.
+  This predates reference validation and remains an explicit limitation, not a
+  claim of filesystem transactionality. A synthetic failed-restore probe left
+  zero rows and a complete blob; DeleteAll subsequently reclaimed it through
+  the existing GC. Immediate cleanup is not guaranteed. Blind manifest-based
+  deletion would risk shared or legacy evidence and is not introduced here.
+  The targeted rollback cleanup below supersedes this observed limitation.
+
+### Targeted failed-import cleanup
+
+A failed import now tracks only canonical files it actually created. While still
+holding the writer mutex, it requires a confirmed SQL rollback before cleanup;
+a failed Commit followed by ambiguous ErrTxDone retains the files and reports
+the uncertainty. Before deleting any candidate it collects all blob_refs and
+legacy pointers, then checks the candidate's exact verified identity. Existing
+files, live references, changed identities and uncertain query/legacy-read
+results are retained. Only this import's unreferenced new files are removed;
+there is no global sweep, and no promise of power-loss/filesystem transactionality.
+The existing GC keeps its best-effort legacy-reader behavior; rollback cleanup
+uses a strict variant so unreadable legacy evidence cannot justify deletion.
+Tests cover late reference failure, an earlier source-loop failure, preserved
+preexisting orphans and live/legacy bodies, and query/identity/legacy-read
+uncertainty with explicit errors and retained bytes.
+A deferred SQLite foreign-key fixture also forces Commit failure: the ambiguous
+rollback is reported and the new blob remains intact. Panic transaction release
+was statically reviewed (retErr=nil still rolls back an open transaction); no
+runtime panic after Begin was injected. Strict legacy scanning rejects symlinks
+rather than following paths outside the store, retaining uncertain new files.

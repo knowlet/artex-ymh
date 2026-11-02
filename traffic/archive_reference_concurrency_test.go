@@ -22,6 +22,7 @@ func TestArchiveUnlistedReferenceVerificationConcurrency(t *testing.T) {
 				}
 				item := archiveReferenceExchange("unlisted-concurrent")
 				item.RespBlob = hash
+				item.RespLen = len(body)
 				arc := writeArchiveReferenceFixture(t, ArchiveSnapshot{Version: 1, Exchanges: []ArchiveExchange{item}}, nil)
 				good := archiveReferenceExchange(item.ID)
 				good.RespBody = []byte("winner")
