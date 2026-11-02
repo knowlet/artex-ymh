@@ -2192,6 +2192,25 @@ func (t *Traffic) legacyBlobRefs(refs map[string]struct{}) error {
 // Strict collection is used before targeted rollback cleanup: unreadable legacy
 // evidence cannot be treated as proof that a new blob is unreferenced.
 func (t *Traffic) collectLegacyBlobRefs(refs map[string]struct{}, strict bool) error {
+	if strict {
+		stage := filepath.Join(t.dir, "_delete_staging")
+		info, err := os.Lstat(stage)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("delete staging is not a regular directory; recovery state unknown")
+			}
+			entries, err := os.ReadDir(stage)
+			if err != nil {
+				return err
+			}
+			if len(entries) != 0 {
+				return fmt.Errorf("delete staging is not empty; recovery state unknown")
+			}
+		}
+	}
 	var n int
 	if err := t.db.QueryRow(`SELECT COUNT(*) FROM exchanges WHERE path<>''`).Scan(&n); err != nil {
 		return err
@@ -2200,7 +2219,10 @@ func (t *Traffic) collectLegacyBlobRefs(refs map[string]struct{}, strict bool) e
 		return nil
 	}
 	blobRe := regexp.MustCompile(`@blob sha256:([0-9a-f]{64})`)
-	root := filepath.Clean(t.dir)
+	root, err := filepath.EvalSymlinks(t.dir)
+	if err != nil {
+		return err
+	}
 	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d == nil {
 			if strict {
@@ -2220,8 +2242,9 @@ func (t *Traffic) collectLegacyBlobRefs(refs map[string]struct{}, strict bool) e
 			return fmt.Errorf("legacy reference path is a symlink: %s", p)
 		}
 		if d.IsDir() {
-			// _blobs/_index/_ca never contain references; skip their subtrees.
-			if p != root && strings.HasPrefix(d.Name(), "_") {
+			// Ordinary GC retains its existing staging exclusion. Strict
+			// cleanup already proved this directory empty before walking.
+			if filepath.Dir(p) == root && d.Name() == "_delete_staging" {
 				return filepath.SkipDir
 			}
 			return nil

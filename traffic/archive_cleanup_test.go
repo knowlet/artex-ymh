@@ -228,3 +228,100 @@ func TestArchiveCleanupTraversesReferenceNamedDirectories(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyReferencesSurviveRootSymlinkAndNestedUnderscore(t *testing.T) {
+	for _, layout := range []string{"root_symlink", "nested_underscore"} {
+		for _, collector := range []string{"gc", "rollback_cleanup"} {
+			t.Run(layout+"/"+collector, func(t *testing.T) {
+				root := t.TempDir()
+				openPath := root
+				if layout == "root_symlink" {
+					link := filepath.Join(t.TempDir(), "store")
+					err := os.Symlink(root, link)
+					if runtime.GOOS == "windows" && (errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.Errno(1314)) || errors.Is(err, syscall.Errno(50))) {
+						t.Skipf("symlink unavailable: %v", err)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					openPath = link + string(os.PathSeparator)
+				}
+				tr, err := Open(openPath, "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { tr.Close() })
+				body := []byte("legacy referenced body")
+				hash := archiveReferenceHash(body)
+				path := archiveReferenceLocalPath(root, hash, "current")
+				writeArchiveReferenceFile(t, path, body)
+				info, err := os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rel := filepath.Join("legacy", "call")
+				if layout == "nested_underscore" {
+					rel = filepath.Join("legacy", "_api", "call")
+				}
+				writeArchiveReferenceFile(t, filepath.Join(root, rel, "response.http"), []byte("HTTP 200\n\n@blob sha256:"+hash))
+				if _, err := tr.DB().Exec("INSERT INTO exchanges(id,path) VALUES(?,?)", "legacy", rel); err != nil {
+					t.Fatal(err)
+				}
+				tr.wmu.Lock()
+				if collector == "gc" {
+					err = tr.gcBlobs()
+				} else {
+					err = tr.cleanupArchiveBlobs(map[string]os.FileInfo{hash: info})
+				}
+				tr.wmu.Unlock()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, err := os.ReadFile(path); err != nil || string(got) != string(body) {
+					t.Fatalf("live legacy body lost: %q %v", got, err)
+				}
+			})
+		}
+	}
+}
+
+func TestArchiveCleanupPreservesUncertainDeleteStages(t *testing.T) {
+	for _, kind := range []string{"empty", "recoverable"} {
+		t.Run(kind, func(t *testing.T) {
+			tr, root := openTraffic(t)
+			body := []byte("possibly staged reference")
+			hash := archiveReferenceHash(body)
+			path := archiveReferenceLocalPath(root, hash, "current")
+			writeArchiveReferenceFile(t, path, body)
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stage := filepath.Join(root, "_delete_staging")
+			if err := os.MkdirAll(stage, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "recoverable" {
+				writeArchiveReferenceFile(t, filepath.Join(stage, "pending", "response.http"), []byte("HTTP 200\n\n@blob sha256:"+hash))
+			}
+			tr.wmu.Lock()
+			err = tr.cleanupArchiveBlobs(map[string]os.FileInfo{hash: info})
+			tr.wmu.Unlock()
+			if kind == "recoverable" {
+				if err == nil || !strings.Contains(err.Error(), "recovery state unknown") {
+					t.Fatalf("unknown stage not reported: %v", err)
+				}
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("possibly recoverable body lost: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("empty stage blocked cleanup: %v", err)
+				}
+			}
+		})
+	}
+}

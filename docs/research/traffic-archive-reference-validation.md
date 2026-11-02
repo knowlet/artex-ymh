@@ -184,3 +184,15 @@ are excluded before symlink checks and are never traversed. Ordinary legacy
 symlinks remain errors. The former read-failure fixture is accurately named as
 a symlink rejection; the generic read-error branch is statically reviewed, not
 claimed as a separately induced runtime failure.
+
+The legacy collector resolves the configured traffic root before walking: an
+Open path that is a directory symlink (including a trailing separator) continues
+to find legacy references. Only store-owned top-level trees are excluded;
+underscore-prefixed URL directories inside a host tree are traversed. Regression
+fixtures first demonstrated lost live blobs in GC and targeted cleanup, then
+passed after this shared collector correction. Interior symlinks remain rejected
+by strict cleanup, not followed. Ordinary GC still excludes _delete_staging.
+Strict cleanup instead requires staging to be a readable, empty directory (or
+absent) before collecting references. Nonempty, unreadable or symlinked staging
+has unknown recovery state, so new blobs are retained with an error rather than
+interpreting pending deletion journals. No recovery state machine was changed.
