@@ -8,6 +8,7 @@ not a boundary against a malicious same-UID process or a compromised kernel.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -27,7 +28,9 @@ TOOLS = ("osv-scanner", "trivy")
 MAX_INPUT = 8 << 20
 MAX_OUTPUT = 16 << 20
 MAX_DIAGNOSTICS = 1 << 20
-MAX_DB = 1 << 30
+MAX_DB = 4 << 30
+MAX_DB_METADATA = 1 << 20
+DB_CHUNK = 1 << 20
 MAX_BINARY = 256 << 20
 MAX_AGE = dt.timedelta(days=7)
 LOCK_PATH = Path(__file__).with_name("sources.lock.json")
@@ -119,20 +122,61 @@ def fresh(value, now):
         raise ScanError("database is stale or future-dated (maximum age: 7 days)")
 
 
+def stream_database(path, limit, target=None):
+    """Hash/copy a bounded regular DB in fixed-size blocks, not one huge buffer.
+
+    A target is a new file inside the caller's private staging directory. Only
+    bytes actually read are hashed. Changed/truncated inputs and partial writes
+    fail; a failed copy never leaves a success-looking staged file behind.
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    created = False
+    try:
+        with os.fdopen(fd, "rb") as source:
+            before = os.fstat(source.fileno())
+            if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= limit:
+                raise ScanError(f"database must be a nonempty regular file within {limit} bytes: {path} (size={before.st_size})")
+            output = target.open("xb") if target is not None else contextlib.nullcontext()
+            created = target is not None
+            total, checksum = 0, hashlib.sha256()
+            with output as destination:
+                while True:
+                    block = source.read(min(DB_CHUNK, limit - total + 1))
+                    if not block:
+                        break
+                    total += len(block)
+                    if total > limit:
+                        raise ScanError("database exceeds byte budget while reading")
+                    checksum.update(block)
+                    if destination is not None and destination.write(block) != len(block):
+                        raise ScanError("short database snapshot write")
+                after = os.fstat(source.fileno())
+                if total != before.st_size or (after.st_size, after.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+                    raise ScanError("database changed or was truncated during read")
+                if destination is not None:
+                    destination.flush()
+                    os.fsync(destination.fileno())
+        return {"sha256": checksum.hexdigest(), "size": total}
+    except BaseException:
+        if created:
+            target.unlink(missing_ok=True)
+        raise
+
+
+def db_file_limit(name, remaining):
+    return min(remaining, MAX_DB_METADATA) if name.endswith(".json") else remaining
+
+
 def db_receipt(tool, root, source, retrieved_at):
     """Operator-attested preparation receipt, NOT signed upstream provenance."""
     root = root_dir(root)
     if not isinstance(source, str) or not source.strip() or len(source) > 1024:
         raise ScanError("a bounded, explicit database source description is required")
     fresh(retrieved_at, dt.datetime.now(dt.timezone.utc))
-    files = {}
-    total = 0
+    files, total = {}, 0
     for name in DB_FILES[tool]:
-        data = read_file(child(root, name), MAX_DB - total)
-        if not data:
-            raise ScanError("empty database file")
-        total += len(data)
-        files[name] = {"sha256": digest(data), "size": len(data)}
+        files[name] = stream_database(child(root, name), db_file_limit(name, MAX_DB - total))
+        total += files[name]["size"]
     return {"schema": 1, "tool": tool, "source": source, "retrieved_at": retrieved_at,
             "provenance": "operator-attested; not signature-verified", "files": files}
 
@@ -149,20 +193,25 @@ def copy_db(tool, root, destination, now):
     files = receipt.get("files")
     if not isinstance(files, dict) or set(files) != set(DB_FILES[tool]):
         raise ScanError("database receipt does not cover the required files exactly")
-    total = 0
-    for name in DB_FILES[tool]:
-        data = read_file(child(root, name), MAX_DB - total)
-        total += len(data)
-        if not data or files[name] != {"sha256": digest(data), "size": len(data)}:
-            raise ScanError("database hash/size mismatch: " + name)
-        if tool == "trivy" and name == "db/metadata.json":
-            metadata = document(data)
-            if metadata.get("Version") != 2:
-                raise ScanError("unsupported Trivy DB schema")
-            fresh(metadata.get("UpdatedAt"), now)
-        target = destination / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+    total, staged = 0, []
+    try:
+        for name in DB_FILES[tool]:
+            target = destination / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            actual = stream_database(child(root, name), db_file_limit(name, MAX_DB - total), target)
+            staged.append(target)
+            total += actual["size"]
+            if files[name] != actual:
+                raise ScanError("database hash/size mismatch: " + name)
+            if tool == "trivy" and name == "db/metadata.json":
+                metadata = document(read_file(target, MAX_DB_METADATA))
+                if not isinstance(metadata, dict) or metadata.get("Version") != 2:
+                    raise ScanError("unsupported Trivy DB schema")
+                fresh(metadata.get("UpdatedAt"), now)
+    except BaseException:
+        for path in staged:
+            path.unlink(missing_ok=True)
+        raise
     return {"manifest_sha256": digest(raw), "source": receipt["source"],
             "retrieved_at": receipt["retrieved_at"], "files": files,
             "provenance": "operator-attested; not signature-verified"}
@@ -253,7 +302,7 @@ def tool_args(tool):
     if tool == "trivy":
         return ["sbom", "--scanners", "vuln", "--format", "json", "--list-all-pkgs",
                 "--offline-scan", "--skip-db-update", "--skip-java-db-update", "--skip-version-check",
-                "--cache-dir", "/db", "--cache-backend", "memory", "--exit-code", "0", "/input/bom.json"]
+                "--cache-dir", "/db", "--cache-backend", "memory", "--disable-telemetry", "--exit-code", "0", "/input/bom.json"]
     raise ScanError("unsupported tool")
 
 
@@ -392,6 +441,8 @@ def atomic_json(path, value):
 
 
 def execute(options):
+    if options.action == "run" and not options.authorized:
+        raise ScanError("run requires --authorized for this local artifact")
     if not 1 <= options.timeout <= 300:
         raise ScanError("timeout must be between 1 and 300 seconds")
     if sys.platform != "linux" or os.uname().machine != "x86_64":
@@ -412,15 +463,14 @@ def execute(options):
                 "coverage_scope": "explicit Go CycloneDX library components only",
                 "network": "new network namespace; no host networking; no fallback",
                 "limits": {"wall_seconds": options.timeout, "cpu_seconds": 120, "address_space_bytes": 8 << 30,
-                           "stdout_bytes": MAX_OUTPUT, "stderr_bytes": MAX_DIAGNOSTICS, "file_bytes": 64 << 20},
+                           "stdout_bytes": MAX_OUTPUT, "stderr_bytes": MAX_DIAGNOSTICS, "file_bytes": 64 << 20,
+                           "database_bytes": MAX_DB, "database_copy_chunk_bytes": DB_CHUNK},
                 "limitations": ["GOMEMLIMIT is a soft heap target, not a hard RSS limit",
                                 "No aggregate scratch-space, multi-run concurrency, or host-wide resource quota",
                                 "No protection against a malicious same-UID process or compromised sandbox/kernel",
                                 "Database provenance is operator-attested, not signature-verified"]}
         if options.action == "plan":
             return plan
-        if not options.authorized:
-            raise ScanError("run requires --authorized for this local artifact")
         for helper in ("/usr/bin/prlimit", "/usr/bin/bwrap"):
             if not os.path.isfile(helper) or not os.access(helper, os.X_OK):
                 raise ScanError("required sandbox helper unavailable: " + helper)

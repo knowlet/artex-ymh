@@ -58,15 +58,25 @@ def main():
         target = osv_db / 'osv-scanner/Go/all.zip'
         target.parent.mkdir(parents=True)
         url = 'https://osv-vulnerabilities.storage.googleapis.com/Go/all.zip'
-        with urllib.request.urlopen(url, timeout=120) as response:
-            data = response.read(w.MAX_DB + 1)
-        assert 0 < len(data) <= w.MAX_DB
-        target.write_bytes(data)
-        del data
+        with urllib.request.urlopen(url, timeout=120) as response, target.open('xb') as output:
+            total = 0
+            while True:
+                block = response.read(min(w.DB_CHUNK, w.MAX_DB - total + 1))
+                if not block:
+                    break
+                total += len(block)
+                if total > w.MAX_DB:
+                    raise RuntimeError('OSV DB download exceeds byte budget')
+                output.write(block)
+        assert total > 0, 'empty OSV database download'
         trivy_db = root / 'trivy-db'
         trivy_db.mkdir()
-        command([str(install / 'trivy'), 'image', '--download-db-only', '--cache-dir', str(trivy_db), '--skip-version-check'],
+        command([str(install / 'trivy'), 'image', '--download-db-only', '--cache-dir', str(trivy_db), '--skip-version-check', '--disable-telemetry', '--no-progress'],
                 filename='trivy-db-preparation')
+        sizes = {tool: {name: (db / name).stat().st_size for name in w.DB_FILES[tool]}
+                 for tool, db in [('osv-scanner', osv_db), ('trivy', trivy_db)]}
+        (evidence / 'database-sizes.json').write_bytes(w.encoded(sizes))
+        print('Prepared DB byte sizes: ' + json.dumps(sizes), flush=True)
         now = dt.datetime.now(dt.timezone.utc).isoformat()
         for tool, db, source in [('osv-scanner', osv_db, url), ('trivy', trivy_db, 'official Trivy DB OCI repositories; see preparation stderr')]:
             command([artex, 'scan', 'seal-db', '--tool', tool, '--db-dir', str(db), '--source', source, '--retrieved-at', now], filename=tool + '-seal')

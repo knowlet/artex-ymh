@@ -159,7 +159,10 @@ existing file or subprocess exit.
 Each scan: default 120 s wall clock (explicit 1–300 s), hard CPU120 s,
 address-space8 GiB, per-file64 MiB and file-descriptor128 limits. Stdout16 MiB,
 stderr1 MiB; oversized output kills/reaps the process group. Go processes get
-GOMAXPROCS2 and a soft GOMEMLIMIT768 MiB. DB snapshot max1 GiB, binary max256 MiB.
+GOMAXPROCS2 and a soft GOMEMLIMIT768 MiB. DB snapshot max4 GiB total (metadata max1 MiB), binary max256 MiB.
+DB sealing and snapshot copies stream in at most 1 MiB blocks; they do not load
+the database into a single Python buffer. Changed/truncated files and partial
+snapshot writes fail with staged files removed.
 The address-space limit is **not** a hard RSS limit; the heap limit is soft.
 There is no aggregate scratch-space, host-wide concurrency or cgroup quota.
 Deploy this CLI in an already resource-constrained job/container where those
