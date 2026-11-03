@@ -107,12 +107,19 @@ def child(root, relative):
 def timestamp(value):
     if not isinstance(value, str):
         raise ScanError("database time must be RFC3339")
+    # Go time.Time JSON can contain nanoseconds. Python 3.10 fromisoformat
+    # only accepts 3/6 fractional digits, so normalize explicitly before
+    # parsing. Discard at most 999 ns, well below the freshness tolerance.
+    match = re.fullmatch(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)", value)
+    if not match:
+        raise ScanError("invalid RFC3339 database time")
+    fraction = (match[2] or "").ljust(6, "0")[:6]
+    zone = "+00:00" if match[3] == "Z" else match[3]
+    normalized = match[1] + "." + fraction + zone
     try:
-        result = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        result = dt.datetime.fromisoformat(normalized)
     except ValueError as exc:
         raise ScanError("invalid database time") from exc
-    if result.utcoffset() is None:
-        raise ScanError("database time needs a timezone")
     return result.astimezone(dt.timezone.utc)
 
 

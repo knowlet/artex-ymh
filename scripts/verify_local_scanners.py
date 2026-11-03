@@ -76,6 +76,7 @@ def main():
         sizes = {tool: {name: (db / name).stat().st_size for name in w.DB_FILES[tool]}
                  for tool, db in [('osv-scanner', osv_db), ('trivy', trivy_db)]}
         (evidence / 'database-sizes.json').write_bytes(w.encoded(sizes))
+        (evidence / 'trivy-db-metadata.json').write_bytes((trivy_db / 'db/metadata.json').read_bytes())
         print('Prepared DB byte sizes: ' + json.dumps(sizes), flush=True)
         now = dt.datetime.now(dt.timezone.utc).isoformat()
         for tool, db, source in [('osv-scanner', osv_db, url), ('trivy', trivy_db, 'official Trivy DB OCI repositories; see preparation stderr')]:
