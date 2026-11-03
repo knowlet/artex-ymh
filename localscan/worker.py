@@ -34,7 +34,7 @@ DB_CHUNK = 1 << 20
 MAX_BINARY = 256 << 20
 MAX_AGE = dt.timedelta(days=7)
 LOCK_PATH = Path(__file__).with_name("sources.lock.json")
-DB_FILES = {"osv-scanner": ("osv-scanner/Go/all.zip",),
+DB_FILES = {"osv-scanner": ("osv-scalibr/Go/all.zip",),
             "trivy": ("db/trivy.db", "db/metadata.json")}
 
 
@@ -331,6 +331,10 @@ def parse_results(tool, data, exit_code, expected):
                          "validation": "database-match; exploitability-unverified"})
 
     if tool == "osv-scanner":
+        # Native plugin errors can coexist with package results. Never turn a
+        # partial failed scan into findings/no_findings, even with exit 0/1.
+        if native.get("errors") not in (None, []):
+            raise ScanError("OSV reported plugin errors; results are incomplete")
         if exit_code not in (0, 1) or not isinstance(native.get("results"), list):
             raise ScanError("OSV process or output schema failed")
         for result in native["results"]:

@@ -55,7 +55,7 @@ def main():
 
         # The only live downloads after install are explicitly separated DB prep.
         osv_db = root / 'osv-db'
-        target = osv_db / 'osv-scanner/Go/all.zip'
+        target = osv_db / 'osv-scalibr/Go/all.zip'
         target.parent.mkdir(parents=True)
         url = 'https://osv-vulnerabilities.storage.googleapis.com/Go/all.zip'
         with urllib.request.urlopen(url, timeout=120) as response, target.open('xb') as output:
