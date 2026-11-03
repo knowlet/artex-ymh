@@ -50,6 +50,11 @@ def github_json(url: str) -> dict:
         "User-Agent": "ARTEX-release-lock-review",
         "X-GitHub-Api-Version": "2022-11-28",
     })
+    # Optional Actions token prevents shared-runner anonymous API rate limiting.
+    # This request is restricted to api.github.com and redirects are refused;
+    # never forward this credential to release files or raw content hosts.
+    if os.environ.get("GH_TOKEN"):
+        request.add_header("Authorization", "Bearer " + os.environ["GH_TOKEN"])
     opener = urllib.request.build_opener(NoRedirect)
     with opener.open(request, timeout=TIMEOUT) as response:
         body = response.read(MAX_RESPONSE + 1)
