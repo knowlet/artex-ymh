@@ -52,6 +52,10 @@ func main() {
 }
 
 func run() int {
+	// Explicit local scanning never starts the server, database, or agents.
+	if len(os.Args) > 1 && os.Args[1] == "scan" {
+		return runScanCLI(os.Args[2:])
+	}
 	if len(os.Args) > 1 && os.Args[1] == "provider" {
 		return runProvider(os.Args[2:])
 	}

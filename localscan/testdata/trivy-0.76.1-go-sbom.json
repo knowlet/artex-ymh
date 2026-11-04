@@ -1,0 +1,106 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.76.1"
+  },
+  "ReportID": "01a1a068-231c-792f-a6de-fbdb6b623b85",
+  "CreatedAt": "2026-11-03T07:55:41.724603151Z",
+  "ArtifactName": "/input/bom.json",
+  "ArtifactType": "cyclonedx",
+  "Results": [
+    {
+      "Target": "",
+      "Class": "lang-pkgs",
+      "Type": "gobinary",
+      "Packages": [
+        {
+          "ID": "github.com/gogo/protobuf@v1.3.1",
+          "Name": "github.com/gogo/protobuf",
+          "Identifier": {
+            "PURL": "pkg:golang/github.com/gogo/protobuf@1.3.1",
+            "UID": "8eaa8d36b1754e55",
+            "BOMRef": "pkg:golang/github.com/gogo/protobuf@1.3.1"
+          },
+          "Version": "1.3.1"
+        }
+      ],
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2021-3121",
+          "VendorIDs": [
+            "GHSA-c3h9-896r-86jm"
+          ],
+          "PkgID": "github.com/gogo/protobuf@v1.3.1",
+          "PkgName": "github.com/gogo/protobuf",
+          "PkgIdentifier": {
+            "PURL": "pkg:golang/github.com/gogo/protobuf@1.3.1",
+            "UID": "8eaa8d36b1754e55",
+            "BOMRef": "pkg:golang/github.com/gogo/protobuf@1.3.1"
+          },
+          "InstalledVersion": "1.3.1",
+          "FixedVersion": "1.3.2",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2021-3121",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory Go",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Ago"
+          },
+          "Fingerprint": "sha256:268fb120551cee7966a938d5d0806c8f7e5f0464282a979d725cdf62454f44fc",
+          "Title": "gogo/protobuf: plugin/unmarshal/unmarshal.go lacks certain index validation",
+          "Description": "An issue was discovered in GoGo Protobuf before 1.3.2. plugin/unmarshal/unmarshal.go lacks certain index validation, aka the \"skippy peanut butter\" issue.",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-129"
+          ],
+          "VendorSeverity": {
+            "bitnami": 3,
+            "ghsa": 3,
+            "nvd": 3,
+            "photon": 3,
+            "redhat": 3,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "bitnami": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:H",
+              "V3Score": 8.6
+            },
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:H",
+              "V3Score": 8.6
+            },
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:N/C:P/I:P/A:P",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:H",
+              "V2Score": 7.5,
+              "V3Score": 8.6
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:H",
+              "V3Score": 8.6
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2021-3121",
+            "https://discuss.hashicorp.com/t/hcsec-2021-23-consul-exposed-to-denial-of-service-in-gogo-protobuf-dependency/29025",
+            "https://github.com/gogo/protobuf",
+            "https://github.com/gogo/protobuf/commit/b03c65ea87cdc3521ede29f62fe3ce239267c1bc",
+            "https://github.com/gogo/protobuf/compare/v1.3.1...v1.3.2",
+            "https://lists.apache.org/thread.html/r68032132c0399c29d6cdc7bd44918535da54060a10a12b1591328bff@%3Cnotifications.skywalking.apache.org%3E",
+            "https://lists.apache.org/thread.html/r88d69555cb74a129a7bf84838073b61259b4a3830190e05a3b87994e@%3Ccommits.pulsar.apache.org%3E",
+            "https://lists.apache.org/thread.html/rc1e9ff22c5641d73701ba56362fb867d40ed287cca000b131dcf4a44@%3Ccommits.pulsar.apache.org%3E",
+            "https://nvd.nist.gov/vuln/detail/CVE-2021-3121",
+            "https://pkg.go.dev/vuln/GO-2021-0053",
+            "https://security.netapp.com/advisory/ntap-20210219-0006",
+            "https://security.netapp.com/advisory/ntap-20210219-0006/",
+            "https://www.cve.org/CVERecord?id=CVE-2021-3121"
+          ],
+          "PublishedDate": "2021-01-11T06:15:13.46Z",
+          "LastModifiedDate": "2026-06-17T04:04:42.213Z"
+        }
+      ]
+    }
+  ]
+}
