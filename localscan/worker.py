@@ -371,14 +371,39 @@ def parse_results(tool, data, exit_code, expected):
         if exit_code != 0 or native.get("SchemaVersion") != 2 or not isinstance(native.get("Results"), list):
             raise ScanError("Trivy process or output schema failed")
         for result in native["Results"]:
-            if result.get("Type") != "gomod" or not isinstance(result.get("Packages"), list):
+            # Pinned Trivy reports third-party Go CycloneDX components as
+            # gobinary, not necessarily gomod. Neither label enables image or
+            # executable scanning: input_sbom still permits only Go SBOMs.
+            if (not isinstance(result, dict) or result.get("Type") not in ("gomod", "gobinary")
+                    or not isinstance(result.get("Packages"), list)):
                 raise ScanError("missing or unsupported Trivy package inventory")
+            inventory = set()
             for package in result["Packages"]:
-                identity(package["Name"], package["Version"])
-            for vuln in result.get("Vulnerabilities", []) or []:
-                key = identity(vuln["PkgName"], vuln["InstalledVersion"])
-                fixed = [v.strip() for v in (vuln.get("FixedVersion") or "").split(",") if v.strip()]
-                finding(key, vuln["VulnerabilityID"], [], fixed, vuln.get("Severity", "UNKNOWN"))
+                if not isinstance(package, dict):
+                    raise ScanError("invalid Trivy package inventory entry")
+                inventory.add(identity(package["Name"], package["Version"]))
+            vulnerabilities = result.get("Vulnerabilities")
+            if vulnerabilities is None:  # omitted/null is valid Go JSON output
+                vulnerabilities = []
+            if not isinstance(vulnerabilities, list):
+                raise ScanError("invalid Trivy vulnerabilities")
+            for vuln in vulnerabilities:
+                if not isinstance(vuln, dict):
+                    raise ScanError("invalid Trivy vulnerability entry")
+                key = (vuln["PkgName"], version_key(vuln["InstalledVersion"]))
+                # An advisory cannot fill a hole in --list-all-pkgs coverage,
+                # or borrow a package from a different native result section.
+                if key not in inventory:
+                    raise ScanError("Trivy vulnerability is absent from its package inventory")
+                fixed_text = vuln.get("FixedVersion")
+                if fixed_text is None:
+                    fixed_text = ""
+                if not isinstance(fixed_text, str):
+                    raise ScanError("invalid Trivy fixed version")
+                fixed = [v.strip() for v in fixed_text.split(",") if v.strip()]
+                aliases = vuln.get("VendorIDs")
+                finding(key, vuln["VulnerabilityID"], [] if aliases is None else aliases,
+                        fixed, vuln.get("Severity", "UNKNOWN"))
     else:
         raise ScanError("unsupported tool")
     if covered != expected:
