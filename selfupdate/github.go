@@ -3,6 +3,7 @@ package selfupdate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -12,7 +13,7 @@ import (
 
 // Repo 是发布源。写死而不是做成配置项：更新源可配等于给任何能改配置的人一条
 // 远程代码执行通道，对一个渗透测试平台来说这个口子开不得。
-const Repo = "Autumn-27/artex"
+const Repo = "knowlet/artex-ymh"
 
 // latestURL 是 GitHub 的"最新正式版"接口。它会自动跳过 prerelease 和 draft。
 const latestURL = "https://api.github.com/repos/" + Repo + "/releases/latest"
@@ -84,9 +85,31 @@ func checkURL(u *url.URL) error {
 	return nil
 }
 
-// FetchLatest 查询最新正式版。
-func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestURL, nil)
+// CheckError identifies a release-check failure without treating every failure as
+// a network/proxy problem. The wrapped error preserves cancellation detection.
+type CheckError struct {
+	Code string
+	Err  error
+}
+
+func (e *CheckError) Error() string { return e.Err.Error() }
+func (e *CheckError) Unwrap() error { return e.Err }
+
+// CheckErrorCode is stable across error wrapping and is sent to the settings UI.
+func CheckErrorCode(err error) string {
+	var e *CheckError
+	if errors.As(err, &e) {
+		return e.Code
+	}
+	return "unknown"
+}
+
+func checkError(code, message string) error {
+	return &CheckError{Code: code, Err: errors.New(message)}
+}
+
+func githubRequest(ctx context.Context, c *http.Client, endpoint string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -95,29 +118,66 @@ func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "artex-selfupdate")
-
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("访问 GitHub 失败（可在系统设置里配置全局代理）: %w", err)
+		return nil, &CheckError{Code: "network", Err: fmt.Errorf("访问 GitHub 失败: %w", err)}
+	}
+	return resp, nil
+}
+
+func githubStatusError(resp *http.Response) error {
+	switch {
+	case resp.StatusCode == http.StatusTooManyRequests,
+		resp.StatusCode == http.StatusForbidden &&
+			(resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.Header.Get("Retry-After") != ""):
+		return checkError("rate_limited", "GitHub 接口限流，请稍后再试")
+	case resp.StatusCode == http.StatusForbidden, resp.StatusCode == http.StatusUnauthorized:
+		return checkError("access_denied", "GitHub 拒绝访问更新源，请检查仓库可见性或访问权限")
+	case resp.StatusCode != http.StatusOK:
+		return checkError("github_error", fmt.Sprintf("GitHub 返回 %d，无法确认最新版本", resp.StatusCode))
+	}
+	return nil
+}
+
+// FetchLatest queries only this fork. A missing latest Release is ambiguous on
+// GitHub: verify repository visibility before claiming that no release exists.
+func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
+	resp, err := githubRequest(ctx, c, latestURL)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
-
-	switch {
-	case resp.StatusCode == http.StatusForbidden, resp.StatusCode == http.StatusTooManyRequests:
-		// 未认证的 GitHub API 是每 IP 每小时 60 次，共用出口 IP 时很容易撞上。
-		return nil, fmt.Errorf("GitHub 接口限流（每小时 60 次），请稍后再试")
-	case resp.StatusCode == http.StatusNotFound:
-		return nil, fmt.Errorf("仓库 %s 尚未发布任何正式版本", Repo)
-	case resp.StatusCode != http.StatusOK:
-		return nil, fmt.Errorf("GitHub 返回 %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusNotFound {
+		// Do not follow an upstream fallback or consume a second release source.
+		_ = resp.Body.Close()
+		repo, err := githubRequest(ctx, c, "https://api.github.com/repos/"+Repo)
+		if err != nil {
+			return nil, err
+		}
+		defer repo.Body.Close()
+		if repo.StatusCode == http.StatusNotFound {
+			return nil, checkError("repository_unavailable", fmt.Sprintf("更新源 %s 不存在或当前不可见，无法确认是否有正式版本", Repo))
+		}
+		if err := githubStatusError(repo); err != nil {
+			return nil, err
+		}
+		var info struct {
+			FullName string `json:"full_name"`
+		}
+		if err := json.NewDecoder(repo.Body).Decode(&info); err != nil || !strings.EqualFold(info.FullName, Repo) {
+			return nil, checkError("github_error", "GitHub 返回的仓库信息无法确认更新源，不能判定为无正式版本")
+		}
+		return nil, checkError("no_release", fmt.Sprintf("仓库 %s 当前可访问，但没有可用的最新正式版本（不含预发布或草稿）", Repo))
 	}
-
+	if err := githubStatusError(resp); err != nil {
+		return nil, err
+	}
 	var rel Release
 	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return nil, fmt.Errorf("解析 Release 失败: %w", err)
+		return nil, &CheckError{Code: "invalid_release", Err: fmt.Errorf("解析 Release 失败: %w", err)}
 	}
-	if strings.TrimSpace(rel.TagName) == "" {
-		return nil, fmt.Errorf("Release 缺少 tag")
+	if strings.TrimSpace(rel.TagName) == "" || rel.Draft || rel.Prerelease {
+		return nil, checkError("invalid_release", "GitHub 未返回有效的最新正式版本")
 	}
 	return &rel, nil
 }

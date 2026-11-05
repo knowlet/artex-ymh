@@ -145,59 +145,69 @@ func TestVerifyStagedRejectsUnrunnableBinary(t *testing.T) {
 	}
 }
 
-func TestApplyStagedHappyPath(t *testing.T) {
+// A fork without its own reviewed release chain must not execute staged bytes,
+// even when they have a matching checksum or the signature escape hatch is set.
+func TestApplyStagedBlockedPreservesFiles(t *testing.T) {
 	requireUnix(t)
-	p := testPaths(t)
-	fakeBin(t, p.Current, "old", 0)
-	stage(t, p, "new", 0)
-	if err := writeMarker(p.Marker, marker{From: "0.3.7", To: "0.3.8"}); err != nil {
-		t.Fatalf("写标记: %v", err)
-	}
-
-	action, st := applyStaged(p)
-	if action != Restart {
-		t.Fatalf("期望 Restart，得到 %v", action)
-	}
-	if !st.Pending {
-		t.Error("换装后状态应为 Pending")
-	}
-	if !strings.Contains(readAll(t, p.Current), "new") {
-		t.Error("artex 应已被替换为新版本")
-	}
-	if !strings.Contains(readAll(t, p.Old), "old") {
-		t.Error("旧版本应备份到 artex.old")
-	}
-	if _, err := os.Stat(p.New); !os.IsNotExist(err) {
-		t.Error("换装后 artex.new 应已消失")
-	}
-	if _, err := os.Stat(p.Sum); !os.IsNotExist(err) {
-		t.Error("换装后校验和文件应已清理")
-	}
-	// 标记必须留着，下一次启动（跑的是新版）靠它计数、必要时回滚。
-	if _, ok := readMarker(p.Marker); !ok {
-		t.Error("换装后升级标记应保留")
+	for _, content := range []string{"matching checksum", "tampered"} {
+		t.Run(content, func(t *testing.T) {
+			p := testPaths(t)
+			fakeBin(t, p.Current, "old", 0)
+			fakeBin(t, p.Old, "backup", 0)
+			stage(t, p, "new", 0)
+			sentinel := filepath.Join(p.Dir, "staged-binary-ran")
+			script := "#!/bin/sh\n: > '" + strings.ReplaceAll(sentinel, "'", "'\\''") + "'\nexit 0\n"
+			if err := os.WriteFile(p.New, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			sum, err := fileSHA256(p.New)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p.Sum, []byte(sum), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if content == "tampered" {
+				fakeBin(t, p.New, "tampered", 0)
+			}
+			if err := writeMarker(p.Marker, marker{From: "0.3.12", To: "0.3.13"}); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(skipSignEnv, "1")
+			before := map[string]string{}
+			for _, path := range []string{p.Current, p.New, p.Sum, p.Old, p.Marker} {
+				before[path] = readAll(t, path)
+			}
+			action, st := bootstrap(p)
+			if action != Continue || !st.BlockedStage || st.FailedStage || st.Pending || !strings.Contains(st.Detail, InstallDisabledReason) {
+				t.Fatalf("expected blocked staging notice, got action=%v state=%+v", action, st)
+			}
+			settle(p)
+			if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+				t.Fatalf("blocked binary was executed: %v", err)
+			}
+			for path, want := range before {
+				if got := readAll(t, path); got != want {
+					t.Fatalf("blocked staging modified %s: %q != %q", path, got, want)
+				}
+			}
+		})
 	}
 }
 
-func TestApplyStagedKeepsCurrentWhenVerifyFails(t *testing.T) {
-	requireUnix(t)
+func TestBootstrapMarkerOnlyStillTracksAttempts(t *testing.T) {
 	p := testPaths(t)
-	fakeBin(t, p.Current, "old", 0)
-	stage(t, p, "new", 0)
-	fakeBin(t, p.New, "tampered", 0) // 破坏校验和
-
-	action, st := applyStaged(p)
-	if action != Continue {
-		t.Fatalf("校验失败时期望 Continue，得到 %v", action)
+	if err := writeMarker(p.Marker, marker{From: "0.3.7", To: "0.3.8"}); err != nil {
+		t.Fatal(err)
 	}
-	if !st.FailedStage {
-		t.Error("状态应标记为 FailedStage")
+	action, st := bootstrap(p)
+	m, ok := readMarker(p.Marker)
+	if action != Continue || !st.Pending || st.BlockedStage || !ok || m.Attempts != 1 {
+		t.Fatalf("marker-only rollback tracking changed: action=%v state=%+v marker=%+v", action, st, m)
 	}
-	if !strings.Contains(readAll(t, p.Current), "old") {
-		t.Fatal("校验失败时绝不能动当前版本")
-	}
-	if _, err := os.Stat(p.New); !os.IsNotExist(err) {
-		t.Error("校验失败的暂存件应被清理，否则下次启动会再试一遍")
+	settle(p)
+	if _, err := os.Stat(p.Marker); !os.IsNotExist(err) {
+		t.Fatalf("marker-only settle should still complete: %v", err)
 	}
 }
 

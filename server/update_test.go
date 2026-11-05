@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,5 +154,46 @@ func TestReleaseCacheDoesNotPoisonOnCallerCancel(t *testing.T) {
 	}
 	if rel == nil || rel.TagName != "v0.3.8" {
 		t.Fatalf("应拿到正常结果，得到 %+v", rel)
+	}
+}
+
+func TestUpdateApplyDisabledBeforeManagerCacheOrProgress(t *testing.T) {
+	// No manager or context: the disabled policy must return before using either,
+	// before consulting release metadata, and before beginning asynchronous work.
+	s := &Server{}
+	w := httptest.NewRecorder()
+	s.updateApply(w, httptest.NewRequest(http.MethodPost, "/api/update/apply", nil))
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), selfupdate.InstallDisabledReason) {
+		t.Fatalf("unsafe apply response: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdateCheckReportsDisabledPolicyForMetadataOutcomes(t *testing.T) {
+	originalCache, originalVersion := relCache, BuildVersion
+	t.Cleanup(func() { relCache, BuildVersion = originalCache, originalVersion })
+	BuildVersion = "0.3.12"
+	for _, failure := range []bool{false, true} {
+		relCache = newTestCache(func(context.Context, *http.Client) (*selfupdate.Release, error) {
+			if failure {
+				return nil, &selfupdate.CheckError{Code: "no_release", Err: errors.New("no release")}
+			}
+			return &selfupdate.Release{TagName: "v0.3.13"}, nil
+		})
+		w := httptest.NewRecorder()
+		s := &Server{m: &Manager{}}
+		s.updateCheck(w, httptest.NewRequest(http.MethodGet, "/api/update/check", nil))
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != http.StatusOK || body["install_enabled"] != false || body["install_reason"] != selfupdate.InstallDisabledReason || body["repo"] != "knowlet/artex-ymh" {
+			t.Fatalf("disabled policy omitted: %d %+v", w.Code, body)
+		}
+		if failure && body["error_code"] != "no_release" {
+			t.Fatalf("classification lost: %+v", body)
+		}
+		if !failure && body["has_update"] != true {
+			t.Fatalf("newer fork metadata not retained: %+v", body)
+		}
 	}
 }
