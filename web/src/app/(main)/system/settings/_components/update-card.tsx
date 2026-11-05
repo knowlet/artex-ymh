@@ -133,7 +133,7 @@ export function UpdateCard() {
   );
 
   const doUpdate = () => {
-    if (!info) return;
+    if (!info?.install_enabled) return;
     const from = info.current;
     const ok = window.confirm(
       `确定更新到 ${info.latest}？\n\n` +
@@ -205,7 +205,9 @@ export function UpdateCard() {
           <DownloadIcon className="size-4" />
           版本与更新
         </CardTitle>
-        <CardDescription>从 GitHub 检查并安装新版本。更新会重启程序，正在运行的任务会被中断。</CardDescription>
+        <CardDescription>
+          检查此二开版的 GitHub 正式版本。独立发布与签名链审核完成前，一键安装保持禁用。
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -248,11 +250,15 @@ export function UpdateCard() {
           </p>
         )}
 
+        {info && !info.install_enabled && info.install_reason && (
+          <p className="text-xs text-muted-foreground">{info.install_reason}</p>
+        )}
+
         {info?.error && (
           <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
             <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
-            无法连接 GitHub：{info.error}
-            {"　"}可在上方配置全局代理后重试。
+            检查更新：{info.error}
+            {info.error_code === "network" && " 请检查服务器网络；确实需要代理时，可在上方配置全局代理。"}
           </p>
         )}
 
@@ -265,7 +271,7 @@ export function UpdateCard() {
           </p>
         )}
 
-        {info?.has_update && info.asset_available !== false && (
+        {info?.install_enabled && info.has_update && info.asset_available !== false && (
           <p className="text-xs text-muted-foreground">
             将下载 <span className="font-mono">{info.asset}</span>
             {info.size ? `（${humanSize(info.size)}）` : ""}，校验 SHA256 并冒烟测试后才会替换，失败自动保留当前版本。
@@ -279,7 +285,7 @@ export function UpdateCard() {
           </p>
         )}
 
-        {info?.mode === "docker" && info.has_update && (
+        {info?.install_enabled && info.mode === "docker" && info.has_update && (
           <p className="text-xs text-muted-foreground">
             Docker 下的更新只替换程序本身，不更新镜像里的 playwright / nmap 等工具链，且
             <span className="font-mono"> docker compose up -d </span>
@@ -305,10 +311,12 @@ export function UpdateCard() {
           <Button
             size="sm"
             onClick={doUpdate}
-            disabled={busy || restarting || !info?.has_update || info?.asset_available === false}
+            disabled={
+              busy || restarting || !info?.install_enabled || !info?.has_update || info?.asset_available === false
+            }
           >
             <DownloadIcon className="size-4" />
-            {info?.has_update ? `更新到 ${info.latest}` : "立即更新"}
+            {!info?.install_enabled ? "一键安装未启用" : info.has_update ? `更新到 ${info.latest}` : "立即更新"}
           </Button>
           {info?.has_backup && (
             <Button variant="ghost" size="sm" onClick={doRollback} disabled={busy || restarting}>
@@ -319,7 +327,7 @@ export function UpdateCard() {
         </div>
 
         <p className="text-xs text-muted-foreground">
-          一键更新依赖守护脚本重启程序。请通过 <span className="font-mono">start.sh</span>（Windows 为
+          更新与回滚依赖守护脚本重启程序。请通过 <span className="font-mono">start.sh</span>（Windows 为
           <span className="font-mono"> start.bat</span>）启动 ARTEX；直接运行 artex 本体时，程序退出后不会被自动拉起。
         </p>
       </CardContent>
