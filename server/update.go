@@ -137,26 +137,44 @@ var updHub = &updateHub{
 
 // begin 抢占升级权限，已在进行中则返回 false。
 func (h *updateHub) begin(version string) bool {
+	return h.beginOperation(updateProgress{Phase: selfupdate.PhaseDownload, Percent: 0, Message: "准备中…", Version: version})
+}
+
+func (h *updateHub) beginRollback() bool {
+	return h.beginOperation(updateProgress{Phase: selfupdate.PhaseVerify, Percent: -1, Message: "正在验证并恢复上一版本…"})
+}
+
+func (h *updateHub) beginOperation(progress updateProgress) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.running {
 		return false
 	}
 	h.running = true
-	h.cur = updateProgress{Phase: selfupdate.PhaseDownload, Percent: 0, Message: "准备中…", Version: version}
+	h.cur = progress
 	h.fanout(h.cur)
 	return true
 }
 
 // finish 结束一次升级。err 为 nil 表示暂存成功，等待重启。
 func (h *updateHub) finish(err error) {
+	h.finishOperation(err, "新版本已就绪，正在重启…")
+}
+
+func (h *updateHub) finishRollback(err error) {
+	h.finishOperation(err, "已恢复上一版本，正在重启…")
+}
+
+func (h *updateHub) finishOperation(err error, successMessage string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.running = false
+	// Successful operations keep admission closed until this process exits.
+	// Otherwise another request can replace/delete staged files during restart.
+	h.running = err == nil
 	if err != nil {
 		h.cur = updateProgress{Phase: selfupdate.PhaseFailed, Percent: -1, Message: "更新失败", Error: err.Error(), Version: h.cur.Version}
 	} else {
-		h.cur = updateProgress{Phase: selfupdate.PhaseStaged, Percent: 100, Message: "新版本已就绪，正在重启…", Version: h.cur.Version}
+		h.cur = updateProgress{Phase: selfupdate.PhaseStaged, Percent: 100, Message: successMessage, Version: h.cur.Version}
 	}
 	h.fanout(h.cur)
 }
@@ -268,6 +286,10 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 // 立刻返回 202，实际工作在后台 goroutine 上跑：整包下载可能要几分钟，
 // 挂在请求上会被反代超时掐断。进度走 /api/update/stream。
 func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
+	if _, running := updHub.snapshot(); running {
+		writeErr(w, 409, "已有一个更新或回滚正在进行中")
+		return
+	}
 	current := BuildVersion
 
 	// 走缓存：确保装上的就是用户在界面上看到并确认的那个版本。
@@ -313,11 +335,13 @@ func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
 
 // updateRollback 主动退回上一版本（换装前备份的 artex.old）。
 func (s *Server) updateRollback(w http.ResponseWriter, r *http.Request) {
-	if _, running := updHub.snapshot(); running {
-		writeErr(w, 409, "更新正在进行中，无法回滚")
+	if !updHub.beginRollback() {
+		writeErr(w, 409, "已有一个更新或回滚正在进行中")
 		return
 	}
-	if err := selfupdate.Rollback(); err != nil {
+	err := selfupdate.Rollback()
+	updHub.finishRollback(err)
+	if err != nil {
 		writeErr(w, 400, err.Error())
 		return
 	}

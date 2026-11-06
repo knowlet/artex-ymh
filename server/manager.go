@@ -927,7 +927,9 @@ func decodeStrSlice(raw json.RawMessage) []string {
 func decodeStrMap(raw json.RawMessage) map[string]string {
 	out := map[string]string{}
 	if len(raw) > 0 {
-		_ = json.Unmarshal(raw, &out)
+		if err := json.Unmarshal(raw, &out); err != nil || out == nil {
+			return map[string]string{}
+		}
 	}
 	return out
 }
@@ -1129,8 +1131,8 @@ func newTarpitConfig(pg *pgdb.DB, store *pgdb.ExplorationStore) guard.TarpitConf
 
 func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Interceptor, pg *pgdb.DB, eg *guard.EgressGuard) *Task {
 	g := guard.NewWithInterceptor(ic)
-	g.SetRoE(newRoEConfig(pg))          // RoE 范围强制(F5):worker 的 Bash/HTTP 目标与 task_scope 比对
-	g.SetEgress(eg)                     // 批 5 B2 出口审查:进程级共享指纹集合
+	g.SetRoE(newRoEConfig(pg))              // RoE 范围强制(F5):worker 的 Bash/HTTP 目标与 task_scope 比对
+	g.SetEgress(eg)                         // 批 5 B2 出口审查:进程级共享指纹集合
 	g.SetTarpit(newTarpitConfig(pg, store)) // 批 5 B3 tarpit 熔断(每任务计数,重启清零)
 	return &Task{
 		ID: strconv.FormatInt(pt.ID, 10), ExpID: pt.ExplorationID,

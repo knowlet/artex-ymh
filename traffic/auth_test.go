@@ -132,24 +132,27 @@ func TestProxyAuthEnvSwitch(t *testing.T) {
 }
 
 func TestSslInsecureEnvSwitch(t *testing.T) {
-	// Default stays true (historical behavior, pentest targets break TLS).
-	tr, err := Open(t.TempDir(), "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tr.Close()
-	if !tr.proxy.Opts.SslInsecure {
-		t.Fatal("SslInsecure must default to true")
-	}
-
-	t.Setenv("ARTEX_PROXY_SSL_INSECURE", "false")
-	tr2, err := Open(t.TempDir(), "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tr2.Close()
-	if tr2.proxy.Opts.SslInsecure {
-		t.Fatal("ARTEX_PROXY_SSL_INSECURE=false must turn SslInsecure off")
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{"", false}, {"false", false}, {"0", false}, {"invalid", false},
+		{"true", true}, {"1", true}, {" TRUE ", true},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			t.Setenv("ARTEX_PROXY_SSL_INSECURE", test.value)
+			if test.value == "" {
+				_ = os.Unsetenv("ARTEX_PROXY_SSL_INSECURE")
+			}
+			tr, err := Open(t.TempDir(), "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tr.Close()
+			if tr.proxy.Opts.SslInsecure != test.want {
+				t.Fatalf("SslInsecure for %q = %v, want %v", test.value, tr.proxy.Opts.SslInsecure, test.want)
+			}
+		})
 	}
 }
 

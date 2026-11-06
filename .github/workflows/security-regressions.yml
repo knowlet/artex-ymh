@@ -84,6 +84,13 @@ jobs:
               (module + '/server', 'TestSecurityPGAuthBodyLimit'),
               (module + '/server', 'TestSecurityPGResetRevokesAndRollsBack'),
               (module + '/server', 'TestSecurityPGConcurrentRefreshHasOneWinner'),
+              (module + '/server', 'TestSecurityPGPasswordChangeCommitsRevocation'),
+              (module + '/server', 'TestSecurityPGPasswordChangeRollback'),
+              (module + '/server', 'TestSecurityPGConcurrentPasswordChangeHasOneWinner'),
+              (module + '/db', 'TestSecurityPGRecordPagination'),
+              (module + '/db', 'TestSecurityPGDSLRestrictions'),
+              (module + '/server', 'TestSecurityPGProfileRequiresReplacementKeyForDestinationChange'),
+              (module + '/server', 'TestSecurityPGModelsAndTestCannotRedirectProfileKey'),
           }
           if not required_pg <= expected:
               sys.exit('Required PostgreSQL regression tests are missing from selection')
@@ -103,11 +110,18 @@ jobs:
                   skipped.append((event['Package'], event.get('Test', '<package>')))
           status = process.wait()
           missing = sorted(expected - passed)
+          print(f'Selected security tests: {len(expected)}; passed: {len(expected & passed)}')
           print('Skipped tests/packages:', skipped)
           print('Selected tests without a PASS event:', missing)
           print('Required PostgreSQL tests passed:', sorted(required_pg & passed))
           sys.exit(1 if status or missing or skipped else 0)
           PY
+      - name: Concurrent security regressions with the race detector
+        run: |
+          go test -race -v -count=1 -p=1 -timeout=10m \
+            ./server ./mcphttp ./selfupdate \
+            -run '^(TestLogSink|TestUpdateAndRollback|TestUpdateRoutesReject|TestConcurrentRollbacks|TestSettlePreserves|TestNewSSEHandshake|TestLoginThrottle|TestSecurityPGConcurrent)'
+          go test -race -v -count=1 -p=1 -timeout=10m ./traffic
       - name: Full Go regression and vet gates (baseline failures remain failures)
         id: candidate_gate
         run: |
@@ -179,3 +193,23 @@ jobs:
           if (( vet_status != 0 || test_status != 0 )); then
             exit 1
           fi
+
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Existing authentication and URL safety regressions
+        run: node --test web/src/lib/auth-refresh.test.mjs web/src/lib/safe-href.test.mjs
+      - run: npm ci
+        working-directory: web
+      - name: Type check notification security options
+        run: npx tsc --noEmit
+        working-directory: web

@@ -136,9 +136,13 @@ func (s *logSinkT) add(l LogLine) {
 		s.ring = s.ring[len(s.ring)-s.cap:]
 	}
 	ch := s.dbCh
-	subs := make([]chan LogLine, 0, len(s.subs))
+	// Sending and closing a subscription share this mutex. Snapshotting the
+	// channels and sending after unlock races a disconnect's close(ch).
 	for sub := range s.subs {
-		subs = append(subs, sub)
+		select {
+		case sub <- l:
+		default:
+		}
 	}
 	s.mu.Unlock()
 
@@ -146,13 +150,6 @@ func (s *logSinkT) add(l LogLine) {
 	if ch != nil {
 		select {
 		case ch <- dbWriteReq{seq: l.Seq, ll: l}:
-		default:
-		}
-	}
-
-	for _, sub := range subs {
-		select {
-		case sub <- l:
 		default:
 		}
 	}
@@ -187,8 +184,8 @@ func (s *logSinkT) subscribe() (<-chan LogLine, func()) {
 		once.Do(func() {
 			s.mu.Lock()
 			delete(s.subs, ch)
-			s.mu.Unlock()
 			close(ch)
+			s.mu.Unlock()
 		})
 	}
 }

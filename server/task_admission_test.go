@@ -539,14 +539,30 @@ func TestTaskLLMResolutionRejectsInvalidExplicitProfile(t *testing.T) {
 	}
 	defer m.Close()
 
-	profileID, err := m.pg.SaveProfile(&db.LLMProfile{
+	profile := &db.LLMProfile{
 		Name:   fmt.Sprintf("invalid-resolution-%d", time.Now().UnixNano()),
 		Format: "openai",
 		Model:  "invalid-model",
 		APIKey: "test-key",
 		Proxy:  "invalid-proxy-without-scheme",
-	})
-	if err != nil {
+	}
+	if id, err := m.pg.SaveProfile(profile); err == nil {
+		_ = m.pg.DeleteProfile(id)
+		t.Fatal("SaveProfile accepted a malformed proxy")
+	}
+	var saved int
+	if err := m.pg.QueryRow(`SELECT count(*) FROM llm_profiles WHERE name=$1`, profile.Name).Scan(&saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved != 0 {
+		t.Fatal("rejected profile was persisted")
+	}
+	// The write boundary now rejects malformed endpoints. Insert legacy-invalid
+	// data directly so runtime resolution must still fail closed for an explicit
+	// task profile instead of silently using another provider.
+	var profileID int64
+	if err := m.pg.QueryRow(`INSERT INTO llm_profiles(name,format,model,api_key,proxy) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+		profile.Name, profile.Format, profile.Model, profile.APIKey, profile.Proxy).Scan(&profileID); err != nil {
 		t.Fatal(err)
 	}
 	task, err := m.CreateTaskWithOptions("invalid resolution", "report unavailable", db.TaskCreateOptions{

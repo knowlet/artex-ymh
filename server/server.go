@@ -46,17 +46,18 @@ type Server struct {
 	engine *Engine
 	ctx    context.Context
 
-	skillDir  string              // root directory for skill subdirectories
-	jwtKey    []byte              // HS256 signing key loaded from / generated into dataDir/jwt.key
-	gate      *Gate               // 反测绘伪装门控(F14,见 gate.go);nil = 关闭
-	stage     *stagepkg.Manager   // 受管文件投递暂存(F13,见 stage.go);nil = 降级关闭
-	sessReg   *session.Registry   // 立足点会话注册表(期 1a,见 session.go);nil = DB 未就绪
-	sessStore *db.SessionStore    // 会话落库访问层(secret AES-GCM,密钥由 jwtKey 派生)
-	credStore *db.CredentialStore // 凭据落库访问层(期 2,secret AES-GCM,与 sessions 不同域标签)
-	tunnels   *tunnel.Manager     // 多层代理隧道(期 3a,见 tunnel.go);nil = DB 未就绪
-	reverse   *PenelopeHandler    // 反弹 shell handler(期 5,见 reverse.go);nil = DB 未就绪
-	tickets   sseTicketStore      // SSE 一次性票据(F6,见 auth.go),零值可用
-	authkv    authKV              // auth 持久层注入(测试用);nil = 走 m.pg
+	skillDir     string              // root directory for skill subdirectories
+	jwtKey       []byte              // HS256 signing key loaded from / generated into dataDir/jwt.key
+	gate         *Gate               // 反测绘伪装门控(F14,见 gate.go);nil = 关闭
+	stage        *stagepkg.Manager   // 受管文件投递暂存(F13,见 stage.go);nil = 降级关闭
+	sessReg      *session.Registry   // 立足点会话注册表(期 1a,见 session.go);nil = DB 未就绪
+	sessStore    *db.SessionStore    // 会话落库访问层(secret AES-GCM,密钥由 jwtKey 派生)
+	credStore    *db.CredentialStore // 凭据落库访问层(期 2,secret AES-GCM,与 sessions 不同域标签)
+	tunnels      *tunnel.Manager     // 多层代理隧道(期 3a,见 tunnel.go);nil = DB 未就绪
+	reverse      *PenelopeHandler    // 反弹 shell handler(期 5,见 reverse.go);nil = DB 未就绪
+	tickets      sseTicketStore      // SSE 一次性票据(F6,见 auth.go),零值可用
+	authkv       authKV              // auth 持久层注入(测试用);nil = 走 m.pg
+	loginLimiter authAttemptLimiter  // login throttling is independent of the optional gate
 
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
@@ -164,7 +165,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
 		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1)}
 	s.initSideQuestions()
-	s.initStage(dataDir) // 受管文件投递暂存(F13);失败降级为关闭,不影响启动
+	s.initStage(dataDir)        // 受管文件投递暂存(F13);失败降级为关闭,不影响启动
 	checkToolsManifest(dataDir) // 期 6 外部工具清单自检(缺失常态,只打汇总日志)
 	// 熔断阈值/冷却是失败路径上的热参数，启动时把全局重试策略推给 Registry 一次；
 	// 之后每次保存策略再推一次（saveLLMRetryPolicy）。
@@ -767,8 +768,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/scope", s.taskScopeList)
 	mux.HandleFunc("POST /api/tasks/{id}/scope", s.taskScopeAdd)
 	mux.HandleFunc("DELETE /api/tasks/{id}/scope/{sid}", s.taskScopeDelete)
-	mux.HandleFunc("GET /api/tasks/{id}/pending-scope", s.pendingScopeList)   // 期 4:待授权网段列表
-	mux.HandleFunc("POST /api/pending-scope/{id}/decide", s.pendingScopeDecide) // 期 4:审批扩 scope
+	mux.HandleFunc("GET /api/tasks/{id}/pending-scope", s.pendingScopeList)        // 期 4:待授权网段列表
+	mux.HandleFunc("POST /api/pending-scope/{id}/decide", s.pendingScopeDecide)    // 期 4:审批扩 scope
 	mux.HandleFunc("GET /api/tasks/{id}/goals", s.listGoals)                       // 目标管理:列出本任务全部目标
 	mux.HandleFunc("POST /api/tasks/{id}/goals", s.addGoal)                        // 目标管理:人工新增目标(复活任务)
 	mux.HandleFunc("PATCH /api/tasks/{id}/goals/{gid}", s.editGoal)                // 目标管理:修改目标(复活任务)
@@ -1437,8 +1438,12 @@ func (s *Server) setLLM(w http.ResponseWriter, r *http.Request) {
 	}
 	if cfg.APIKey == "" {
 		s.cfgMu.Lock()
-		cfg.APIKey = s.llmCfg.APIKey // keep existing key if not re-entered
+		source := s.llmCfg
 		s.cfgMu.Unlock()
+		if err := reuseLLMKey(&cfg, source); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
 	}
 	if cfg.APIKey == "" {
 		writeErr(w, 400, "api_key required")
@@ -1502,19 +1507,31 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 	// 已存 profile 的 key 不回传浏览器，所以测试已存配置时表单为空，需从 DB 取。
 	// 会话头名同理：表单未带时用已存 profile 的值兜底。
 	if req.ProfileID != nil && (cfg.APIKey == "" || cfg.SessionHeaderKey == "") {
-		if p, err := s.m.pg.ProfileByID(*req.ProfileID); err == nil && p != nil {
-			if cfg.APIKey == "" {
-				cfg.APIKey = p.APIKey
-			}
-			if cfg.SessionHeaderKey == "" {
-				cfg.SessionHeaderKey = p.SessionHeaderKey
-			}
+		pg := s.pg(w)
+		if pg == nil {
+			return
+		}
+		p, err := pg.ProfileByID(*req.ProfileID)
+		if err != nil || p == nil {
+			writeErr(w, 400, "LLM 配置不存在或无法读取")
+			return
+		}
+		if err := reuseLLMKey(&cfg, agent.ConfigFrom(p.Format, p.Model, p.BaseURL, p.APIKey, p.Proxy)); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		if cfg.SessionHeaderKey == "" {
+			cfg.SessionHeaderKey = p.SessionHeaderKey
 		}
 	}
 	if cfg.APIKey == "" {
 		s.cfgMu.Lock()
-		cfg.APIKey = s.llmCfg.APIKey
+		source := s.llmCfg
 		s.cfgMu.Unlock()
+		if err := reuseLLMKey(&cfg, source); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
 	}
 	if cfg.APIKey == "" {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": "未提供 API Key"})

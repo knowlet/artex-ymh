@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Autumn-27/artex/internal/endpoint"
 	"github.com/Autumn-27/artex/llmrec"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/compaction"
@@ -254,13 +255,17 @@ func (c Config) Provider() string {
 // limiter lives on the single provider instance — so planner + all workers +
 // main agent (which share this provider) are bounded by one shared rate limit.
 func (c Config) NewProvider() (llm.Provider, error) {
-	client, err := quotaAwareHTTPClient(c.Proxy, c.SessionHeaderKey)
+	dest, err := endpoint.LLM(c.Provider(), c.BaseURL, c.Proxy)
+	if err != nil {
+		return nil, err
+	}
+	client, err := quotaAwareHTTPClient(dest.Proxy, c.SessionHeaderKey)
 	if err != nil {
 		return nil, err
 	}
 	lc := llm.Config{
 		Format:     c.Format,
-		BaseURL:    c.BaseURL,
+		BaseURL:    dest.BaseURL,
 		APIKey:     c.APIKey,
 		Model:      c.Model,
 		HTTPClient: client,
@@ -423,7 +428,7 @@ func quotaAwareHTTPClient(proxy, sessionHeaderKey string) (*http.Client, error) 
 		}
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
-	return &http.Client{Transport: quotaAwareTransport{base: transport, sessionHeaderKey: strings.TrimSpace(sessionHeaderKey)}}, nil
+	return &http.Client{Transport: quotaAwareTransport{base: transport, sessionHeaderKey: strings.TrimSpace(sessionHeaderKey)}, CheckRedirect: endpoint.CheckRedirect}, nil
 }
 
 // logTestConnection prints the raw HTTP status code(s) and response body of a
