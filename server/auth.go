@@ -427,12 +427,18 @@ func clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
 
 // issueSession 登录/初始化成功后统一调用:签 access token(带当前版本)+
 // 下发 refresh cookie,响应体只含 access token。
-func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, kv authKV) {
-	ver, ok := authKeyVersion(kv)
+func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, kv authKV, ver int64) {
+	current, ok := authKeyVersion(kv)
 	if !ok {
 		writeErr(w, 500, "读取密钥版本失败")
 		return
 	}
+	if current != ver {
+		writeErr(w, 401, "密码已更改，请重新登录")
+		return
+	}
+	// Sign the version captured BEFORE authenticating the password. A reset
+	// committing after this check can only leave us with already-revoked tokens.
 	access, err := signJWT(s.jwtKey, ver)
 	if err != nil {
 		writeErr(w, 500, "token 生成失败")
@@ -516,6 +522,11 @@ func (s *Server) authInit(w http.ResponseWriter, r *http.Request) {
 	if pg == nil {
 		return
 	}
+	ver, ok := authKeyVersion(pg)
+	if !ok {
+		writeErr(w, 500, "读取密钥版本失败")
+		return
+	}
 	existing, _, err := pg.GetSetting(authPassKey)
 	if err != nil {
 		writeErr(w, 500, "读取密码状态失败")
@@ -549,7 +560,7 @@ func (s *Server) authInit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 403, "密码已设置")
 		return
 	}
-	s.issueSession(w, r, pg)
+	s.issueSession(w, r, pg, ver)
 }
 
 // POST /api/auth/change-password — changes the admin password. Requires a valid
@@ -589,14 +600,13 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "密码加密失败")
 		return
 	}
-	if err := pg.SetSetting(authPassKey, string(newHash)); err != nil {
-		writeErr(w, 500, "保存失败: "+err.Error())
+	changed, err := pg.ChangeAuthPassword(hash, string(newHash))
+	if err != nil {
+		writeErr(w, 500, "保存密码并吊销旧凭据失败")
 		return
 	}
-	// 密钥版本 +1:此前签发的所有 access/refresh token 立即吊销(F6),
-	// 前端收到成功后应强制重新登录。
-	if _, err := bumpAuthKeyVersion(pg); err != nil {
-		writeErr(w, 500, "吊销旧凭证失败: "+err.Error())
+	if !changed {
+		writeErr(w, 409, "密码已被其他请求更改，请重新登录后重试")
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -661,8 +671,12 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/auth/login — validates username/password and returns a JWT.
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
-	pg := s.pg(w)
-	if pg == nil {
+	if !s.allowLoginAttempt(w, r) {
+		return
+	}
+	kv := s.authSettings()
+	if kv == nil {
+		writeErr(w, 503, "管理后台数据源(PostgreSQL)未连接")
 		return
 	}
 	var req struct {
@@ -676,7 +690,16 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, "用户名或密码错误")
 		return
 	}
-	hash, ok, _ := pg.GetSetting(authPassKey)
+	ver, validVersion := authKeyVersion(kv)
+	if !validVersion {
+		writeErr(w, 500, "读取密钥版本失败")
+		return
+	}
+	hash, ok, err := kv.GetSetting(authPassKey)
+	if err != nil {
+		writeErr(w, 500, "读取密码状态失败")
+		return
+	}
 	if !ok || hash == "" {
 		writeErr(w, 403, "密码未初始化，请先设置密码")
 		return
@@ -685,5 +708,5 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, "用户名或密码错误")
 		return
 	}
-	s.issueSession(w, r, pg)
+	s.issueSession(w, r, kv, ver)
 }

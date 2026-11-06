@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -531,13 +532,20 @@ func identity(s string) string { return s }
 // shellQuote single-quotes a value for safe shell interpolation.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// renderTemplate replaces {name} placeholders with each param's rendered value.
+// renderTemplate replaces placeholders in the original template only. Values
+// remain literal data even when they contain another parameter's placeholder.
 func renderTemplate(tmpl string, params map[string]any, quote func(string) string) string {
-	out := tmpl
-	for k, v := range params {
-		out = strings.ReplaceAll(out, "{"+k+"}", quote(valToStr(v)))
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
 	}
-	return out
+	sort.Strings(keys)
+	replacements := make([]string, 0, 2*len(keys))
+	for _, k := range keys {
+		replacements = append(replacements, "{"+k+"}", quote(valToStr(params[k])))
+	}
+	// Replacer performs one pass and never searches its replacement strings.
+	return strings.NewReplacer(replacements...).Replace(tmpl)
 }
 
 // valToStr renders a param value: scalars as-is, arrays/objects as compact JSON.

@@ -12,10 +12,12 @@
 package intercept
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"regexp"
 	"strconv"
@@ -528,11 +530,19 @@ func (i *Interceptor) Match(toolName string, input []byte) (Decision, bool) {
 			Message:  "拦截规则加载失败,平台按 fail-closed 策略禁止执行此工具",
 		}, true
 	}
+	subjects, err := toolInputSubjects(input)
+	if err != nil {
+		return Decision{
+			RuleName: "invalid-tool-input",
+			Action:   "deny",
+			Message:  "工具参数不是有效 JSON，平台禁止执行",
+		}, true
+	}
 	if len(rules) == 0 {
 		return Decision{}, false
 	}
 	for _, r := range rules {
-		if ruleMatches(r, toolName, input) {
+		if ruleMatches(r, toolName, subjects) {
 			msg := r.Message
 			if msg == "" {
 				msg = defaultMessage(r.Action, r.Name)
@@ -552,20 +562,73 @@ func (i *Interceptor) Match(toolName string, input []byte) (Decision, bool) {
 	return Decision{}, false
 }
 
-func ruleMatches(r compiledRule, toolName string, input []byte) bool {
-	var subject string
+// toolInputSubjects preserves raw structural rules while also exposing the
+// JSON values consumed by tools. A canonical JSON subject covers escaped keys;
+// individual strings cover escapes that JSON encoding necessarily retains,
+// such as tabs, newlines and quotes. Never recursively decode a string value.
+func toolInputSubjects(input []byte) ([]string, error) {
+	subjects := []string{string(input)}
+	// Norma permits empty input for no-argument tools.
+	if len(input) == 0 {
+		return subjects, nil
+	}
+	if !json.Valid(input) {
+		return nil, errors.New("invalid tool input JSON")
+	}
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	var canonical bytes.Buffer
+	encoder := json.NewEncoder(&canonical)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	if text := strings.TrimSuffix(canonical.String(), "\n"); text != subjects[0] {
+		subjects = append(subjects, text)
+	}
+	// Inspect all string tokens, including duplicate members that a tool's
+	// typed JSON decoder may merge rather than replace. Token iteration also
+	// avoids adding recursion for deeply nested arguments.
+	decoder = json.NewDecoder(bytes.NewReader(input))
+	decoder.UseNumber()
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if text, ok := token.(string); ok {
+			subjects = append(subjects, text)
+		}
+	}
+	return subjects, nil
+}
+
+func ruleMatches(r compiledRule, toolName string, subjects []string) bool {
 	switch r.MatchTarget {
 	case "tool_name":
-		subject = toolName
+		subjects = []string{toolName}
 	case "tool_input":
-		subject = string(input)
+		// Raw structure and decoded strings are checked within the same rule.
 	default:
 		return false
 	}
-	if r.MatchType == "regex" {
-		return r.re != nil && r.re.MatchString(subject)
+	for _, subject := range subjects {
+		if r.MatchType == "regex" {
+			if r.re != nil && r.re.MatchString(subject) {
+				return true
+			}
+		} else if strings.Contains(subject, r.Pattern) {
+			return true
+		}
 	}
-	return strings.Contains(subject, r.Pattern)
+	return false
 }
 
 func defaultMessage(action, name string) string {

@@ -23,6 +23,8 @@ const (
 	maxConversationRequestBytes  = 64 << 10
 	maxConversationAgentKeyRunes = 120
 	maxConversationTitleRunes    = 200
+	maxConversationMessageBytes  = 2 << 20
+	maxConversationAttachments   = 32
 )
 
 func decodeConversationRequest(w http.ResponseWriter, r *http.Request, value any) bool {
@@ -386,21 +388,24 @@ func (s *Server) pgStopConversation(w http.ResponseWriter, r *http.Request) {
 // background (steps stream to conversation_activities, polled by the client). One
 // in-flight turn per conversation.
 func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Request) {
-	pg, c, ok := s.convByID(w, r)
-	if !ok {
-		return
-	}
 	var req struct {
 		Message     string           `json:"message"`
 		Attachments []chatAttachment `json:"attachments,omitempty"` // 方式1 上传的文件(路径相对会话工作目录)
 	}
-	if err := decode(r, &req); err != nil {
-		writeErr(w, 400, err.Error())
+	if !decodeBoundedJSON(w, r, &req, maxConversationMessageBytes) {
+		return
+	}
+	if len(req.Attachments) > maxConversationAttachments {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("单次最多发送 %d 个附件", maxConversationAttachments))
 		return
 	}
 	msg := strings.TrimSpace(req.Message)
 	if msg == "" && len(req.Attachments) == 0 {
 		writeErr(w, 400, "消息不能为空")
+		return
+	}
+	pg, c, ok := s.convByID(w, r)
+	if !ok {
 		return
 	}
 	agentMessage, ok := s.prepareChatMentionMessage(w, msg)

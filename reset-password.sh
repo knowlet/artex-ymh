@@ -42,6 +42,41 @@ info() { echo "· $*" >&2; }
 
 usage() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 
+# Read only literal POSTGRES_* values. This deliberately is not a shell or a
+# Compose interpolation engine: use single/double quotes for spaces, and pass
+# expanded values explicitly when a deployment uses ${...} interpolation.
+# Unknown keys cannot overwrite script variables (SQL, PATH, EXEC_KIND, ...).
+read_postgres_env() {
+  local path="$1" line key value count=0 bytes
+  bytes="$(wc -c < "$path")"
+  [[ "$bytes" -le 65536 ]] || die ".env 超过 64 KiB，请通过命令行指定数据库参数"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    count=$((count + 1))
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    if [[ "$line" =~ ^(export[[:space:]]+)?(POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB)[[:space:]]*=(.*)$ ]]; then
+      key="${BASH_REMATCH[2]}"; value="${BASH_REMATCH[3]}"
+      value="${value#"${value%%[![:space:]]*}"}"
+      value="${value%"${value##*[![:space:]]}"}"
+      if [[ "$value" == \'* ]]; then
+        [[ "$value" =~ ^\'([^\']*)\'([[:space:]]+#.*)?$ ]] || die ".env 第 $count 行格式不受支持，请使用字面值"
+        value="${BASH_REMATCH[1]}"
+      elif [[ "$value" == \"* ]]; then
+        [[ "$value" =~ ^\"([^\"]*)\"([[:space:]]+#.*)?$ ]] || die ".env 第 $count 行格式不受支持，请使用字面值"
+        value="${BASH_REMATCH[1]}"
+        [[ "$value" != *'$'* && "$value" != *'`'* && "$value" != *'\'* ]] || die ".env 第 $count 行需要字面单引号值，不能使用展开/转义"
+      else
+        value="${value%%[[:space:]]#*}"
+        value="${value%"${value##*[![:space:]]}"}"
+        [[ "$value" != *[[:space:]]* && "$value" != *'$'* && "$value" != *'`'* && "$value" != *'\'* ]] || die ".env 第 $count 行需要字面单引号值，不能使用展开/转义"
+      fi
+      printf -v "$key" '%s' "$value"
+      export "$key"
+    fi
+  done < "$path"
+}
+
 # ---- 参数解析 -------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -172,7 +207,7 @@ if [[ "$MODE" == "local" ]]; then
   declare -a PSQL_ARGS=()
   if [[ -n "$DSN" ]]; then
     PSQL_ARGS=("$DSN")
-    target="$DSN"
+    target="已配置的 DSN（连接详情已隐藏）"
   else
     [[ -n "$USER"   ]] || die "缺少数据库用户（-U）或有效的 config.json/DSN"
     [[ -n "$DBNAME" ]] || die "缺少数据库名（-d）或有效的 config.json/DSN"
@@ -209,8 +244,7 @@ else
 
   # 容器内的 psql 凭据：优先命令行，其次 .env 的 POSTGRES_*，再退回 compose 默认(artex)
   if [[ -f .env ]]; then
-    # shellcheck disable=SC1091
-    set -a; . ./.env; set +a
+    read_postgres_env .env
   fi
   DUSER="${USER:-${POSTGRES_USER:-artex}}"
   DNAME="${DBNAME:-${POSTGRES_DB:-artex}}"

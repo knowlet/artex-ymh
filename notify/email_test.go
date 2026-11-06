@@ -28,7 +28,8 @@ type fakeSMTP struct {
 	// mailReply 是 MAIL FROM 的应答；默认 250。
 	mailReply string
 	// advertiseAuth 为 true 时在 EHLO 里声明支持 AUTH PLAIN。
-	advertiseAuth bool
+	advertiseAuth     bool
+	advertiseSTARTTLS bool
 
 	mu       sync.Mutex
 	data     string
@@ -102,7 +103,12 @@ func (f *fakeSMTP) serve() {
 			if f.advertiseAuth {
 				w("250-AUTH PLAIN")
 			}
+			if f.advertiseSTARTTLS {
+				w("250-STARTTLS")
+			}
 			w("250 8BITMIME")
+		case strings.HasPrefix(line, "STARTTLS"):
+			w("454 4.7.0 TLS unavailable")
 		case strings.HasPrefix(line, "AUTH"):
 			// 简化处理：PLAIN 的初始应答可能跨多行，直接接受。
 			w("235 2.7.0 Authentication successful")
@@ -140,10 +146,11 @@ func emailCfg(t *testing.T, f *fakeSMTP, extra map[string]any) map[string]any {
 	t.Helper()
 	host, port := f.hostPort(t)
 	cfg := map[string]any{
-		"host": host,
-		"port": float64(port),
-		"from": "artex@example.com",
-		"to":   []any{"a@example.com", "b@example.com"},
+		"host":           host,
+		"port":           float64(port),
+		"from":           "artex@example.com",
+		"to":             []any{"a@example.com", "b@example.com"},
+		"allow_insecure": true, // this fixture deliberately has no STARTTLS
 	}
 	for k, v := range extra {
 		cfg[k] = v

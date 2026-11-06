@@ -21,6 +21,10 @@ const sumsAsset = "SHA256SUMS"
 // maxBinarySize 限制解压出来的二进制体积，防止畸形 zip 把磁盘写满。
 const maxBinarySize = 512 << 20 // 512 MiB
 
+// A release ZIP includes the binary and supporting files. Bound the compressed
+// download independently of the extracted-binary limit and untrusted metadata.
+const maxReleaseAssetSize int64 = 1 << 30 // 1 GiB
+
 // Phase 是升级过程中的阶段，直接用作 SSE 事件里的 phase 字段。
 type Phase string
 
@@ -45,6 +49,11 @@ type Progress func(ph Phase, pct int, msg string)
 //
 // 函数返回即代表暂存完成，调用方随后优雅关闭并以 ExitRestart 退出。
 func Stage(ctx context.Context, c *http.Client, rel *Release, currentVersion string, prog Progress) error {
+	mutationMu.Lock()
+	defer mutationMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if prog == nil {
 		prog = func(Phase, int, string) {}
 	}
@@ -60,6 +69,9 @@ func Stage(ctx context.Context, c *http.Client, rel *Release, currentVersion str
 	asset, ok := rel.FindAsset(name)
 	if !ok {
 		return fmt.Errorf("该版本没有提供 %s/%s 的发布包（缺少 %s）", runtime.GOOS, runtime.GOARCH, name)
+	}
+	if _, err := assetDownloadLimit(asset); err != nil {
+		return err
 	}
 
 	prog(PhaseDownload, 0, "获取校验和清单…")
@@ -198,6 +210,24 @@ func isHexSHA256(s string) bool {
 
 // download 把资产写入 dst，同时计算 SHA256 并按 Content-Length 汇报进度。
 func download(ctx context.Context, c *http.Client, a Asset, dst string, prog Progress) (string, error) {
+	limit, err := assetDownloadLimit(a)
+	if err != nil {
+		return "", err
+	}
+	return downloadBounded(ctx, c, a, dst, prog, limit)
+}
+
+func assetDownloadLimit(a Asset) (int64, error) {
+	if a.Size < 0 || a.Size > maxReleaseAssetSize {
+		return 0, fmt.Errorf("发布包大小 %d 超出允许范围（最多 %s）", a.Size, humanSize(maxReleaseAssetSize))
+	}
+	if a.Size > 0 {
+		return a.Size, nil
+	}
+	return maxReleaseAssetSize, nil
+}
+
+func downloadBounded(ctx context.Context, c *http.Client, a Asset, dst string, prog Progress, limit int64) (string, error) {
 	body, err := get(ctx, c, a.URL)
 	if err != nil {
 		return "", fmt.Errorf("下载 %s: %w", a.Name, err)
@@ -208,19 +238,35 @@ func download(ctx context.Context, c *http.Client, a Asset, dst string, prog Pro
 	if err != nil {
 		return "", fmt.Errorf("创建临时文件: %w", err)
 	}
-	defer f.Close()
+	complete := false
+	defer func() {
+		_ = f.Close()
+		if !complete {
+			_ = os.Remove(dst)
+		}
+	}()
+	if prog == nil {
+		prog = func(Phase, int, string) {}
+	}
 
 	h := sha256.New()
 	pw := &progressWriter{total: a.Size, prog: prog, name: a.Name, last: time.Now()}
-	if _, err := io.Copy(io.MultiWriter(f, h, pw), body); err != nil {
+	if _, err := io.Copy(io.MultiWriter(f, h, pw), io.LimitReader(body, limit+1)); err != nil {
 		return "", fmt.Errorf("下载中断: %w", err)
 	}
-	if err := f.Sync(); err != nil {
-		return "", fmt.Errorf("落盘失败: %w", err)
+	if pw.written > limit {
+		return "", fmt.Errorf("发布包下载超过允许大小 %s", humanSize(limit))
 	}
 	if a.Size > 0 && pw.written != a.Size {
 		return "", fmt.Errorf("下载不完整：期望 %d 字节，实际 %d 字节", a.Size, pw.written)
 	}
+	if err := f.Sync(); err != nil {
+		return "", fmt.Errorf("落盘失败: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("关闭临时文件: %w", err)
+	}
+	complete = true
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 

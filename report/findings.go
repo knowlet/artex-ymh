@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Autumn-27/artex/db"
 )
@@ -147,10 +148,14 @@ func FindingFilename(f *db.DBFinding) string {
 func csvSafe(s string) string {
 	s = strings.ReplaceAll(s, "\r", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
-	if s == "" {
+	// Spreadsheet importers may discard leading whitespace/BOM before deciding
+	// whether a cell is a formula. Preserve that text, but test its effective
+	// prefix so tabs and normalized CR/LF cannot hide a formula marker.
+	value := strings.TrimLeftFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r == '\uFEFF' })
+	if value == "" {
 		return s
 	}
-	switch s[0] {
+	switch value[0] {
 	case '=', '+', '-', '@':
 		return "'" + s
 	}
