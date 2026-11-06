@@ -14,6 +14,8 @@
 
 本机和企业内网的 LLM / MCP endpoint 仍受支持。HTTP 客户端允许同来源的路径重定向，但拒绝跨 scheme、主机或端口转发 API key。ScopeSentry 更改 URL 时也要求重新提供 API key；现有私网连接用途保持可用。
 
+MCP HTTP 的单个 JSON response、SSE 行和完整 event 均限制为 8 MiB。Legacy SSE 握手最长 120 秒并服从调用方更短的 deadline；握手完成后，调用方初始化 context 取消不会终止已建立的长期 stream。
+
 stdio MCP 子进程只自动保留 PATH、HOME、临时目录、locale 和证书路径等运行所需的环境值。服务器的数据库、LLM 等其它环境值会在启动子进程前清空。MCP 明确配置的环境变量优先并会保留；依赖代理、特定 API key 或其它环境变量的 MCP 应在自己的环境配置中填写。此功能减少无意继承的凭据，不是进程沙箱。
 
 ## 录制代理的目标 TLS

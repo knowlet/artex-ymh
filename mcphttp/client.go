@@ -35,6 +35,7 @@ const legacySSEProtocolVersion = "2024-11-05"
 const (
 	maxSSELineBytes     = 8 << 20
 	maxSSEEventBytes    = 8 << 20
+	maxMCPJSONBytes     = 8 << 20
 	mcpHandshakeTimeout = 120 * time.Second
 )
 
@@ -520,8 +521,17 @@ func (c *Client) roundTrip(ctx context.Context, body rpcRequest, expectResp bool
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return parseSSE(resp.Body, body.ID)
 	}
+	// The peer chooses the response encoding. Applying the bound only to SSE
+	// would let the same endpoint bypass it with an application/json response.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxMCPJSONBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("mcp: read json response: %w", err)
+	}
+	if len(raw) > maxMCPJSONBytes {
+		return nil, errors.New("mcp: JSON response exceeds 8 MiB")
+	}
 	var out rpcResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("mcp: decode json response: %w", err)
 	}
 	return &out, nil
