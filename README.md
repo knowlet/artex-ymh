@@ -38,7 +38,9 @@ cd artex-ymh
 ./install.sh
 ```
 
-脚本会检测/自动安装 Docker，可选 **① 全部 Docker** 或 **② 本地编译运行**（生成 `config.json` 并编译内嵌单二进制）。装好后打开 `http://localhost:8787`。
+脚本可选 **① 全部 Docker** 或 **② 本地编译运行**（生成 `config.json` 并编译内嵌单二进制）。Docker 模式要求已安装 Docker / Compose；缺少时会提示官方安装说明，不会下载并直接执行在线安装脚本。装好后打开 `http://localhost:8787`。
+
+登录限流、LLM/MCP 凭据、TLS 默认值及安装权限见[安全配置与兼容性](security/configuration.md)；Audn 报告的逐项核对见[2026-11-06 安全修补记录](security/audn-2026-11-06.md)。
 
 ### 方式二：从源码编译单二进制
 
