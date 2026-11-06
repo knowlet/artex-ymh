@@ -69,6 +69,12 @@ func (s *Server) pgCreateCustomTool(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "http 工具必须提供参数 JSON Schema(不能留空)")
 		return
 	}
+	if req.Kind == "command" {
+		if _, _, err := parseCommandToolExec(req.Exec); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+	}
 	if exist, _ := pg.GetTool(req.Key); exist != nil {
 		writeErr(w, 409, "该 key 已存在(内置或自定义工具)")
 		return
@@ -89,15 +95,6 @@ func (s *Server) pgUpdateCustomTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := r.PathValue("key")
-	existing, err := pg.GetTool(key)
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-	if existing == nil || existing.System {
-		writeErr(w, 400, "只能编辑自定义工具")
-		return
-	}
 	var req customToolReq
 	if err := decode(r, &req); err != nil {
 		writeErr(w, 400, err.Error())
@@ -109,6 +106,21 @@ func (s *Server) pgUpdateCustomTool(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Kind == "http" && !hasSchemaProps(req.Schema) {
 		writeErr(w, 400, "http 工具必须提供参数 JSON Schema(不能留空)")
+		return
+	}
+	if req.Kind == "command" {
+		if _, _, err := parseCommandToolExec(req.Exec); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+	}
+	existing, err := pg.GetTool(key)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if existing == nil || existing.System {
+		writeErr(w, 400, "只能编辑自定义工具")
 		return
 	}
 	if err := pg.UpdateCustomTool(&db.Tool{
@@ -333,12 +345,14 @@ func ensureSchema(raw json.RawMessage) map[string]any {
 // ---------- command:渲染命令 → 复用 Bash 底层 run ----------
 
 func (s *Server) runCommandTool(ctx context.Context, execRaw json.RawMessage, params map[string]any, tc *actool.ToolContext) (actool.Result, error) {
-	var spec commandExec
-	_ = json.Unmarshal(execRaw, &spec)
-	if strings.TrimSpace(spec.Command) == "" {
-		return actool.Errorf("command 为空"), nil
+	spec, template, err := parseCommandToolExec(execRaw)
+	if err != nil {
+		return actool.Errorf(err.Error()), nil
 	}
-	cmd := renderTemplate(spec.Command, params, shellQuote)
+	cmd, err := template.render(params)
+	if err != nil {
+		return actool.Errorf(err.Error()), nil
+	}
 	// 复用 Bash 也在用的底层 run(经 Bash CoreTool.Call):自动继承安全 floor/超时/
 	// 代理 env/输出溢出。工具与 Bash 平级、共用底层,不经过 Bash 这个工具让模型调。
 	bashIn, _ := json.Marshal(map[string]any{"command": cmd})

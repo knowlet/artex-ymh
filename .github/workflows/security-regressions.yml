@@ -110,6 +110,7 @@ jobs:
                   skipped.append((event['Package'], event.get('Test', '<package>')))
           status = process.wait()
           missing = sorted(expected - passed)
+          print(f'Selected security tests: {len(expected)}; passed: {len(expected & passed)}')
           print('Skipped tests/packages:', skipped)
           print('Selected tests without a PASS event:', missing)
           print('Required PostgreSQL tests passed:', sorted(required_pg & passed))
@@ -117,9 +118,10 @@ jobs:
           PY
       - name: Concurrent security regressions with the race detector
         run: |
-          go test -race -count=1 -p=1 -timeout=10m \
-            ./server ./mcphttp ./selfupdate ./traffic \
+          go test -race -v -count=1 -p=1 -timeout=10m \
+            ./server ./mcphttp ./selfupdate \
             -run '^(TestLogSink|TestUpdateAndRollback|TestUpdateRoutesReject|TestConcurrentRollbacks|TestSettlePreserves|TestNewSSEHandshake|TestLoginThrottle|TestSecurityPGConcurrent)'
+          go test -race -v -count=1 -p=1 -timeout=10m ./traffic
       - name: Full Go regression and vet gates (baseline failures remain failures)
         id: candidate_gate
         run: |
