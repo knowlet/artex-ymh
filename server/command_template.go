@@ -159,13 +159,12 @@ func (template *commandTemplate) render(params map[string]any) (string, error) {
 			case commandSingleQuoted:
 				out.WriteString(strings.ReplaceAll(text, "'", "'\\''"))
 			case commandDoubleQuoted:
-				for index := range len(text) {
-					char := text[index]
-					if char == '\\' || char == '$' || char == '"' || char == 0x60 {
-						out.WriteByte('\\')
-					}
-					out.WriteByte(char)
-				}
+				// Keep the value in the same argument, but give it its own
+				// quoted span. Direct insertion could extend a preceding
+				// short variable name: "$A{args}" must not become "$AB".
+				out.WriteByte('"')
+				out.WriteString(shellQuote(text))
+				out.WriteByte('"')
 			}
 		} else {
 			out.WriteString(template.source[placeholder.start:placeholder.end])

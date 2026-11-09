@@ -100,6 +100,32 @@ func TestSecurityCommandTemplateBackslashContexts(t *testing.T) {
 	}
 }
 
+func TestSecurityCommandTemplateVariableBoundaries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("parameterized command tools deliberately reject PowerShell execution")
+	}
+	t.Setenv("ARTEX_TEMPLATE", "prefix:")
+	t.Setenv("ARTEX_TEMPLATEX", "UNEXPECTED_VARIABLE")
+	t.Setenv("ARTEX_TEMPLATE_TAIL", "UNEXPECTED_VARIABLE")
+	for _, tc := range []struct{ name, source, value, want string }{
+		{"variable name", `printf '<%s>' "$ARTEX_TEMPLATE{args}"`, "X", "<prefix:X>"},
+		{"empty before suffix", `printf '<%s>' "$ARTEX_TEMPLATE{args}_TAIL"`, "", "<prefix:_TAIL>"},
+		{"multiple placeholders", `printf '<%s>' "$ARTEX_TEMPLATE{args}{tail}"`, "X", "<prefix:X_TAIL>"},
+		{"escaped dollar", `printf '<%s>' "\$ARTEX_TEMPLATE{args}"`, "X", "<$ARTEX_TEMPLATEX>"},
+		{"quote separated", `printf '<%s>' "$ARTEX_TEMPLATE""{args}"`, "X", "<prefix:X>"},
+		{"unquoted", `printf '<%s>' $ARTEX_TEMPLATE{args}`, "X", "<prefix:X>"},
+		{"single quoted", `printf '<%s>' '$ARTEX_TEMPLATE{args}'`, "X", "<$ARTEX_TEMPLATEX>"},
+		{"shell metacharacters", `printf '<%s>' "$ARTEX_TEMPLATE{args}"`, `$(printf UNEXPECTED_COMMAND)'"\`, "<prefix:$(printf UNEXPECTED_COMMAND)'\"\\>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := commandTemplateFixture(t, tc.source, map[string]any{"args": tc.value, "tail": "_TAIL"})
+			if result.IsError || result.Flatten() != tc.want {
+				t.Fatalf("parameter changed a variable boundary: output=%q want=%q", result.Flatten(), tc.want)
+			}
+		})
+	}
+}
+
 func unsupportedCommandTemplates() []string {
 	backtick := string(rune(0x60))
 	return []string{
