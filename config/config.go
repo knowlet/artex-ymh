@@ -243,6 +243,15 @@ func Redact(dsn string) string {
 	if err != nil || u == nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Opaque != "" {
 		return "[redacted PostgreSQL DSN]"
 	}
+	// An unescaped /, ? or # in a password can make parsing succeed while
+	// treating credentials as a host/port or path. A raw @ outside userinfo
+	// makes that interpretation ambiguous, so do not preserve its identity.
+	if (u.User == nil && strings.Contains(dsn, "@")) ||
+		strings.Contains(u.EscapedPath(), "@") ||
+		strings.Contains(u.RawQuery, "@") ||
+		strings.Contains(u.EscapedFragment(), "@") {
+		return "[redacted PostgreSQL DSN]"
+	}
 	if u.User != nil {
 		if _, hasPw := u.User.Password(); hasPw {
 			u.User = url.UserPassword(u.User.Username(), "****")
