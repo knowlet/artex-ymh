@@ -35,6 +35,7 @@ def main():
         env = {'PATH': os.environ['PATH'], 'HOME': str(root), 'LANG': 'C.UTF-8'}
 
         def command(argv, expected=0, filename=None, timeout=600):
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit -- CI-only driver; argv is pinned tool paths and authored fixtures.
             run = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=root, timeout=timeout)
             if filename:
                 (evidence / (filename + '.stdout')).write_bytes(run.stdout)

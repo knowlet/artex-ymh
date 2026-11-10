@@ -427,6 +427,7 @@ def sandbox_command(stage):
 
 
 def bounded_process(argv, timeout):
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit -- argv is a fixed list, shell=False, no remote-controlled command words.
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             stdin=subprocess.DEVNULL, env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
                             cwd="/", start_new_session=True)
