@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ApprovalAdvisory } from "@/components/approval-advisory";
 import { TablePagination } from "@/components/table-pagination";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -399,6 +400,7 @@ export function ApprovalDetail({
           {!readOnly ? <DecisionActions row={current} busy={busy} decide={decide} /> : null}
         </div>
       </div>
+      <ApprovalAdvisory key={row.id} id={row.id} status={current.status} readOnly={readOnly} />
       {error ? (
         <Alert variant="destructive">
           <AlertDescription>

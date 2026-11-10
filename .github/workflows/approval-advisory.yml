@@ -69,17 +69,68 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Advisory safety and integration regressions
+      - name: Advisory safety and integration regressions (no skips)
         run: |
-          set -euo pipefail
-          test -f approvalreview/review_test.go
-          test -f server/approval_advisory_test.go
-          go test -race -count=1 -p=1 -timeout=10m ./approvalreview ./db ./intercept ./server -run 'TestApprovalAdvisory'
+          python3 - <<'PYTEST'
+          import json, pathlib, re, subprocess, sys
+          module = re.search(r'^module\s+(\S+)', pathlib.Path('go.mod').read_text(), re.M)[1]
+          files = ['approvalreview/review_test.go', 'db/approval_advisory_test.go', 'server/approval_advisory_test.go']
+          expected = set()
+          for name in files:
+              path = pathlib.Path(name)
+              tests = re.findall(r'^func (TestApprovalAdvisory\w*)\(t \*testing\.T\)', path.read_text(), re.M)
+              expected.update((module + '/' + str(path.parent), test) for test in tests)
+          if len(expected) < 13:
+              sys.exit('Required advisory regression coverage is missing')
+          cmd = ['go', 'test', '-json', '-race', '-count=1', '-p=1', '-timeout=10m',
+                 './approvalreview', './db', './intercept', './server', '-run', '^TestApprovalAdvisory']
+          passed, skipped = set(), []
+          process = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
+          with open('/tmp/advisory-tests.jsonl', 'w') as evidence:
+              for line in process.stdout:
+                  evidence.write(line)
+                  print(line, end='', flush=True)
+                  event = json.loads(line)
+                  if event.get('Action') == 'pass' and event.get('Test'):
+                      passed.add((event['Package'], event['Test']))
+                  if event.get('Action') == 'skip':
+                      skipped.append((event['Package'], event.get('Test', '<package>')))
+          status = process.wait()
+          missing = sorted(expected - passed)
+          print('Required top-level tests:', len(expected), 'passed:', len(expected & passed))
+          print('Missing PASS:', missing, 'SKIP:', skipped)
+          sys.exit(1 if status or missing or skipped else 0)
+          PYTEST
+      - name: Vet and backend build
+        run: |
           go vet ./approvalreview ./db ./intercept ./server
           go build ./cmd/artex
-      - name: Frontend type check
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: approval-advisory-test-evidence
+          path: /tmp/advisory-tests.jsonl
+          retention-days: 7
+          if-no-files-found: error
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: State regressions, type check and static build
         working-directory: web
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
         run: |
           set -euo pipefail
           npm ci --ignore-scripts
+          node --experimental-strip-types --test tests/approval-advisory.test.mjs
           npx --no-install tsc --noEmit
+          npm run build:static

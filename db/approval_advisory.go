@@ -77,17 +77,18 @@ func readApprovalAdvisory(ctx context.Context, q advisoryQuerier, id int64, lock
 	}
 	var out ApprovalAdvisorySource
 	var reason sql.NullString
-	var raw []byte
-	err := q.QueryRowContext(ctx, query, id, approvalreview.MaxInputBytes).Scan(&out.ID, &out.Status, &out.Tool, &out.TaskID, &out.RuleID, &out.Input, &reason, &out.ModelInput, &raw)
+	var raw, input, modelInput []byte
+	err := q.QueryRowContext(ctx, query, id, approvalreview.MaxInputBytes).Scan(&out.ID, &out.Status, &out.Tool, &out.TaskID, &out.RuleID, &input, &reason, &modelInput, &raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if out.Input == nil || !reason.Valid || out.ModelInput == nil || raw == nil || len(out.Tool)+len(out.TaskID) > 4096 {
+	if input == nil || !reason.Valid || modelInput == nil || raw == nil || len(out.Tool)+len(out.TaskID) > 4096 {
 		return nil, ErrAdvisoryTooLarge
 	}
+	out.Input, out.ModelInput = json.RawMessage(input), json.RawMessage(modelInput)
 	out.Reason = reason.String
 	if err := json.Unmarshal(raw, &out.Advisory); err != nil {
 		return nil, err
