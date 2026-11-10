@@ -40,8 +40,20 @@ class BundlePinSyncTests(unittest.TestCase):
         return official_license()
 
     def test_updates_only_reviewed_three_and_preserves_other_pins(self):
-        updated = sync.synchronize(self.releases, self.bundle, self.fetch)
+        stale_bundle = copy.deepcopy(self.bundle)
+        for name in sync.BUNDLED:
+            entry = next(row for row in self.releases["tools"] if row["name"] == name)
+            stale_bundle["bundled"][name]["version"] = "v0.0.0"
+            sync.unique_download(stale_bundle, name)["sha256"] = "f" * 64
+            expected = sync.expected_asset(entry, name)
+        updated = sync.synchronize(self.releases, stale_bundle, self.fetch)
         sync.validate_consistency(self.releases, updated, self.manifest)
+        for name in sync.BUNDLED:
+            entry = next(row for row in self.releases["tools"] if row["name"] == name)
+            asset = sync.expected_asset(entry, name)
+            binary = sync.unique_download(updated, name)
+            self.assertEqual(binary["sha256"], asset["sha256"])
+            self.assertEqual(updated["bundled"][name]["version"], entry["version"])
         self.assertEqual(len(self.calls), 3)
         for url in self.calls:
             self.assertIn("/contents/LICENSE.md?ref=", url)
@@ -74,8 +86,12 @@ class BundlePinSyncTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing Git blob"):
             sync.synchronize(self.releases, self.bundle, lambda url: data)
         data = official_license()
-        data["content"] = base64.b64encode(b"Not MIT\n").decode()
-        with self.assertRaises(Exception):
+        body = b"Not MIT\n"
+        data["content"] = base64.b64encode(body).decode()
+        data["sha"] = hashlib.sha1(
+            b"blob " + str(len(body)).encode("ascii") + b"\0" + body
+        ).hexdigest()
+        with self.assertRaisesRegex(ValueError, "upstream license"):
             sync.synchronize(self.releases, self.bundle, lambda url: data)
 
     def test_rejects_unpinned_or_duplicate_release_assets(self):

@@ -24,9 +24,11 @@ KEV 僅涵蓋已知遭利用 CVE；兩者均不能取代 NVD/CVE List、
 
 ## 資料與工具更新流程
 
-1. `update_vulnerability_intel.py` 取 CISA 官方 GitHub mirror 的已固定 commit。
+1. `update_vulnerability_intel.py` 查詢 CISA 官方 GitHub mirror 上 `develop`
+   的目前 HEAD commit，並把該 commit 與 catalog 快照寫入
+   `packaging/vulnerability-intel.json`（每日更新，非永久固定 SHA）。
 2. `update_projectdiscovery.py` 確認六個 ProjectDiscovery repo 的穩定發行版、
-   commit、MIT 授權內容和檔案 SHA-256；來源回應不符合預期即拒絕。
+   commit、既定 MIT 片語檢查與檔案 SHA-256；未通過已實作的授權或資產檢查即拒絕。
 3. `update_nuclei_index.py` 從上述鎖定的模板 commit 下載 `cves.json`
    並驗證已保留的同版本 MIT 通知，不會下載執行模板。
 4. `sync_projectdiscovery_bundle.py` 將 **Naabu、HTTPx、Katana** 的
@@ -45,8 +47,8 @@ KEV 僅涵蓋已知遭利用 CVE；兩者均不能取代 NVD/CVE List、
 
 PR 預設使用 `automation/security-source-refresh` 分支，
 來源檔、版本、hash、差異與驗證記錄可供審查；若無變更便不開新 PR。
-上游下載、授權變更、雜湊或 CI 失敗會中止寫入 PR（保留 workflow 日誌），
-**不以降低安全限制換取自動更新成功**。
+上游下載、未通過既定授權/雜湊檢查、或 CI 失敗會中止寫入 PR（保留 workflow 日誌），
+**不以降低安全限制換取自動更新成功**（非所有授權文字差異都會被自動偵測）。
 
 ### CI 啟用先決條件
 

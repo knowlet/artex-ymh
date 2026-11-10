@@ -48,7 +48,7 @@ class ScannerSourceTests(unittest.TestCase):
         self.assertEqual(result["projects"][0]["ref"], "master")
         self.assertIsNone(result["projects"][0]["released_at"])
         self.assertEqual(result["projects"][1]["tracking"], "release")
-        self.assertEqual(len(self.called), 14)
+        self.assertEqual(len(self.called), 22)
         self.assertEqual(sources.refresh(self.fetch), result)
 
     def test_changed_repo_identity_fails_closed(self):
@@ -106,6 +106,24 @@ class ScannerSourceTests(unittest.TestCase):
     def test_initial_repository_index_is_valid(self):
         committed = json.loads(sources.DEFAULT_OUTPUT.read_text(encoding="utf-8"))
         sources.validate(committed)
+
+    def test_refresh_writes_and_check_detects_drift(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dest = Path(folder) / "sources.json"
+            self.assertEqual(sources.main(["--output", str(dest)], self.fetch), 0)
+            before = json.loads(dest.read_text(encoding="utf-8"))
+            base = "https://api.github.com/repos/ffuf/ffuf"
+            self.payloads[base + "/releases/latest"]["tag_name"] = "v2.4.0"
+            self.payloads[base + "/releases/latest"]["html_url"] = (
+                "https://github.com/ffuf/ffuf/releases/tag/v2.4.0"
+            )
+            self.payloads[base + "/commits/v2.4.0"] = {"sha": "2" * 40}
+            del self.payloads[base + "/commits/v2.3.0"]
+            self.assertEqual(sources.main(["--check", "--output", str(dest)], self.fetch), 1)
+            self.assertEqual(sources.main(["--output", str(dest)], self.fetch), 0)
+            after = json.loads(dest.read_text(encoding="utf-8"))
+            self.assertNotEqual(after, before)
+            self.assertEqual(sources.main(["--check", "--output", str(dest)], self.fetch), 0)
 
 
 if __name__ == "__main__":
