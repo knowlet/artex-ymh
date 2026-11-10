@@ -239,7 +239,7 @@ func NewSSE(ctx context.Context, server, sseURL string, headers map[string]strin
 
 func readSSEEndpoint(r *bufio.Reader, base string) (string, error) {
 	for {
-		payload, err := readSSEEvent(r)
+		payload, err := readSSEEventWithEOF(r, false)
 		if err != nil {
 			return "", fmt.Errorf("mcp sse endpoint: %w", err)
 		}
@@ -249,7 +249,9 @@ func readSSEEndpoint(r *bufio.Reader, base string) (string, error) {
 		}
 		u, err := url.Parse(candidate)
 		if err != nil {
-			return "", fmt.Errorf("mcp sse endpoint URL: %w", err)
+			// URL parse errors include the server-controlled input, which may
+			// contain secrets or nearly an entire maximum-sized SSE event.
+			return "", errors.New("mcp sse endpoint URL: invalid URL")
 		}
 		if !u.IsAbs() {
 			b, err := url.Parse(base)
@@ -635,6 +637,12 @@ func readSSELine(r *bufio.Reader) (string, error) {
 // without an event separator must not bypass the allocation limit. Data lines
 // are joined with newlines as required by SSE; the last event may end at EOF.
 func readSSEEvent(r *bufio.Reader) (string, error) {
+	return readSSEEventWithEOF(r, true)
+}
+
+// Endpoints require a complete event before they can direct a POST. Response
+// parsing retains its historical acceptance of a final event ending at EOF.
+func readSSEEventWithEOF(r *bufio.Reader, allowEOF bool) (string, error) {
 	var data strings.Builder
 	eventBytes := 0
 	hasData := false
@@ -642,6 +650,12 @@ func readSSEEvent(r *bufio.Reader) (string, error) {
 		line, err := readSSELine(r)
 		if err != nil && !errors.Is(err, io.EOF) {
 			return "", err
+		}
+		if errors.Is(err, io.EOF) && !allowEOF {
+			if hasData || len(line) > 0 {
+				return "", io.ErrUnexpectedEOF
+			}
+			return "", io.EOF
 		}
 		eventBytes += len(line)
 		if eventBytes > maxSSEEventBytes {

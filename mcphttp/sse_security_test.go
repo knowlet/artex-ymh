@@ -121,3 +121,96 @@ func TestNewSSERejectsCrossOriginMessageEndpoint(t *testing.T) {
 		t.Fatalf("cross-origin endpoint accepted: err=%v requests=%d", err, requests.Load())
 	}
 }
+
+func TestSSEEndpointParseErrorDoesNotEchoPayload(t *testing.T) {
+	for _, test := range []struct{ name, candidate string }{
+		{"invalid-escape", "/private-marker%zz"},
+		{"invalid-port", "http://private-marker:bad-port/message"},
+		{"near-limit", "/" + strings.Repeat("private-marker", (maxSSELineBytes-128)/len("private-marker")) + "%zz"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := readSSEEndpoint(bufio.NewReader(strings.NewReader("data: "+test.candidate+"\n\n")), "http://mcp.test/sse")
+			if err == nil {
+				t.Fatal("malformed endpoint accepted")
+			}
+			for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+				if len(cause.Error()) > 128 || strings.Contains(cause.Error(), "private-marker") {
+					t.Fatalf("endpoint error exposes remote input (length %d)", len(cause.Error()))
+				}
+			}
+		})
+	}
+}
+
+func TestSSEEndpointRequiresEventSeparator(t *testing.T) {
+	for _, suffix := range []string{"", "\n", "\r\n", "\r"} {
+		t.Run(fmt.Sprintf("%q", suffix), func(t *testing.T) {
+			endpoint, err := readSSEEndpoint(bufio.NewReader(strings.NewReader("event: endpoint\ndata: /message"+suffix)), "http://mcp.test/sse")
+			if !errors.Is(err, io.ErrUnexpectedEOF) || endpoint != "" {
+				t.Fatalf("truncated endpoint = %q, %v", endpoint, err)
+			}
+		})
+	}
+	for _, suffix := range []string{"\n\n", "\r\n\r\n"} {
+		endpoint, err := readSSEEndpoint(bufio.NewReader(strings.NewReader("data: /message"+suffix)), "http://mcp.test/sse")
+		if err != nil || endpoint != "http://mcp.test/message" {
+			t.Fatalf("complete endpoint = %q, %v", endpoint, err)
+		}
+	}
+}
+
+func TestNewSSETruncatedEndpointDoesNotPost(t *testing.T) {
+	for _, suffix := range []string{"", "\n", "\r\n"} {
+		t.Run(fmt.Sprintf("%q", suffix), func(t *testing.T) {
+			var posts atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost {
+					posts.Add(1)
+					w.WriteHeader(http.StatusAccepted)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "event: endpoint\ndata: /message"+suffix)
+			}))
+			defer srv.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			client, err := NewSSE(ctx, "test", srv.URL, nil, false)
+			if client != nil {
+				_ = client.Close()
+			}
+			if !errors.Is(err, io.ErrUnexpectedEOF) || posts.Load() != 0 {
+				t.Fatalf("truncated handshake: err=%v posts=%d", err, posts.Load())
+			}
+		})
+	}
+}
+
+// Both response readers intentionally retain EOF acceptance, unlike endpoints.
+func TestSSEResponseEOFCompatibility(t *testing.T) {
+	for _, suffix := range []string{"", "\n", "\r\n", "\n\n", "\r\n\r\n"} {
+		t.Run(fmt.Sprintf("%q", suffix), func(t *testing.T) {
+			input := "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"ok\":true}}" + suffix
+			response, err := parseSSE(strings.NewReader(input), 7)
+			if err != nil || response == nil || string(response.Result) != `{"ok":true}` {
+				t.Fatalf("HTTP response = %#v, %v", response, err)
+			}
+			body := io.NopCloser(strings.NewReader(input))
+			responses := make(chan *rpcResponse, 1)
+			client := &Client{
+				streamDone: make(chan struct{}), streamErr: make(chan error, 1),
+				streamBody: body, streamCancel: func() {},
+				pending: map[int]chan *rpcResponse{7: responses},
+			}
+			client.readLegacySSE(bufio.NewReader(body))
+			select {
+			case response := <-responses:
+				if string(response.Result) != `{"ok":true}` {
+					t.Fatalf("legacy response = %#v", response)
+				}
+			default:
+				t.Fatal("legacy reader discarded final response")
+			}
+		})
+	}
+}
