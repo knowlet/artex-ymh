@@ -77,8 +77,8 @@ func NewClient(proxy string) *http.Client {
 			if err := checkURL(req.URL); err != nil {
 				return err
 			}
-			// Release 元数据查询走 api.github.com/repos/...；禁止被重定向到其他仓库路径。
-			if strings.EqualFold(req.URL.Hostname(), "api.github.com") && strings.HasPrefix(req.URL.Path, "/repos/") {
+			// 元数据查询只允许 api.github.com/repos/knowlet/artex-ymh/...，禁止偏离 fork 路径。
+			if strings.EqualFold(req.URL.Hostname(), "api.github.com") {
 				if err := checkRepoAPIPath(req.URL); err != nil {
 					return err
 				}
@@ -108,28 +108,33 @@ func checkRepoAPIPath(u *url.URL) error {
 	return nil
 }
 
-func verifyResponseRepoURL(resp *http.Response) error {
+func verifyMetadataResponseURL(resp *http.Response) error {
 	if resp == nil || resp.Request == nil || resp.Request.URL == nil {
-		return nil
+		return checkError("github_error", "更新源响应 URL 无法确认")
 	}
 	u := resp.Request.URL
 	if !strings.EqualFold(u.Hostname(), "api.github.com") {
-		return nil
+		return checkError("github_error", "更新源响应不在 api.github.com")
 	}
-	if strings.HasPrefix(u.Path, "/repos/") {
-		if err := checkRepoAPIPath(u); err != nil {
-			return checkError("github_error", "更新源响应来自非 fork 仓库，已拒绝")
-		}
+	if err := checkRepoAPIPath(u); err != nil {
+		return checkError("github_error", "更新源响应来自非 fork 仓库，已拒绝")
 	}
 	return nil
 }
+
+const maxGitHubMetadataBytes = 1 << 20 // 1 MiB — release/repo JSON is tiny
 
 func releaseBelongsToFork(rel Release) bool {
 	if rel.HTMLURL == "" {
 		return true
 	}
-	want := strings.ToLower("github.com/" + Repo + "/")
-	return strings.Contains(strings.ToLower(rel.HTMLURL), want)
+	u, err := url.Parse(rel.HTMLURL)
+	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), "github.com") {
+		return false
+	}
+	wantPrefix := "/" + Repo + "/"
+	lowerPath := strings.ToLower(u.Path)
+	return strings.HasPrefix(lowerPath, strings.ToLower(wantPrefix))
 }
 
 // CheckError identifies a release-check failure without treating every failure as
@@ -182,12 +187,12 @@ func decodeSingleJSON(r io.Reader, v any) error {
 	if err := dec.Decode(v); err != nil {
 		return err
 	}
-	rest, err := io.ReadAll(dec.Buffered())
-	if err != nil {
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("响应含有多余数据")
+		}
 		return err
-	}
-	if len(bytes.TrimSpace(rest)) > 0 {
-		return errors.New("响应含有多余数据")
 	}
 	return nil
 }
@@ -211,7 +216,7 @@ func githubRequest(ctx context.Context, c *http.Client, endpoint string) (*http.
 	if err != nil {
 		return nil, classifyDoError(err)
 	}
-	if err := verifyResponseRepoURL(resp); err != nil {
+	if err := verifyMetadataResponseURL(resp); err != nil {
 		_ = resp.Body.Close()
 		return nil, err
 	}
@@ -220,7 +225,15 @@ func githubRequest(ctx context.Context, c *http.Client, endpoint string) (*http.
 
 func readGitHubResponseBody(resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	limited := io.LimitReader(resp.Body, maxGitHubMetadataBytes+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxGitHubMetadataBytes {
+		return nil, errors.New("GitHub 响应过大")
+	}
+	return body, nil
 }
 
 func githubStatusError(status int, header http.Header, body []byte) error {
@@ -266,6 +279,7 @@ func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
 			return nil, err
 		}
 		if repo.StatusCode == http.StatusNotFound {
+			_ = repo.Body.Close()
 			return nil, checkError("repository_unavailable", fmt.Sprintf("更新源 %s 不存在或当前不可见，无法确认是否有正式版本", Repo))
 		}
 		repoBody, err := readGitHubResponseBody(repo)

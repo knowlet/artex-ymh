@@ -91,6 +91,16 @@ func TestFetchLatestNetworkAndCancellation(t *testing.T) {
 	}
 }
 
+func TestDecodeSingleJSONRejectsTrailingValue(t *testing.T) {
+	var v struct {
+		FullName string `json:"full_name"`
+	}
+	err := decodeSingleJSON(strings.NewReader(`{"full_name":"knowlet/artex-ymh"} {"extra":1}`), &v)
+	if err == nil {
+		t.Fatal("expected trailing JSON rejection")
+	}
+}
+
 func TestFetchLatestRejectsRedirectedRepoPath(t *testing.T) {
 	c := &http.Client{Transport: checkTransport(func(r *http.Request) (*http.Response, error) {
 		resp := &http.Response{
