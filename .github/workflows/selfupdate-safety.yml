@@ -1,0 +1,65 @@
+name: selfupdate safety
+on:
+  pull_request:
+    paths:
+      - 'selfupdate/**'
+      - 'server/update*.go'
+      - 'cmd/artex/main.go'
+      - 'web/src/app/(main)/_components/update-badge.tsx'
+      - 'web/src/app/(main)/system/settings/_components/update-card.tsx'
+      - 'web/src/lib/api.ts'
+      - 'web/src/lib/types.ts'
+      - 'web/package*.json'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/selfupdate-safety.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'selfupdate/**'
+      - 'server/update*.go'
+      - 'cmd/artex/main.go'
+      - 'web/src/app/(main)/_components/update-badge.tsx'
+      - 'web/src/app/(main)/system/settings/_components/update-card.tsx'
+      - 'web/src/lib/api.ts'
+      - 'web/src/lib/types.ts'
+      - 'web/package*.json'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/selfupdate-safety.yml'
+permissions:
+  contents: read
+concurrency:
+  group: selfupdate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Go formatting, race regressions, vet and build
+        run: |
+          test -z "$(gofmt -l selfupdate server/update*.go)"
+          go test -race ./selfupdate -count=1 -v
+          go test -race ./server -run '^(TestReleaseCache|TestUpdate)' -count=1 -v
+          go vet ./selfupdate ./server
+          go build -o "$RUNNER_TEMP/artex" ./cmd/artex
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Frontend checks and production build
+        working-directory: web
+        run: |
+          npm ci --ignore-scripts
+          npx biome check 'src/app/(main)/_components/update-badge.tsx' 'src/app/(main)/system/settings/_components/update-card.tsx' src/lib/types.ts
+          npx tsc --noEmit
+          npm run build:static
