@@ -1602,7 +1602,10 @@ export interface UpdateCheck {
   /** 独立发布与签名链未审核前，服务端拒绝安装，与版本号是否可比较无关。 */
   install_enabled: boolean;
   install_reason?: string;
-  /** 查询 GitHub 失败时给出原因，此时下面的字段都不会有。 */
+  /** 无正式版本属于正常查询结果，不代表 GitHub 连接失败。 */
+  release_status?: "available" | "no_release" | "error";
+  message?: string;
+  /** 查询 GitHub 失败时给出原因，此时没有可用的发布元数据。 */
   error?: string;
   error_code?:
     | "no_release"
