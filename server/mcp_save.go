@@ -31,6 +31,14 @@ func prepareMCPSave(pg *db.DB, m *db.MCPServer) error {
 	if cur == nil {
 		return errMCPNotFound
 	}
+	if strings.EqualFold(strings.TrimSpace(cur.Transport), "stdio") {
+		if strings.TrimSpace(m.Command) == "" {
+			m.Command = cur.Command
+		}
+		if len(bytes.TrimSpace(m.Args)) == 0 {
+			m.Args = cur.Args
+		}
+	}
 
 	url := strings.TrimSpace(m.URL)
 	if url == "" {
@@ -124,6 +132,9 @@ func mcpMergeEnv(stored, incoming json.RawMessage) json.RawMessage {
 	}
 	old := jsonStrMap(stored)
 	neu := jsonStrMap(incoming)
+	if neu == nil {
+		neu = map[string]string{}
+	}
 	for key, val := range old {
 		if _, ok := neu[key]; !ok {
 			neu[key] = val

@@ -31,6 +31,18 @@ func TestMCPRequireSecretReentry(t *testing.T) {
 	}
 }
 
+func TestMCPMergeEnvToleratesNullJSON(t *testing.T) {
+	stored := json.RawMessage(`{"X-API-Key":"synthetic-old"}`)
+	got := mcpMergeEnv(stored, json.RawMessage(`null`))
+	var env map[string]string
+	if err := json.Unmarshal(got, &env); err != nil {
+		t.Fatal(err)
+	}
+	if env["X-API-Key"] != "synthetic-old" {
+		t.Fatalf("stored secret not preserved: %#v", env)
+	}
+}
+
 func testManagerPG(t *testing.T) *Manager {
 	t.Helper()
 	m, err := NewManager(t.TempDir(), "")
@@ -53,6 +65,7 @@ func TestPrepareMCPSaveClearsInsecureOnURLChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = pg.DeleteMCP(id) })
 	incoming := &db.MCPServer{
 		ID: id, Name: name, Transport: "http",
 		URL: "http://127.0.0.1:8081/mcp", Insecure: true, Enabled: true,
@@ -72,16 +85,43 @@ func TestPrepareMCPSaveRejectsCommandSwapWithStoredEnv(t *testing.T) {
 	name := uniqueMCPName(t)
 	id, err := pg.SaveMCP(&db.MCPServer{
 		Name: name, Transport: "stdio", Command: "fixture-old",
+		Args: json.RawMessage(`["--fixture"]`),
 		Enabled: true, Env: json.RawMessage(`{"API_KEY":"synthetic-old"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = pg.DeleteMCP(id) })
 	incoming := &db.MCPServer{
 		ID: id, Name: name, Transport: "stdio", Command: "fixture-attacker",
 		Enabled: true, Env: json.RawMessage(`{}`),
 	}
 	if err := prepareMCPSave(pg, incoming); !errors.Is(err, endpoint.ErrCredentialDestination) {
 		t.Fatalf("command swap with retained secrets: %v", err)
+	}
+}
+
+func TestPrepareMCPSavePreservesStdioArgsWhenOmitted(t *testing.T) {
+	m := testManagerPG(t)
+	pg := m.pg
+	name := uniqueMCPName(t)
+	id, err := pg.SaveMCP(&db.MCPServer{
+		Name: name, Transport: "stdio", Command: "fixture-cmd",
+		Args: json.RawMessage(`["--sandbox"]`),
+		Enabled: true, Env: json.RawMessage(`{"API_KEY":"synthetic-old"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pg.DeleteMCP(id) })
+	incoming := &db.MCPServer{
+		ID: id, Name: name, Transport: "stdio", Command: "fixture-cmd",
+		Enabled: true, Env: json.RawMessage(`null`),
+	}
+	if err := prepareMCPSave(pg, incoming); err != nil {
+		t.Fatal(err)
+	}
+	if string(incoming.Args) != `["--sandbox"]` {
+		t.Fatalf("args=%s", incoming.Args)
 	}
 }
