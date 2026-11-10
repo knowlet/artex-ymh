@@ -11,6 +11,13 @@ die(){  printf '\033[31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 ask(){  local p="$1" d="${2:-}" a; read -rp "$p${d:+ [$d]}: " a; echo "${a:-$d}"; }
 rand(){ head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
 
+chown_install_artifacts(){
+  local u="${SUDO_USER:-}"
+  [ -n "$u" ] && [ "$(id -u)" -eq 0 ] || return 0
+  id -u "$u" >/dev/null 2>&1 || return 0
+  chown "$u" artex config.json 2>/dev/null || true
+}
+
 # ── docker 环境检测 ────────────────────────────
 ensure_docker(){
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
@@ -69,20 +76,24 @@ install_local(){
   # Replace atomically: umask alone does not tighten an existing 0644 file.
   local config_tmp
   config_tmp="$(mktemp ./config.json.XXXXXX)"
-  cat > "$config_tmp" <<JSON
-{
+  trap 'rm -f "$config_tmp"' EXIT INT TERM
+  DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_USER="$DB_USER" DB_PASS="$DB_PASS" DB_NAME="$DB_NAME" DB_SSL="$DB_SSL" \
+    python3 - <<'PY' > "$config_tmp"
+import json, os
+print(json.dumps({
   "database": {
-    "host": "${DB_HOST}",
-    "port": ${DB_PORT},
-    "user": "${DB_USER}",
-    "password": "${DB_PASS}",
-    "dbname": "${DB_NAME}",
-    "sslmode": "${DB_SSL}"
+    "host": os.environ["DB_HOST"],
+    "port": int(os.environ["DB_PORT"]),
+    "user": os.environ["DB_USER"],
+    "password": os.environ["DB_PASS"],
+    "dbname": os.environ["DB_NAME"],
+    "sslmode": os.environ["DB_SSL"],
   }
-}
-JSON
+}, indent=2))
+PY
   chmod 600 "$config_tmp"
   mv -f "$config_tmp" config.json
+  trap - EXIT INT TERM
   ok "已生成 config.json"
 
   # go 环境检查
@@ -102,6 +113,7 @@ JSON
     CGO_ENABLED=0 go build -o artex ./cmd/artex
   fi
   ok "编译完成 → ./artex"
+  chown_install_artifacts
 
   # 可选：托管给 systemd（崩溃自动拉起 + 开机自启）。守护职责移交 systemd，
   # 不再套 start.sh；页面一键更新（退出码 75）由 Restart=on-failure 重新拉起。

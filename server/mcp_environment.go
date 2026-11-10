@@ -2,6 +2,7 @@ package server
 
 import (
 	"os"
+	"runtime"
 	"strings"
 )
 
@@ -26,6 +27,13 @@ func mcpChildEnv(explicit map[string]string) map[string]string {
 		}
 	}
 	for key, value := range explicit {
+		if runtime.GOOS == "windows" {
+			for existing := range out {
+				if strings.EqualFold(existing, key) {
+					delete(out, existing)
+				}
+			}
+		}
 		out[key] = value
 	}
 	return out

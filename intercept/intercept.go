@@ -517,9 +517,9 @@ func judgeActionLabel(action string) string {
 // Match evaluates the rule list (priority DESC) against a tool call.
 // Returns (Decision, true) for the first matching enabled rule, or
 // (Decision{}, false) if no rule matches. Fail-closed: a rule-load error is NOT
-// treated as "no rules" — it returns an explicit deny decision (and logs),
-// while an empty rule list (len==0, no error) still falls through to the LLM
-// judge / caller default.
+// treated as "no rules" — it returns an explicit deny decision (and logs).
+// Malformed tool input is also denied before rule matching. An empty rule list
+// (len==0, no error) still falls through to the LLM judge / caller default.
 func (i *Interceptor) Match(toolName string, input []byte) (Decision, bool) {
 	rules, err := i.rules()
 	if err != nil {
@@ -615,7 +615,11 @@ func ruleMatches(r compiledRule, toolName string, subjects []string) bool {
 	case "tool_name":
 		subjects = []string{toolName}
 	case "tool_input":
-		// Raw structure and decoded strings are checked within the same rule.
+		// Allow rules match only the raw JSON payload so decoded fragments cannot
+		// satisfy a broad substring allow by themselves; deny/ask still inspect derived subjects.
+		if r.Action == "allow" && len(subjects) > 0 {
+			subjects = subjects[:1]
+		}
 	default:
 		return false
 	}
@@ -648,10 +652,21 @@ func defaultMessage(action, name string) string {
 // page (GET /api/intercept/history) and the task's intercept list. Best-effort: a DB
 // error is swallowed so logging never changes the tool call's outcome. The pending list
 // (status='pending') is unaffected, so it still shows only asks awaiting a decision.
+func toolInputForAudit(input []byte) []byte {
+	if len(input) == 0 || json.Valid(input) {
+		return input
+	}
+	wrapped, err := json.Marshal(map[string]string{"invalid_tool_input": string(input)})
+	if err != nil {
+		return []byte(`{"invalid_tool_input":""}`)
+	}
+	return wrapped
+}
+
 func (i *Interceptor) Log(ctx context.Context, convID int64, dec Decision, toolName string, input []byte, status string) {
 	taskID, agentName := taskInfoFromCtx(ctx)
 	audit := auditFor(ctx, dec, input, status)
-	id, err := i.db.CreateDecidedIntercept(dec.RuleID, convID, taskID, agentName, toolName, input, status, dec.Message, audit)
+	id, err := i.db.CreateDecidedIntercept(dec.RuleID, convID, taskID, agentName, toolName, toolInputForAudit(input), status, dec.Message, audit)
 	if err == nil {
 		i.bindResult(ctx, id, audit)
 	}

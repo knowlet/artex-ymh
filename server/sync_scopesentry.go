@@ -139,12 +139,16 @@ func (s *Server) syncSSDatasource(w http.ResponseWriter, r *http.Request) {
 		m = &db.MCPServer{Name: scopeSentryMCPName, Transport: "http", Env: json.RawMessage(`{"X-API-Key":""}`)}
 	}
 	if body.URL != "" {
+		prev := m.URL
 		next, err := resolveCredentialEndpoint(m.URL, body.URL, body.APIKey == "" && envHasValue(m.Env))
 		if err != nil {
 			writeErr(w, 400, err.Error())
 			return
 		}
 		m.URL = next
+		if mcpEndpointChanged(prev, next) {
+			m.Insecure = false
+		}
 	}
 	if body.APIKey != "" {
 		env, _ := json.Marshal(map[string]string{"X-API-Key": body.APIKey})

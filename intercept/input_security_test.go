@@ -50,15 +50,17 @@ func TestSecurityInterceptDecodedStrings(t *testing.T) {
 func TestSecurityInterceptStructureAndPriority(t *testing.T) {
 	structural := inputSecurityRule(1, "tool_input", "regex", "\"command\"\\s*:\\s*\"safe\"", "allow")
 	deny := inputSecurityRule(2, "tool_input", "string", "safe", "deny")
-	for _, input := range []string{"{ \"command\" : \"safe\" }", "{\"\\u0063ommand\":\"\\u0073afe\"}"} {
-		ic := &Interceptor{cached: []compiledRule{structural, deny}}
-		if dec, matched := ic.Match("Bash", []byte(input)); !matched || dec.RuleID != 1 || dec.Action != "allow" {
-			t.Fatalf("higher-priority structural rule changed: match=%v decision=%+v", matched, dec)
-		}
+	ic := &Interceptor{cached: []compiledRule{structural, deny}}
+	if dec, matched := ic.Match("Bash", []byte(`{ "command" : "safe" }`)); !matched || dec.RuleID != 1 || dec.Action != "allow" {
+		t.Fatalf("higher-priority structural rule changed: match=%v decision=%+v", matched, dec)
+	}
+	// Allow rules inspect raw JSON only; escaped spellings must not satisfy a raw regex via decoded subjects.
+	if dec, matched := ic.Match("Bash", []byte(`{"\u0063ommand":"\u0073afe"}`)); !matched || dec.RuleID != 2 || dec.Action != "deny" {
+		t.Fatalf("escaped spellings must not bypass raw allow rules: match=%v decision=%+v", matched, dec)
 	}
 	ask := inputSecurityRule(3, "tool_input", "string", "BLOCK_MARKER", "ask")
 	allow := inputSecurityRule(4, "tool_name", "string", "Bash", "allow")
-	ic := &Interceptor{cached: []compiledRule{ask, allow}}
+	ic = &Interceptor{cached: []compiledRule{ask, allow}}
 	if dec, matched := ic.Match("Bash", []byte("{\"command\":\"BLOCK_\\u004dARKER\"}")); !matched || dec.RuleID != 3 || dec.Action != "ask" {
 		t.Fatalf("decoded ask must retain priority over tool allow: %v %+v", matched, dec)
 	}

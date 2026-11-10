@@ -926,9 +926,16 @@ func decodeStrSlice(raw json.RawMessage) []string {
 
 func decodeStrMap(raw json.RawMessage) map[string]string {
 	out := map[string]string{}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &out); err != nil || out == nil {
-			return map[string]string{}
+	if len(raw) == 0 {
+		return out
+	}
+	var mixed map[string]any
+	if err := json.Unmarshal(raw, &mixed); err != nil {
+		return out
+	}
+	for key, val := range mixed {
+		if s, ok := val.(string); ok {
+			out[key] = s
 		}
 	}
 	return out

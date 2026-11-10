@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,8 +67,17 @@ func TestInstallerMissingDockerDoesNotFetchOrExecute(t *testing.T) {
 	}
 }
 
+func installerPythonStub(t *testing.T, bin string) {
+	t.Helper()
+	body := "#!/bin/sh\n# Deployment test stub for install.sh config JSON generation.\ncat <<JSON\n{\n  \"database\": {\n    \"host\": \"$DB_HOST\",\n    \"port\": $DB_PORT,\n    \"user\": \"$DB_USER\",\n    \"password\": \"$DB_PASS\",\n    \"dbname\": \"$DB_NAME\",\n    \"sslmode\": \"$DB_SSL\"\n  }\n}\nJSON\n"
+	if err := os.WriteFile(filepath.Join(bin, "python3"), []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInstallerCreatesPrivateConfigOverExistingPublicFile(t *testing.T) {
 	dir, bin, bash := deploymentFixture(t, "install.sh", "dirname", "mktemp", "cat", "chmod", "mv")
+	installerPythonStub(t, bin)
 	path := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
 		t.Fatal(err)
@@ -158,8 +168,16 @@ func TestResetRejectsDotEnvExpansionWithoutExecutingIt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("POSTGRES_PASSWORD=$(touch "+marker+")\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := deploymentRun(t, dir, bin, bash, "reset-password.sh", "", "-m", "docker", "--exec", "docker", "-p", "synthetic-new-password", "-y"); err == nil {
+	out, err := deploymentRun(t, dir, bin, bash, "reset-password.sh", "", "-m", "docker", "--exec", "docker", "-p", "synthetic-new-password", "-y")
+	if err == nil {
 		t.Fatal("unsupported dotenv expansion accepted")
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() == 99 {
+		t.Fatalf("dotenv parser did not reject before docker: %v: %s", err, out)
+	}
+	if !strings.Contains(string(out), "格式不受支持") && !strings.Contains(string(out), "需要字面单引号值") {
+		t.Fatalf("unexpected dotenv rejection: %s", out)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("dotenv expansion executed")

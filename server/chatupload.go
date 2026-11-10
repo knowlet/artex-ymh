@@ -127,6 +127,18 @@ func uniqueUploadPath(dir, name string) string {
 // knows which files were uploaded and where to Read them. baseDir is the agent's working
 // dir (its CWD); we emit ABSOLUTE paths (baseDir + relative) so the agent can Read/Bash
 // them unambiguously regardless of how it interprets relative paths.
+func validateChatAttachmentPath(path string) error {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	if !strings.HasPrefix(path, "uploads/") || strings.Contains(path, "..") {
+		return fmt.Errorf("附件路径无效")
+	}
+	clean := filepath.Clean(path)
+	if clean != path || strings.HasPrefix(clean, "../") {
+		return fmt.Errorf("附件路径无效")
+	}
+	return nil
+}
+
 func composeAgentMessage(msg string, atts []chatAttachment, baseDir string) string {
 	if len(atts) == 0 {
 		return msg

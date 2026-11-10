@@ -188,6 +188,9 @@ VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,NULLIF($6,''),NULLIF($7,''),$8,$9,$
 		var format, baseURL, proxy string
 		var hasKey bool
 		if err := tx.QueryRow(`SELECT format,COALESCE(base_url,''),COALESCE(proxy,''),COALESCE(api_key,'')<>'' FROM llm_profiles WHERE id=$1 FOR UPDATE`, p.ID).Scan(&format, &baseURL, &proxy, &hasKey); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return 0, ErrLLMProfileNotFound
+			}
 			return 0, err
 		}
 		if hasKey {

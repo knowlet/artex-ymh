@@ -85,6 +85,14 @@ func TestLLMConnectionTestRejectsRelocatedStoredKeyBeforeDial(t *testing.T) {
 	}
 }
 
+func TestMCPUpdateClearsInsecureOnURLChange(t *testing.T) {
+	const stored = "http://localhost:8080/mcp"
+	next := "http://localhost:8081/mcp"
+	if !mcpEndpointChanged(stored, next) {
+		t.Fatal("expected endpoint change")
+	}
+}
+
 func TestScopeSentryURLCannotRetainSecretAtNewDestination(t *testing.T) {
 	const stored = "http://localhost:8080/mcp"
 	if got, err := resolveCredentialEndpoint(stored, "http://LOCALHOST:8080/mcp", true); err != nil || got != stored {

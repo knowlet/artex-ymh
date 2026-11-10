@@ -900,6 +900,14 @@ func (s *Server) pgSaveMCP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	if err := prepareMCPSave(pg, &m); err != nil {
+		if errors.Is(err, endpoint.ErrCredentialDestination) {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		writeErr(w, 400, err.Error())
+		return
+	}
 	isNew := m.ID == 0
 	id, err := pg.SaveMCP(&m)
 	if err != nil {
@@ -1877,11 +1885,14 @@ func (s *Server) pgSaveProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := pg.SaveProfile(&p)
 	if err != nil {
-		if errors.Is(err, endpoint.ErrCredentialDestination) {
+		switch {
+		case errors.Is(err, endpoint.ErrCredentialDestination):
 			writeErr(w, 400, err.Error())
-			return
+		case errors.Is(err, db.ErrLLMProfileNotFound):
+			writeErr(w, 404, err.Error())
+		default:
+			writeErr(w, 500, err.Error())
 		}
-		writeErr(w, 500, err.Error())
 		return
 	}
 	// Editing a profile rebuilds any task pinned to it on its next round. Reapply

@@ -1512,16 +1512,25 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p, err := pg.ProfileByID(*req.ProfileID)
-		if err != nil || p == nil {
-			writeErr(w, 400, "LLM 配置不存在或无法读取")
+		if err != nil {
+			writeErr(w, 500, err.Error())
 			return
 		}
-		if err := reuseLLMKey(&cfg, agent.ConfigFrom(p.Format, p.Model, p.BaseURL, p.APIKey, p.Proxy)); err != nil {
-			writeErr(w, 400, err.Error())
-			return
-		}
-		if cfg.SessionHeaderKey == "" {
-			cfg.SessionHeaderKey = p.SessionHeaderKey
+		if p == nil {
+			if cfg.APIKey == "" {
+				writeErr(w, 400, "LLM 配置不存在或无法读取")
+				return
+			}
+		} else {
+			if cfg.APIKey == "" {
+				if err := reuseLLMKey(&cfg, agent.ConfigFrom(p.Format, p.Model, p.BaseURL, p.APIKey, p.Proxy)); err != nil {
+					writeErr(w, 400, err.Error())
+					return
+				}
+			}
+			if cfg.SessionHeaderKey == "" {
+				cfg.SessionHeaderKey = p.SessionHeaderKey
+			}
 		}
 	}
 	if cfg.APIKey == "" {
@@ -3690,6 +3699,12 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, err.Error())
 		return
+	}
+	for _, a := range req.Attachments {
+		if err := validateChatAttachmentPath(a.Path); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	agentMessage, ok := s.prepareChatMentionMessage(w, req.Message)
 	if !ok {
