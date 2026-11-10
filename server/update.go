@@ -233,14 +233,16 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	boot := bootUpdateState()
 	out := map[string]any{
-		"current":     current,
-		"mode":        mode,
-		"os":          runtime.GOOS,
-		"arch":        runtime.GOARCH,
-		"has_backup":  selfupdate.HasBackup(),
-		"repo":        selfupdate.Repo,
-		"boot_notice": boot.Detail,
-		"rolled_back": boot.RolledBack,
+		"current":         current,
+		"mode":            mode,
+		"os":              runtime.GOOS,
+		"arch":            runtime.GOARCH,
+		"has_backup":      selfupdate.HasBackup(),
+		"repo":            selfupdate.Repo,
+		"install_enabled": selfupdate.InstallEnabled,
+		"install_reason":  selfupdate.InstallDisabledReason,
+		"boot_notice":     boot.Detail,
+		"rolled_back":     boot.RolledBack,
 	}
 
 	// 顶栏提示走缓存（默认）；用户点"检查更新"时带 force=1 强制回源。
@@ -249,6 +251,7 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	rel, err := relCache.get(r.Context(), client, force)
 	if err != nil {
 		out["error"] = err.Error()
+		out["error_code"] = selfupdate.CheckErrorCode(err)
 		writeJSON(w, 200, out)
 		return
 	}
@@ -286,6 +289,10 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 // 立刻返回 202，实际工作在后台 goroutine 上跑：整包下载可能要几分钟，
 // 挂在请求上会被反代超时掐断。进度走 /api/update/stream。
 func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
+	if !selfupdate.InstallEnabled {
+		writeErr(w, http.StatusForbidden, selfupdate.InstallDisabledReason)
+		return
+	}
 	if _, running := updHub.snapshot(); running {
 		writeErr(w, 409, "已有一个更新或回滚正在进行中")
 		return

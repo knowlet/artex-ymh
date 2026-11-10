@@ -51,6 +51,9 @@ type Progress func(ph Phase, pct int, msg string)
 func Stage(ctx context.Context, c *http.Client, rel *Release, currentVersion string, prog Progress) error {
 	mutationMu.Lock()
 	defer mutationMu.Unlock()
+	if !InstallEnabled {
+		return ErrInstallDisabled
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/Autumn-27/artex/selfupdate"
 )
 
 func TestUpdateAndRollbackShareAdmission(t *testing.T) {
@@ -53,11 +55,18 @@ func TestUpdateRoutesRejectWhileRestartPending(t *testing.T) {
 	}
 	hub.finishRollback(nil)
 	s := &Server{}
-	for _, handler := range []http.HandlerFunc{s.updateApply, s.updateRollback} {
-		w := httptest.NewRecorder()
-		handler(w, httptest.NewRequest(http.MethodPost, "/", nil))
+	w := httptest.NewRecorder()
+	s.updateApply(w, httptest.NewRequest(http.MethodPost, "/", nil))
+	if selfupdate.InstallEnabled {
 		if w.Code != http.StatusConflict {
-			t.Fatalf("restart-pending route returned %d", w.Code)
+			t.Fatalf("restart-pending apply returned %d", w.Code)
 		}
+	} else if w.Code != http.StatusForbidden {
+		t.Fatalf("install-disabled apply returned %d", w.Code)
+	}
+	w = httptest.NewRecorder()
+	s.updateRollback(w, httptest.NewRequest(http.MethodPost, "/", nil))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("restart-pending rollback returned %d", w.Code)
 	}
 }

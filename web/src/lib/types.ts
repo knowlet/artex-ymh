@@ -1575,8 +1575,20 @@ export interface UpdateCheck {
   /** 本次启动时自更新自举的结论（换装失败 / 已回滚等），无事发生时为空。 */
   boot_notice?: string;
   rolled_back?: boolean;
+  /** 独立发布与签名链未审核前，服务端拒绝安装，与版本号是否可比较无关。 */
+  install_enabled: boolean;
+  install_reason?: string;
   /** 查询 GitHub 失败时给出原因，此时下面的字段都不会有。 */
   error?: string;
+  error_code?:
+    | "no_release"
+    | "repository_unavailable"
+    | "network"
+    | "rate_limited"
+    | "access_denied"
+    | "github_error"
+    | "invalid_release"
+    | "unknown";
   latest?: string;
   notes?: string;
   html_url?: string;
