@@ -3,11 +3,18 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/internal/endpoint"
 )
+
+func uniqueMCPName(t *testing.T) string {
+	t.Helper()
+	return fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano())
+}
 
 func TestMCPRequireSecretReentry(t *testing.T) {
 	old, _ := json.Marshal(map[string]string{"Authorization": "old-token"})
@@ -37,8 +44,9 @@ func testManagerPG(t *testing.T) *Manager {
 func TestPrepareMCPSaveClearsInsecureOnURLChange(t *testing.T) {
 	m := testManagerPG(t)
 	pg := m.pg
+	name := uniqueMCPName(t)
 	id, err := pg.SaveMCP(&db.MCPServer{
-		Name: t.Name(), Transport: "http", URL: "http://127.0.0.1:8080/mcp",
+		Name: name, Transport: "http", URL: "http://127.0.0.1:8080/mcp",
 		Enabled: true, Insecure: true,
 		Env: json.RawMessage(`{"X-API-Key":"synthetic-old"}`),
 	})
@@ -46,7 +54,7 @@ func TestPrepareMCPSaveClearsInsecureOnURLChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	incoming := &db.MCPServer{
-		ID: id, Name: t.Name(), Transport: "http",
+		ID: id, Name: name, Transport: "http",
 		URL: "http://127.0.0.1:8081/mcp", Insecure: true, Enabled: true,
 		Env: json.RawMessage(`{"X-API-Key":"synthetic-new"}`),
 	}
@@ -61,15 +69,16 @@ func TestPrepareMCPSaveClearsInsecureOnURLChange(t *testing.T) {
 func TestPrepareMCPSaveRejectsCommandSwapWithStoredEnv(t *testing.T) {
 	m := testManagerPG(t)
 	pg := m.pg
+	name := uniqueMCPName(t)
 	id, err := pg.SaveMCP(&db.MCPServer{
-		Name: "fixture", Transport: "stdio", Command: "fixture-old",
+		Name: name, Transport: "stdio", Command: "fixture-old",
 		Enabled: true, Env: json.RawMessage(`{"API_KEY":"synthetic-old"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	incoming := &db.MCPServer{
-		ID: id, Name: "fixture", Transport: "stdio", Command: "fixture-attacker",
+		ID: id, Name: name, Transport: "stdio", Command: "fixture-attacker",
 		Enabled: true, Env: json.RawMessage(`{}`),
 	}
 	if err := prepareMCPSave(pg, incoming); !errors.Is(err, endpoint.ErrCredentialDestination) {
