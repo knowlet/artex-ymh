@@ -651,15 +651,15 @@ func readSSEEventWithEOF(r *bufio.Reader, allowEOF bool) (string, error) {
 		if err != nil && !errors.Is(err, io.EOF) {
 			return "", err
 		}
+		eventBytes += len(line)
+		if eventBytes > maxSSEEventBytes {
+			return "", errSSEEventTooLarge
+		}
 		if errors.Is(err, io.EOF) && !allowEOF {
 			if hasData || len(line) > 0 {
 				return "", io.ErrUnexpectedEOF
 			}
 			return "", io.EOF
-		}
-		eventBytes += len(line)
-		if eventBytes > maxSSEEventBytes {
-			return "", errSSEEventTooLarge
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {

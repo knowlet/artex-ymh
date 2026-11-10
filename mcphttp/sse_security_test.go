@@ -22,6 +22,7 @@ func TestSSELineAndAggregateEventLimits(t *testing.T) {
 	}{
 		{"unterminated-line", "data:" + strings.Repeat("x", maxSSELineBytes), errSSELineTooLarge},
 		{"multiline-event", strings.Repeat("data: "+strings.Repeat("x", 65536)+"\n", maxSSEEventBytes/65536+1), errSSEEventTooLarge},
+		{"aggregate-overflow-at-EOF", "data: " + strings.Repeat("x", maxSSEEventBytes/2) + "\n" + "data: " + strings.Repeat("y", maxSSEEventBytes/2), errSSEEventTooLarge},
 		{"comment-event", strings.Repeat(":"+strings.Repeat("x", 65536)+"\n", maxSSEEventBytes/65536+1), errSSEEventTooLarge},
 	} {
 		t.Run(test.name, func(t *testing.T) {
