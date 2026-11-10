@@ -901,11 +901,14 @@ func (s *Server) pgSaveMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := prepareMCPSave(pg, &m); err != nil {
-		if errors.Is(err, endpoint.ErrCredentialDestination) {
+		switch {
+		case errors.Is(err, endpoint.ErrCredentialDestination):
 			writeErr(w, 400, err.Error())
-			return
+		case mcpNotFoundMessage(err):
+			writeErr(w, 404, err.Error())
+		default:
+			writeErr(w, 500, err.Error())
 		}
-		writeErr(w, 400, err.Error())
 		return
 	}
 	isNew := m.ID == 0

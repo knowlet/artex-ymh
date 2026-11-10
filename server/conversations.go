@@ -399,6 +399,12 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("单次最多发送 %d 个附件", maxConversationAttachments))
 		return
 	}
+	for _, a := range req.Attachments {
+		if err := validateChatAttachmentPath(a.Path); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	msg := strings.TrimSpace(req.Message)
 	if msg == "" && len(req.Attachments) == 0 {
 		writeErr(w, 400, "消息不能为空")
@@ -458,12 +464,6 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	// Read/Bash tools. baseDir = the agent's per-session CWD (<workDir>/sessions/
 	// conv-<id>/), matching chatUpload's landing dir and agent/chat.go's sessionWorkDir
 	// — busyKey == convBusyKey(c.ID) == "conv-<id>" == that session id.
-	for _, a := range req.Attachments {
-		if err := validateChatAttachmentPath(a.Path); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
 	baseDir := filepath.Join(s.m.dir, "sessions", busyKey)
 	s.runConversation(c, composeAgentMessage(agentMessage, req.Attachments, baseDir), busyKey, msg)
 	writeJSON(w, 202, map[string]any{"status": "accepted"})

@@ -72,11 +72,14 @@ install_local(){
       DB_SSL="$(ask 'sslmode (disable/require)' disable)" ;;
   esac
 
+  command -v python3 >/dev/null 2>&1 || die "未检测到 python3，本地安装需要 python3 以安全生成 config.json"
+
   # 生成 config.json
   # Replace atomically: umask alone does not tighten an existing 0644 file.
-  local config_tmp
+  local config_tmp=""
+  cleanup_config_tmp(){ [ -n "$config_tmp" ] && rm -f "$config_tmp"; }
+  trap cleanup_config_tmp EXIT INT TERM
   config_tmp="$(mktemp ./config.json.XXXXXX)"
-  trap 'rm -f "$config_tmp"' EXIT INT TERM
   DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_USER="$DB_USER" DB_PASS="$DB_PASS" DB_NAME="$DB_NAME" DB_SSL="$DB_SSL" \
     python3 - <<'PY' > "$config_tmp"
 import json, os
@@ -93,6 +96,7 @@ print(json.dumps({
 PY
   chmod 600 "$config_tmp"
   mv -f "$config_tmp" config.json
+  config_tmp=""
   trap - EXIT INT TERM
   ok "已生成 config.json"
 

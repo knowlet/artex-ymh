@@ -217,11 +217,8 @@ func configBoolValue(v any) (bool, bool) {
 	if v == nil {
 		return false, true
 	}
-	switch x := v.(type) {
-	case bool:
+	if x, ok := v.(bool); ok {
 		return x, true
-	case float64:
-		return x != 0, true
 	}
 	return false, false
 }

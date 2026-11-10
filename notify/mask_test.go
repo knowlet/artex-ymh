@@ -269,16 +269,29 @@ func TestPrepareConfigUpdateAllowsLegacyEmailWithoutAllowInsecure(t *testing.T) 
 	stored := map[string]any{
 		"host": "smtp.example.test", "port": 587.0,
 		"from": "noreply@example.test", "to": []any{"ops@example.test"},
-		"password": MaskedValue("synthetic-secret"),
+		"password": "synthetic-stored-secret",
 	}
 	incoming := map[string]any{
-		"host": "__masked__:…example.test", "port": 587,
+		"host": "smtp.example.test", "port": 587,
 		"from": "noreply@example.test", "to": []any{"ops@example.test"},
-		"password": MaskedValue("synthetic-secret"),
+		"password": MaskedValue("synthetic-stored-secret"),
 		"allow_insecure": false,
 	}
 	if _, err := PrepareConfigUpdate(KindEmail, stored, incoming); err != nil {
 		t.Fatalf("legacy email channel edit rejected: %v", err)
+	}
+}
+
+func TestPrepareConfigUpdateStillRequiresPasswordOnPortChange(t *testing.T) {
+	stored := map[string]any{
+		"host": "smtp.example.test", "port": 587.0,
+		"from": "noreply@example.test", "to": []any{"ops@example.test"},
+		"password": "synthetic-stored-secret", "allow_insecure": false,
+	}
+	if _, err := PrepareConfigUpdate(KindEmail, stored, map[string]any{
+		"port": 465, "allow_insecure": false, "password": MaskedValue("synthetic-stored-secret"),
+	}); err == nil {
+		t.Fatal("port change must require explicit SMTP password")
 	}
 }
 
