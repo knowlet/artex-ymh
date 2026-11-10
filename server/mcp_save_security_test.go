@@ -38,7 +38,7 @@ func TestPrepareMCPSaveClearsInsecureOnURLChange(t *testing.T) {
 	m := testManagerPG(t)
 	pg := m.pg
 	id, err := pg.SaveMCP(&db.MCPServer{
-		Name: "fixture", Transport: "http", URL: "http://127.0.0.1:8080/mcp",
+		Name: t.Name(), Transport: "http", URL: "http://127.0.0.1:8080/mcp",
 		Enabled: true, Insecure: true,
 		Env: json.RawMessage(`{"X-API-Key":"synthetic-old"}`),
 	})
@@ -46,7 +46,7 @@ func TestPrepareMCPSaveClearsInsecureOnURLChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	incoming := &db.MCPServer{
-		ID: id, Name: "fixture", Transport: "http",
+		ID: id, Name: t.Name(), Transport: "http",
 		URL: "http://127.0.0.1:8081/mcp", Insecure: true, Enabled: true,
 		Env: json.RawMessage(`{"X-API-Key":"synthetic-new"}`),
 	}
