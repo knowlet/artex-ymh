@@ -125,3 +125,28 @@ func TestPrepareMCPSavePreservesStdioArgsWhenOmitted(t *testing.T) {
 		t.Fatalf("args=%s", incoming.Args)
 	}
 }
+
+func TestPrepareMCPSavePreservesStdioArgsWhenNullJSON(t *testing.T) {
+	m := testManagerPG(t)
+	pg := m.pg
+	name := uniqueMCPName(t)
+	id, err := pg.SaveMCP(&db.MCPServer{
+		Name: name, Transport: "stdio", Command: "fixture-cmd",
+		Args: json.RawMessage(`["--sandbox"]`),
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pg.DeleteMCP(id) })
+	incoming := &db.MCPServer{
+		ID: id, Name: name, Transport: "stdio", Command: "fixture-cmd",
+		Args: json.RawMessage(`null`), Enabled: true,
+	}
+	if err := prepareMCPSave(pg, incoming); err != nil {
+		t.Fatal(err)
+	}
+	if string(incoming.Args) != `["--sandbox"]` {
+		t.Fatalf("args=%s", incoming.Args)
+	}
+}

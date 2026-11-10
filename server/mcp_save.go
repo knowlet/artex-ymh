@@ -35,7 +35,7 @@ func prepareMCPSave(pg *db.DB, m *db.MCPServer) error {
 		if strings.TrimSpace(m.Command) == "" {
 			m.Command = cur.Command
 		}
-		if len(bytes.TrimSpace(m.Args)) == 0 {
+		if mcpFieldUnset(m.Args) {
 			m.Args = cur.Args
 		}
 	}
@@ -149,4 +149,9 @@ func mcpMergeEnv(stored, incoming json.RawMessage) json.RawMessage {
 
 func mcpNotFoundMessage(err error) bool {
 	return errors.Is(err, errMCPNotFound)
+}
+
+func mcpFieldUnset(raw json.RawMessage) bool {
+	b := bytes.TrimSpace(raw)
+	return len(b) == 0 || bytes.Equal(b, []byte("null"))
 }
