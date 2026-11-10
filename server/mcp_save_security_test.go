@@ -16,6 +16,14 @@ func uniqueMCPName(t *testing.T) string {
 	return fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano())
 }
 
+func TestMCPRequireSecretReentryAcceptsCaseNormalizedRotation(t *testing.T) {
+	old, _ := json.Marshal(map[string]string{"x-api-key": "synthetic-old"})
+	neu, _ := json.Marshal(map[string]string{"X-API-Key": "synthetic-new"})
+	if err := mcpRequireSecretReentry(old, neu); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMCPRequireSecretReentry(t *testing.T) {
 	old, _ := json.Marshal(map[string]string{"Authorization": "old-token"})
 	if err := mcpRequireSecretReentry(old, old); err == nil {

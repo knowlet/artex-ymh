@@ -143,6 +143,14 @@ func mcpRequireSecretReentry(before, after json.RawMessage) error {
 			continue
 		}
 		nv := strings.TrimSpace(new[key])
+		if nv == "" {
+			for nk, val := range new {
+				if strings.EqualFold(nk, key) {
+					nv = strings.TrimSpace(val)
+					break
+				}
+			}
+		}
 		if nv == "" || nv == ov {
 			return endpoint.ErrCredentialDestination
 		}
