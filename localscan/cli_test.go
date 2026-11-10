@@ -36,8 +36,19 @@ func TestHelpWithoutServiceInitialization(t *testing.T) {
 }
 
 func TestUnknownFlagsFailClosed(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("linux/amd64 only")
+	}
 	var out, errOut bytes.Buffer
-	if code := Run(context.Background(), []string{"run", "--target", "https://not-authorized.invalid"}, &out, &errOut); code != 2 {
+	args := []string{
+		"run", "--tool", "trivy", "--install-dir", "/tmp/scan-install", "--sbom", "/tmp/bom.json",
+		"--db-dir", "/tmp/db", "--authorized", "--report-dir", "/tmp/report",
+		"--target", "https://not-authorized.invalid",
+	}
+	if code := Run(context.Background(), args, &out, &errOut); code != 2 {
 		t.Fatalf("code=%d out=%s err=%s", code, &out, &errOut)
+	}
+	if !bytes.Contains(errOut.Bytes(), []byte("unrecognized arguments")) {
+		t.Fatalf("expected unknown-flag error, err=%s", &errOut)
 	}
 }

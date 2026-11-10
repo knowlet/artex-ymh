@@ -7,7 +7,12 @@ on:
       - 'cmd/artex/main.go'
       - 'scripts/*local_scanners.py'
       - 'scripts/build_tools_bundle.py'
+      - 'scripts/test_build_tools_bundle.py'
       - 'packaging/scanner-source-index.json'
+      - 'packaging/tools-manifest.json'
+      - 'localscan/sources.lock.json'
+      - 'go.mod'
+      - 'go.sum'
       - 'docs/LOCAL-SCANNERS.md'
       - '.github/workflows/local-scanners.yml'
 permissions:

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"time"
 )
 
@@ -47,7 +48,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
 	cmd.Stdout, cmd.Stderr = out, errOut
 	cmd.WaitDelay = 3 * time.Second
 	// Let Python kill/reap its process group and preserve an incomplete receipt.
-	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() >= 0 {

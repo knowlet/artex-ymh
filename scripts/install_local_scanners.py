@@ -84,8 +84,13 @@ def main():
             raise ValueError("select --bundle and/or --install-dir")
         if args.bundle is not None and (args.bundle.exists() or args.bundle.is_symlink()):
             raise ValueError("refusing to overwrite an existing bundle")
-        if args.install_dir is not None and (args.install_dir.exists() or args.install_dir.is_symlink()):
-            raise ValueError("refusing to overwrite an existing installation")
+        if args.install_dir is not None:
+            destination = Path(args.install_dir)
+            if not destination.is_absolute() or destination.exists() or destination.is_symlink():
+                raise ValueError("installation requires an absent absolute destination")
+            parent = destination.parent
+            if not parent.is_dir() or any(part.is_symlink() for part in (parent, *parent.parents)):
+                raise ValueError("installation parent must exist and cannot contain symlinks")
         specs = {}
         for source in lock["downloads"]:
             specs[source["url"]] = source

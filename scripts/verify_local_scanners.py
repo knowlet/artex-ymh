@@ -20,6 +20,11 @@ sys.path.insert(0, str(ROOT / 'localscan'))
 import worker as w
 
 
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
 def main():
     artex = str(Path(sys.argv[1]).resolve())
     evidence = Path(sys.argv[2]).resolve()
@@ -43,14 +48,14 @@ def main():
         command(installer + ['--bundle', str(root / 'two.tar.gz')], filename='offline-rebuild')
         first = hashlib.sha256((root / 'one.tar.gz').read_bytes()).hexdigest()
         second = hashlib.sha256((root / 'two.tar.gz').read_bytes()).hexdigest()
-        assert first == second, 'bundle is not reproducible'
+        require(first == second, 'bundle is not reproducible')
         (evidence / 'bundle-sha256.json').write_bytes(w.encoded({'first': first, 'second': second}))
         (evidence / 'tools-manifest.json').write_bytes((install / 'tools-manifest.json').read_bytes())
         (evidence / 'sources.lock.json').write_bytes((install / 'sources.lock.json').read_bytes())
         command(installer + ['--install-dir', str(install)], expected=2, filename='refuse-overwrite')
         for tool in w.TOOLS:
             version = command([str(install / tool), '--version'], filename=tool + '-version').decode()
-            assert ('2.7.0' if tool == 'osv-scanner' else '0.76.1') in version
+            require(('2.7.0' if tool == 'osv-scanner' else '0.76.1') in version, tool + ' version mismatch: ' + version)
             command([str(install / tool), *(['scan', 'source'] if tool == 'osv-scanner' else ['sbom']), '--help'], filename=tool + '-help')
 
         # The only live downloads after install are explicitly separated DB prep.
@@ -68,7 +73,7 @@ def main():
                 if total > w.MAX_DB:
                     raise RuntimeError('OSV DB download exceeds byte budget')
                 output.write(block)
-        assert total > 0, 'empty OSV database download'
+        require(total > 0, 'empty OSV database download')
         trivy_db = root / 'trivy-db'
         trivy_db.mkdir()
         command([str(install / 'trivy'), 'image', '--download-db-only', '--cache-dir', str(trivy_db), '--skip-version-check', '--disable-telemetry', '--no-progress'],
@@ -96,15 +101,15 @@ def main():
                 command([artex, 'scan', 'plan', *base], filename=f'{tool}-{label}-plan')
                 result = json.loads(command([artex, 'scan', 'run', *base, '--authorized', '--timeout', '300',
                                             '--report-dir', str(evidence / f'{tool}-{label}')], expected=expected, filename=f'{tool}-{label}-run', timeout=360))
-                assert result['complete'] is True
-                assert result['plan']['packages'] == len(names)
-                assert result['status'] == ('findings' if expected else 'no_findings')
+                require(result['complete'] is True, label + ' scan incomplete')
+                require(result['plan']['packages'] == len(names), label + ' package count mismatch')
+                require(result['status'] == ('findings' if expected else 'no_findings'), label + ' unexpected status')
                 if expected:
                     ids = {v for row in result['findings'] for v in [row['advisory_id'], *row['aliases']]}
-                    assert 'CVE-2021-3121' in ids or 'GHSA-c3h9-896r-86jm' in ids
+                    require('CVE-2021-3121' in ids or 'GHSA-c3h9-896r-86jm' in ids, label + ' missing expected advisory id')
                 command([artex, 'scan', 'run', *base, '--report-dir', str(evidence / f'{tool}-denied')], expected=2,
                         filename=f'{tool}-{label}-authorization-denied')
-                assert not (evidence / f'{tool}-denied').exists()
+                require(not (evidence / f'{tool}-denied').exists(), tool + ' scan ran without authorization')
             receipt_path = db / 'artex-db.json'
             original = receipt_path.read_bytes()
             receipt = json.loads(original)

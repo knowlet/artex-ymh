@@ -156,11 +156,11 @@ scanner dispatch. Callers must require complete true and a completed status.
 
 ## Resource envelope
 
-Per scan: default wall120 s (explicit1–300), CPU120 s, address space8 GiB,
-per-file64 MiB, file descriptors128, stdout16 MiB, stderr1 MiB. Limit violations
-kill/reap the process group. Go gets GOMAXPROCS2 and soft GOMEMLIMIT768 MiB.
-DB snapshot aggregate4 GiB, DB metadata1 MiB, binary256 MiB. DB copies are streamed
-in1 MiB blocks. The actual Trivy DB exceeded the original1 GiB design limit;
+Per scan: default wall **120 s** (`--timeout` **1–300**), CPU **120 s**, address space **8 GiB**,
+per-file **64 MiB**, file descriptors **128**, stdout **16 MiB**, stderr **1 MiB**. Limit violations
+kill/reap the process group. Go gets `GOMAXPROCS=2` and soft `GOMEMLIMIT=768 MiB`.
+DB snapshot aggregate **4 GiB**, DB metadata **1 MiB**, binary **256 MiB**. DB copies are streamed
+in **1 MiB** blocks. The actual Trivy DB exceeded the original **1 GiB** design limit;
 real acceptance exposed that problem and the bounded streaming path replaces it.
 
 Address-space is **not RSS**, and GOMEMLIMIT is soft. No aggregate scratch-space,
