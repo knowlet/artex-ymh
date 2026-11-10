@@ -27,7 +27,9 @@ export function UpdateBadge() {
       .checkUpdate()
       .then((r) => {
         // has_update 已经包含了"版本号可比较"的判断，开发构建不会亮这个提示。
-        if (alive && r.has_update && r.latest) setLatest(r.latest.replace(/^v(?=\d)/, ""));
+        if (alive && r.install_enabled && r.has_update && r.latest) {
+          setLatest(r.latest.replace(/^v(?=\d)/, ""));
+        }
       })
       .catch(() => {
         // 静默：没网 / GitHub 限流都不该在顶栏弹错误。

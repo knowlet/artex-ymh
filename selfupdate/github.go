@@ -1,9 +1,13 @@
 package selfupdate
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,10 +16,12 @@ import (
 
 // Repo 是发布源。写死而不是做成配置项：更新源可配等于给任何能改配置的人一条
 // 远程代码执行通道，对一个渗透测试平台来说这个口子开不得。
-const Repo = "Autumn-27/artex"
+const Repo = "knowlet/artex-ymh"
 
 // latestURL 是 GitHub 的"最新正式版"接口。它会自动跳过 prerelease 和 draft。
 const latestURL = "https://api.github.com/repos/" + Repo + "/releases/latest"
+
+const repoAPIPrefix = "/repos/" + Repo
 
 // allowedHosts 限定升级链路能访问的域名。配合下面的 checkRedirect，
 // 任何一跳被重定向到名单外的主机都会直接失败——这是防止 DNS 污染 / 中间人
@@ -68,7 +74,16 @@ func NewClient(proxy string) *http.Client {
 			if len(via) >= 10 {
 				return fmt.Errorf("重定向次数过多")
 			}
-			return checkURL(req.URL)
+			if err := checkURL(req.URL); err != nil {
+				return err
+			}
+			// 元数据查询只允许 api.github.com/repos/knowlet/artex-ymh/...，禁止偏离 fork 路径。
+			if strings.EqualFold(req.URL.Hostname(), "api.github.com") {
+				if err := checkRepoAPIPath(req.URL); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	}
 }
@@ -84,40 +99,218 @@ func checkURL(u *url.URL) error {
 	return nil
 }
 
-// FetchLatest 查询最新正式版。
-func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestURL, nil)
+func checkRepoAPIPath(u *url.URL) error {
+	lower := strings.ToLower(u.Path)
+	prefix := strings.ToLower(repoAPIPrefix)
+	if lower != prefix && !strings.HasPrefix(lower, prefix+"/") {
+		return fmt.Errorf("拒绝非 fork 仓库路径: %s", u.Path)
+	}
+	return nil
+}
+
+func verifyMetadataResponseURL(resp *http.Response) error {
+	if resp == nil || resp.Request == nil || resp.Request.URL == nil {
+		return checkError("github_error", "更新源响应 URL 无法确认")
+	}
+	u := resp.Request.URL
+	if !strings.EqualFold(u.Hostname(), "api.github.com") {
+		return checkError("github_error", "更新源响应不在 api.github.com")
+	}
+	if err := checkRepoAPIPath(u); err != nil {
+		return checkError("github_error", "更新源响应来自非 fork 仓库，已拒绝")
+	}
+	return nil
+}
+
+const maxGitHubMetadataBytes = 1 << 20 // 1 MiB — release/repo JSON is tiny
+
+func releaseBelongsToFork(rel Release) bool {
+	if rel.HTMLURL == "" {
+		return true
+	}
+	u, err := url.Parse(rel.HTMLURL)
+	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), "github.com") {
+		return false
+	}
+	wantPrefix := "/" + Repo + "/"
+	lowerPath := strings.ToLower(u.Path)
+	return strings.HasPrefix(lowerPath, strings.ToLower(wantPrefix))
+}
+
+// CheckError identifies a release-check failure without treating every failure as
+// a network/proxy problem. The wrapped error preserves cancellation detection.
+type CheckError struct {
+	Code string
+	Err  error
+}
+
+func (e *CheckError) Error() string { return e.Err.Error() }
+func (e *CheckError) Unwrap() error { return e.Err }
+
+// CheckErrorCode is stable across error wrapping and is sent to the settings UI.
+func CheckErrorCode(err error) string {
+	var e *CheckError
+	if errors.As(err, &e) {
+		return e.Code
+	}
+	return "unknown"
+}
+
+func checkError(code, message string) error {
+	return &CheckError{Code: code, Err: errors.New(message)}
+}
+
+func classifyDoError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return &CheckError{Code: "unknown", Err: fmt.Errorf("检查更新已取消或超时: %w", err)}
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "拒绝非") || strings.Contains(msg, "重定向次数过多") {
+		return &CheckError{Code: "github_error", Err: fmt.Errorf("更新源校验失败: %w", err)}
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return &CheckError{Code: "network", Err: fmt.Errorf("访问 GitHub 失败: %w", err)}
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return &CheckError{Code: "network", Err: fmt.Errorf("访问 GitHub 失败: %w", err)}
+	}
+	return &CheckError{Code: "github_error", Err: fmt.Errorf("访问 GitHub 失败: %w", err)}
+}
+
+func decodeSingleJSON(r io.Reader, v any) error {
+	dec := json.NewDecoder(r)
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("响应含有多余数据")
+		}
+		return err
+	}
+	return nil
+}
+
+func githubRequest(ctx context.Context, c *http.Client, endpoint string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	if err := checkURL(req.URL); err != nil {
-		return nil, err
+		return nil, classifyDoError(err)
+	}
+	if strings.EqualFold(req.URL.Hostname(), "api.github.com") {
+		if err := checkRepoAPIPath(req.URL); err != nil {
+			return nil, classifyDoError(err)
+		}
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "artex-selfupdate")
-
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("访问 GitHub 失败（可在系统设置里配置全局代理）: %w", err)
+		return nil, classifyDoError(err)
 	}
+	if err := verifyMetadataResponseURL(resp); err != nil {
+		_ = resp.Body.Close()
+		return nil, err
+	}
+	return resp, nil
+}
+
+func readGitHubResponseBody(resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
+	limited := io.LimitReader(resp.Body, maxGitHubMetadataBytes+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxGitHubMetadataBytes {
+		return nil, errors.New("GitHub 响应过大")
+	}
+	return body, nil
+}
 
+func githubStatusError(status int, header http.Header, body []byte) error {
+	msg := strings.ToLower(string(body))
 	switch {
-	case resp.StatusCode == http.StatusForbidden, resp.StatusCode == http.StatusTooManyRequests:
-		// 未认证的 GitHub API 是每 IP 每小时 60 次，共用出口 IP 时很容易撞上。
-		return nil, fmt.Errorf("GitHub 接口限流（每小时 60 次），请稍后再试")
-	case resp.StatusCode == http.StatusNotFound:
-		return nil, fmt.Errorf("仓库 %s 尚未发布任何正式版本", Repo)
-	case resp.StatusCode != http.StatusOK:
-		return nil, fmt.Errorf("GitHub 返回 %d", resp.StatusCode)
+	case status == http.StatusTooManyRequests:
+		return checkError("rate_limited", "GitHub 接口限流，请稍后再试")
+	case status == http.StatusForbidden &&
+		(header.Get("X-RateLimit-Remaining") == "0" ||
+			header.Get("Retry-After") != "" ||
+			strings.Contains(msg, "secondary rate limit") ||
+			strings.Contains(msg, "abuse detection")):
+		return checkError("rate_limited", "GitHub 接口限流，请稍后再试")
+	case status == http.StatusForbidden, status == http.StatusUnauthorized:
+		return checkError("access_denied", "GitHub 拒绝访问更新源，请检查仓库可见性或访问权限")
+	case status != http.StatusOK:
+		return checkError("github_error", fmt.Sprintf("GitHub 返回 %d，无法确认最新版本", status))
 	}
+	return nil
+}
 
-	var rel Release
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return nil, fmt.Errorf("解析 Release 失败: %w", err)
+func decodeRepoInfo(body io.Reader) (fullName string, err error) {
+	var info struct {
+		FullName string `json:"full_name"`
 	}
-	if strings.TrimSpace(rel.TagName) == "" {
-		return nil, fmt.Errorf("Release 缺少 tag")
+	if err := decodeSingleJSON(body, &info); err != nil {
+		return "", err
+	}
+	return info.FullName, nil
+}
+
+// FetchLatest queries only this fork. A missing latest Release is ambiguous on
+// GitHub: verify repository visibility before claiming that no release exists.
+func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
+	resp, err := githubRequest(ctx, c, latestURL)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		_ = resp.Body.Close()
+		repo, err := githubRequest(ctx, c, "https://api.github.com/repos/"+Repo)
+		if err != nil {
+			return nil, err
+		}
+		if repo.StatusCode == http.StatusNotFound {
+			_ = repo.Body.Close()
+			return nil, checkError("repository_unavailable", fmt.Sprintf("更新源 %s 不存在或当前不可见，无法确认是否有正式版本", Repo))
+		}
+		repoBody, err := readGitHubResponseBody(repo)
+		if err != nil {
+			return nil, &CheckError{Code: "github_error", Err: fmt.Errorf("读取 GitHub 响应失败: %w", err)}
+		}
+		if err := githubStatusError(repo.StatusCode, repo.Header, repoBody); err != nil {
+			return nil, err
+		}
+		fullName, err := decodeRepoInfo(bytes.NewReader(repoBody))
+		if err != nil || !strings.EqualFold(fullName, Repo) {
+			return nil, checkError("github_error", "GitHub 返回的仓库信息无法确认更新源，不能判定为无正式版本")
+		}
+		return nil, checkError("no_release", fmt.Sprintf("仓库 %s 当前可访问，但没有可用的最新正式版本（不含预发布或草稿）", Repo))
+	}
+	releaseBody, err := readGitHubResponseBody(resp)
+	if err != nil {
+		return nil, &CheckError{Code: "github_error", Err: fmt.Errorf("读取 GitHub 响应失败: %w", err)}
+	}
+	if err := githubStatusError(resp.StatusCode, resp.Header, releaseBody); err != nil {
+		return nil, err
+	}
+	var rel Release
+	if err := decodeSingleJSON(bytes.NewReader(releaseBody), &rel); err != nil {
+		return nil, &CheckError{Code: "invalid_release", Err: fmt.Errorf("解析 Release 失败: %w", err)}
+	}
+	if strings.TrimSpace(rel.TagName) == "" || rel.Draft || rel.Prerelease {
+		return nil, checkError("invalid_release", "GitHub 未返回有效的最新正式版本")
+	}
+	if !releaseBelongsToFork(rel) {
+		return nil, checkError("github_error", "GitHub 返回的 Release 不属于此 fork，已拒绝")
 	}
 	return &rel, nil
 }
