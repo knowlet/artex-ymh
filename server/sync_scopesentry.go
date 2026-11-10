@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/endpoint"
 	"github.com/Autumn-27/artex/mcphttp"
 )
 
@@ -156,6 +158,18 @@ func (s *Server) syncSSDatasource(w http.ResponseWriter, r *http.Request) {
 	}
 	// Enable only once it can actually be used.
 	m.Enabled = m.URL != "" && envHasValue(m.Env)
+
+	if err := prepareMCPSave(pg, m); err != nil {
+		switch {
+		case errors.Is(err, endpoint.ErrCredentialDestination):
+			writeErr(w, 400, err.Error())
+		case mcpNotFoundMessage(err):
+			writeErr(w, 404, err.Error())
+		default:
+			writeErr(w, 500, err.Error())
+		}
+		return
+	}
 
 	id, err := pg.SaveMCP(m)
 	if err != nil {

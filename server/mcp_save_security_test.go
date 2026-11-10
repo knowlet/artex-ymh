@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
+	pgdb "github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/internal/endpoint"
 )
 
@@ -45,19 +45,38 @@ func TestMCPMergeEnvToleratesNullJSON(t *testing.T) {
 
 func testManagerPG(t *testing.T) *Manager {
 	t.Helper()
+	if _, _, err := pgdb.DSN(); err != nil {
+		t.Skipf("postgres unavailable (%v) - skipping", err)
+	}
 	m, err := NewManager(t.TempDir(), "")
 	if err != nil {
-		t.Skipf("postgres unavailable (%v) - skipping", err)
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { m.Close() })
 	return m
+}
+
+func TestMCPDestinationIgnoresJSONArgSpacing(t *testing.T) {
+	cur := &pgdb.MCPServer{Transport: "stdio", Command: "fixture-cmd", Args: json.RawMessage(`["--sandbox","--verbose"]`)}
+	incoming := &pgdb.MCPServer{Transport: "stdio", Command: "fixture-cmd", Args: json.RawMessage(`[ "--sandbox" , "--verbose" ]`)}
+	if mcpDestinationChanged(cur, incoming, "") {
+		t.Fatal("whitespace-only JSON encoding must not count as args change")
+	}
+}
+
+func TestMCPDestinationDetectsClearedStdioArgs(t *testing.T) {
+	cur := &pgdb.MCPServer{Transport: "stdio", Command: "fixture-cmd", Args: json.RawMessage(`["--sandbox"]`)}
+	incoming := &pgdb.MCPServer{Transport: "stdio", Command: "fixture-cmd", Args: json.RawMessage(`[]`)}
+	if !mcpDestinationChanged(cur, incoming, "") {
+		t.Fatal("explicit empty args must count as a destination change")
+	}
 }
 
 func TestPrepareMCPSaveClearsInsecureOnURLChange(t *testing.T) {
 	m := testManagerPG(t)
 	pg := m.pg
 	name := uniqueMCPName(t)
-	id, err := pg.SaveMCP(&db.MCPServer{
+	id, err := pg.SaveMCP(&pgdb.MCPServer{
 		Name: name, Transport: "http", URL: "http://127.0.0.1:8080/mcp",
 		Enabled: true, Insecure: true,
 		Env: json.RawMessage(`{"X-API-Key":"synthetic-old"}`),
@@ -66,7 +85,7 @@ func TestPrepareMCPSaveClearsInsecureOnURLChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = pg.DeleteMCP(id) })
-	incoming := &db.MCPServer{
+	incoming := &pgdb.MCPServer{
 		ID: id, Name: name, Transport: "http",
 		URL: "http://127.0.0.1:8081/mcp", Insecure: true, Enabled: true,
 		Env: json.RawMessage(`{"X-API-Key":"synthetic-new"}`),
@@ -83,7 +102,7 @@ func TestPrepareMCPSaveRejectsCommandSwapWithStoredEnv(t *testing.T) {
 	m := testManagerPG(t)
 	pg := m.pg
 	name := uniqueMCPName(t)
-	id, err := pg.SaveMCP(&db.MCPServer{
+	id, err := pg.SaveMCP(&pgdb.MCPServer{
 		Name: name, Transport: "stdio", Command: "fixture-old",
 		Args: json.RawMessage(`["--fixture"]`),
 		Enabled: true, Env: json.RawMessage(`{"API_KEY":"synthetic-old"}`),
@@ -92,7 +111,7 @@ func TestPrepareMCPSaveRejectsCommandSwapWithStoredEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = pg.DeleteMCP(id) })
-	incoming := &db.MCPServer{
+	incoming := &pgdb.MCPServer{
 		ID: id, Name: name, Transport: "stdio", Command: "fixture-attacker",
 		Enabled: true, Env: json.RawMessage(`{}`),
 	}
@@ -105,7 +124,7 @@ func TestPrepareMCPSavePreservesStdioArgsWhenOmitted(t *testing.T) {
 	m := testManagerPG(t)
 	pg := m.pg
 	name := uniqueMCPName(t)
-	id, err := pg.SaveMCP(&db.MCPServer{
+	id, err := pg.SaveMCP(&pgdb.MCPServer{
 		Name: name, Transport: "stdio", Command: "fixture-cmd",
 		Args: json.RawMessage(`["--sandbox"]`),
 		Enabled: true, Env: json.RawMessage(`{"API_KEY":"synthetic-old"}`),
@@ -114,7 +133,7 @@ func TestPrepareMCPSavePreservesStdioArgsWhenOmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = pg.DeleteMCP(id) })
-	incoming := &db.MCPServer{
+	incoming := &pgdb.MCPServer{
 		ID: id, Name: name, Transport: "stdio", Command: "fixture-cmd",
 		Enabled: true, Env: json.RawMessage(`null`),
 	}
@@ -130,7 +149,7 @@ func TestPrepareMCPSavePreservesStdioArgsWhenNullJSON(t *testing.T) {
 	m := testManagerPG(t)
 	pg := m.pg
 	name := uniqueMCPName(t)
-	id, err := pg.SaveMCP(&db.MCPServer{
+	id, err := pg.SaveMCP(&pgdb.MCPServer{
 		Name: name, Transport: "stdio", Command: "fixture-cmd",
 		Args: json.RawMessage(`["--sandbox"]`),
 		Enabled: true,
@@ -139,7 +158,7 @@ func TestPrepareMCPSavePreservesStdioArgsWhenNullJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = pg.DeleteMCP(id) })
-	incoming := &db.MCPServer{
+	incoming := &pgdb.MCPServer{
 		ID: id, Name: name, Transport: "stdio", Command: "fixture-cmd",
 		Args: json.RawMessage(`null`), Enabled: true,
 	}

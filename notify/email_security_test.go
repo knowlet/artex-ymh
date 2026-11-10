@@ -32,14 +32,19 @@ func TestEmailExplicitPlaintextRelayStillWorks(t *testing.T) {
 func TestEmailTLSFailureNeverFallsBackToPlaintext(t *testing.T) {
 	for _, implicit := range []bool{false, true} {
 		t.Run(map[bool]string{false: "STARTTLS", true: "implicit TLS"}[implicit], func(t *testing.T) {
-			f := newFakeSMTP(t)
-			f.advertiseSTARTTLS = !implicit
+			f := newFakeSMTP(t, func(f *fakeSMTP) {
+				f.advertiseSTARTTLS = !implicit
+				f.acceptMultiple = true
+			})
 			cfg := emailCfg(t, f, map[string]any{"tls": implicit, "allow_insecure": true})
 			if _, err := (emailChannel{}).Send(context.Background(), cfg, singleMsg()); err == nil {
 				t.Fatal("failed TLS session was accepted")
 			}
 			if f.sawCommand("MAIL") || f.sawCommand("DATA") {
 				t.Fatal("TLS failure downgraded to plaintext mail")
+			}
+			if f.connectionCount() > 1 {
+				t.Fatal("TLS failure must not retry with an additional SMTP connection")
 			}
 		})
 	}

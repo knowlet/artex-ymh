@@ -30,19 +30,25 @@ type fakeSMTP struct {
 	// advertiseAuth 为 true 时在 EHLO 里声明支持 AUTH PLAIN。
 	advertiseAuth     bool
 	advertiseSTARTTLS bool
+	// acceptMultiple keeps accepting connections until the listener closes.
+	acceptMultiple bool
 
 	mu       sync.Mutex
 	data     string
 	commands []string
+	accepts  int
 }
 
-func newFakeSMTP(t *testing.T) *fakeSMTP {
+func newFakeSMTP(t *testing.T, configure ...func(*fakeSMTP)) *fakeSMTP {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeSMTP{ln: ln, rcptReply: "250 OK", mailReply: "250 OK"}
+	for _, fn := range configure {
+		fn(f)
+	}
 	go f.serve()
 	t.Cleanup(func() { ln.Close() })
 	return f
@@ -80,11 +86,31 @@ func (f *fakeSMTP) sawCommand(prefix string) bool {
 	return false
 }
 
+func (f *fakeSMTP) connectionCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.accepts
+}
+
 func (f *fakeSMTP) serve() {
-	conn, err := f.ln.Accept()
-	if err != nil {
+	for {
+		conn, err := f.ln.Accept()
+		if err != nil {
+			return
+		}
+		f.mu.Lock()
+		f.accepts++
+		f.mu.Unlock()
+		if f.acceptMultiple {
+			go f.handleConn(conn)
+			continue
+		}
+		f.handleConn(conn)
 		return
 	}
+}
+
+func (f *fakeSMTP) handleConn(conn net.Conn) {
 	defer conn.Close()
 	br := bufio.NewReader(conn)
 	w := func(s string) { _, _ = conn.Write([]byte(s + "\r\n")) }

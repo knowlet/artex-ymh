@@ -81,11 +81,35 @@ func mcpDestinationChanged(cur, incoming *db.MCPServer, resolvedURL string) bool
 		if strings.TrimSpace(cur.Command) != strings.TrimSpace(incoming.Command) {
 			return true
 		}
-		if len(incoming.Args) > 0 && !bytes.Equal(bytes.TrimSpace(cur.Args), bytes.TrimSpace(incoming.Args)) {
+		if mcpStdioArgsChanged(cur.Args, incoming.Args) {
 			return true
 		}
 	}
 	return mcpEndpointChanged(cur.URL, resolvedURL)
+}
+
+func mcpStdioArgsChanged(before, after json.RawMessage) bool {
+	if mcpFieldUnset(after) {
+		return false
+	}
+	var have, want []string
+	before = bytes.TrimSpace(before)
+	after = bytes.TrimSpace(after)
+	if err := json.Unmarshal(before, &have); err != nil {
+		return !bytes.Equal(before, after)
+	}
+	if err := json.Unmarshal(after, &want); err != nil {
+		return true
+	}
+	if len(have) != len(want) {
+		return true
+	}
+	for i := range have {
+		if have[i] != want[i] {
+			return true
+		}
+	}
+	return false
 }
 
 func mcpEndpointChanged(before, after string) bool {

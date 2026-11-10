@@ -518,8 +518,9 @@ func judgeActionLabel(action string) string {
 // Returns (Decision, true) for the first matching enabled rule, or
 // (Decision{}, false) if no rule matches. Fail-closed: a rule-load error is NOT
 // treated as "no rules" — it returns an explicit deny decision (and logs).
-// Malformed tool input is also denied before rule matching. An empty rule list
-// (len==0, no error) still falls through to the LLM judge / caller default.
+// Malformed tool input is denied before rule matching even when there are zero
+// enabled rules. An empty rule list (len==0, no error) still falls through to
+// the LLM judge / caller default for valid JSON input only.
 func (i *Interceptor) Match(toolName string, input []byte) (Decision, bool) {
 	rules, err := i.rules()
 	if err != nil {

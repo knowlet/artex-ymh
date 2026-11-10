@@ -7,9 +7,9 @@ import (
 	"github.com/Autumn-27/artex/db"
 )
 
-func inputSecurityRule(id int64, target, kind, pattern, action string) compiledRule {
+func inputSecurityRule(id int64, priority int, target, kind, pattern, action string) compiledRule {
 	r := compiledRule{InterceptRule: db.InterceptRule{
-		ID: id, Name: "input-security", Enabled: true,
+		ID: id, Name: "input-security", Enabled: true, Priority: priority,
 		MatchTarget: target, MatchType: kind, Pattern: pattern, Action: action,
 	}}
 	if kind == "regex" {
@@ -38,7 +38,7 @@ func TestSecurityInterceptDecodedStrings(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ic := &Interceptor{cached: []compiledRule{inputSecurityRule(1, "tool_input", tc.kind, tc.pattern, "deny")}}
+			ic := &Interceptor{cached: []compiledRule{inputSecurityRule(1, 0, "tool_input", tc.kind, tc.pattern, "deny")}}
 			dec, matched := ic.Match("Bash", []byte(tc.input))
 			if matched != tc.want || matched && (dec.Action != "deny" || dec.RuleID != 1) {
 				t.Fatalf("match=%v decision=%+v, want match=%v", matched, dec, tc.want)
@@ -47,9 +47,19 @@ func TestSecurityInterceptDecodedStrings(t *testing.T) {
 	}
 }
 
+func TestSecurityInterceptRulePriorityDescWinsFirstMatch(t *testing.T) {
+	low := inputSecurityRule(1, 1, "tool_input", "string", "BLOCK_MARKER", "allow")
+	high := inputSecurityRule(2, 100, "tool_input", "string", "BLOCK_MARKER", "deny")
+	// Slice order matches ListInterceptRules: priority DESC, then id.
+	ic := &Interceptor{cached: []compiledRule{high, low}}
+	if dec, matched := ic.Match("Bash", []byte("{\"command\":\"BLOCK_MARKER\"}")); !matched || dec.RuleID != 2 || dec.Action != "deny" {
+		t.Fatalf("higher-priority deny must win: match=%v decision=%+v", matched, dec)
+	}
+}
+
 func TestSecurityInterceptStructureAndPriority(t *testing.T) {
-	structural := inputSecurityRule(1, "tool_input", "regex", "\"command\"\\s*:\\s*\"safe\"", "allow")
-	deny := inputSecurityRule(2, "tool_input", "string", "safe", "deny")
+	structural := inputSecurityRule(1, 10, "tool_input", "regex", "\"command\"\\s*:\\s*\"safe\"", "allow")
+	deny := inputSecurityRule(2, 1, "tool_input", "string", "safe", "deny")
 	ic := &Interceptor{cached: []compiledRule{structural, deny}}
 	if dec, matched := ic.Match("Bash", []byte(`{ "command" : "safe" }`)); !matched || dec.RuleID != 1 || dec.Action != "allow" {
 		t.Fatalf("higher-priority structural rule changed: match=%v decision=%+v", matched, dec)
@@ -58,8 +68,8 @@ func TestSecurityInterceptStructureAndPriority(t *testing.T) {
 	if dec, matched := ic.Match("Bash", []byte(`{"\u0063ommand":"\u0073afe"}`)); !matched || dec.RuleID != 2 || dec.Action != "deny" {
 		t.Fatalf("escaped spellings must not bypass raw allow rules: match=%v decision=%+v", matched, dec)
 	}
-	ask := inputSecurityRule(3, "tool_input", "string", "BLOCK_MARKER", "ask")
-	allow := inputSecurityRule(4, "tool_name", "string", "Bash", "allow")
+	ask := inputSecurityRule(3, 50, "tool_input", "string", "BLOCK_MARKER", "ask")
+	allow := inputSecurityRule(4, 1, "tool_name", "string", "Bash", "allow")
 	ic = &Interceptor{cached: []compiledRule{ask, allow}}
 	if dec, matched := ic.Match("Bash", []byte("{\"command\":\"BLOCK_\\u004dARKER\"}")); !matched || dec.RuleID != 3 || dec.Action != "ask" {
 		t.Fatalf("decoded ask must retain priority over tool allow: %v %+v", matched, dec)
@@ -73,7 +83,7 @@ func TestSecurityInterceptStructureAndPriority(t *testing.T) {
 }
 
 func TestSecurityInterceptMalformedJSONFailsClosed(t *testing.T) {
-	for _, rules := range [][]compiledRule{{}, {inputSecurityRule(1, "tool_name", "string", "Bash", "allow")}} {
+	for _, rules := range [][]compiledRule{{}, {inputSecurityRule(1, 0, "tool_name", "string", "Bash", "allow")}} {
 		ic := &Interceptor{cached: rules}
 		for _, input := range []string{"{", "{\"command\":\"safe\"} trailing", "{\"command\":\"safe\"}{}", "{\"command\":\"\\x41\"}", " "} {
 			if dec, matched := ic.Match("Bash", []byte(input)); !matched || dec.Action != "deny" {

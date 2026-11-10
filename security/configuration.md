@@ -42,7 +42,7 @@ Windows 的底层执行器使用 PowerShell，暂不支持参数化 `command`，
 
 ## 安装与重置脚本
 
-`install.sh` 要求先按 Docker 官方文档安装 Docker / Compose，不再下载并直接执行在线安装脚本。生成的 `config.json` 以 0600 权限原子替换；新建和复用的 `.env` 均设置为 0600。
+`install.sh` 在 **全部 Docker** 或脚本代拉 PostgreSQL 容器时，要求先按 Docker 官方文档安装 Docker / Compose，不再下载并直接执行在线安装脚本。仅用 **本地编译** 并连接已有 PostgreSQL 时不需要 Docker。生成的 `config.json` 以 0600 权限原子替换；新建和复用的 `.env` 均设置为 0600。
 
 `reset-password.sh` 只读取 `.env` 中的 `POSTGRES_USER`、`POSTGRES_DB`、`POSTGRES_PASSWORD` 字面值，文件上限 64 KiB。支持空值、普通值、单引号值和没有展开/转义的双引号值；值含空格或 `$` 时用单引号，例如 `POSTGRES_PASSWORD='literal$value with spaces'`。不会执行 shell 代码或进行 `${...}`、命令替换、反斜杠转义。使用 Compose 插值的部署应显式提供已展开的数据库参数。未知变量不能覆盖脚本的 SQL、PATH 或执行方式。
 
