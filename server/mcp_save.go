@@ -179,3 +179,18 @@ func mcpFieldUnset(raw json.RawMessage) bool {
 	b := bytes.TrimSpace(raw)
 	return len(b) == 0 || bytes.Equal(b, []byte("null"))
 }
+
+// mcpEnvSetAPIKey replaces any case variant of X-API-Key with one canonical entry.
+func mcpEnvSetAPIKey(raw json.RawMessage, apiKey string) (json.RawMessage, error) {
+	env := jsonStrMap(raw)
+	if env == nil {
+		env = map[string]string{}
+	}
+	for key := range env {
+		if strings.EqualFold(key, "X-API-Key") {
+			delete(env, key)
+		}
+	}
+	env["X-API-Key"] = apiKey
+	return json.Marshal(env)
+}

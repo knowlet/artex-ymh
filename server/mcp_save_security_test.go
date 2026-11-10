@@ -64,6 +64,26 @@ func TestMCPDestinationIgnoresJSONArgSpacing(t *testing.T) {
 	}
 }
 
+func TestMCPEnvSetAPIKeyDropsCaseVariants(t *testing.T) {
+	got, err := mcpEnvSetAPIKey(json.RawMessage(`{"x-api-key":"stale","Authorization":"keep"}`), "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env map[string]string
+	if err := json.Unmarshal(got, &env); err != nil {
+		t.Fatal(err)
+	}
+	if env["X-API-Key"] != "new" {
+		t.Fatalf("env=%#v", env)
+	}
+	if _, dup := env["x-api-key"]; dup {
+		t.Fatalf("stale case variant retained: %#v", env)
+	}
+	if env["Authorization"] != "keep" {
+		t.Fatalf("other headers not preserved: %#v", env)
+	}
+}
+
 func TestMCPDestinationDetectsClearedStdioArgs(t *testing.T) {
 	cur := &pgdb.MCPServer{Transport: "stdio", Command: "fixture-cmd", Args: json.RawMessage(`["--sandbox"]`)}
 	incoming := &pgdb.MCPServer{Transport: "stdio", Command: "fixture-cmd", Args: json.RawMessage(`[]`)}

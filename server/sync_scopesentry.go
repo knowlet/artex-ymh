@@ -153,12 +153,7 @@ func (s *Server) syncSSDatasource(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if body.APIKey != "" {
-		env := jsonStrMap(m.Env)
-		if env == nil {
-			env = map[string]string{}
-		}
-		env["X-API-Key"] = body.APIKey
-		b, err := json.Marshal(env)
+		b, err := mcpEnvSetAPIKey(m.Env, body.APIKey)
 		if err != nil {
 			writeErr(w, 500, err.Error())
 			return
