@@ -64,6 +64,14 @@ func (d *DB) GetInterceptDetail(id int64) (*InterceptDetail, error) {
 		return nil, err
 	}
 	if len(raw) > 0 {
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &members); err != nil {
+			return nil, err
+		}
+		// An advisory on a legacy row does not manufacture an execution snapshot.
+		if string(members["approval_advisory_only"]) == "true" || len(members) == 1 && members["approval_advisory"] != nil {
+			return &out, nil
+		}
 		if err := json.Unmarshal(raw, &out.Audit); err != nil {
 			return nil, err
 		}
