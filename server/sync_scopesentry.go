@@ -153,8 +153,17 @@ func (s *Server) syncSSDatasource(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if body.APIKey != "" {
-		env, _ := json.Marshal(map[string]string{"X-API-Key": body.APIKey})
-		m.Env = env
+		env := jsonStrMap(m.Env)
+		if env == nil {
+			env = map[string]string{}
+		}
+		env["X-API-Key"] = body.APIKey
+		b, err := json.Marshal(env)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		m.Env = b
 	}
 	// Enable only once it can actually be used.
 	m.Enabled = m.URL != "" && envHasValue(m.Env)

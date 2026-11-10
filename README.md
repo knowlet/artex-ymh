@@ -38,7 +38,7 @@ cd artex-ymh
 ./install.sh
 ```
 
-脚本可选 **① 全部 Docker** 或 **② 本地编译运行**（生成 `config.json`）。检测到 `npm` 时会构建前端并编译内嵌单二进制；未检测到 `npm` 时只编译后端，前端需另跑 `npm run dev`。Docker 模式要求已安装 Docker / Compose；缺少时会提示官方安装说明，不会下载并直接执行在线安装脚本。装好后打开 `http://localhost:8787`。
+脚本可选 **① 全部 Docker** 或 **② 本地编译运行**（生成 `config.json`）。检测到 `npm` 时会构建前端并编译内嵌单二进制；未检测到 `npm` 时只编译后端，前端需另跑 `npm run dev`。Docker 模式要求已安装 Docker / Compose；缺少时会提示官方安装说明，不会下载并直接执行在线安装脚本。装好后：**Docker / 内嵌前端单二进制** 打开 `http://localhost:8787`；**无 npm 的本地后端-only 构建** 需另起 `cd web && npm run dev`，浏览器访问 `http://localhost:5173`（后端 API 仍在 `8787`）。
 
 登录限流、LLM/MCP 凭据、TLS 默认值及安装权限见[安全配置与兼容性](security/configuration.md)；Audn 报告的逐项核对见[2026-11-06 安全修补记录](security/audn-2026-11-06.md)。
 
