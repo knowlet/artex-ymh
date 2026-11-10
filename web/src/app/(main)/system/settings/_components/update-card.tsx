@@ -56,7 +56,8 @@ export function UpdateCard() {
         setInfo(r);
         if (!quiet) {
           if (r.error) toast.error("检查更新失败：" + r.error);
-          else if (r.has_update) toast.success(`发现新版本 ${r.latest}`);
+          else if (r.has_update && r.install_enabled) toast.success(`发现新版本 ${r.latest}`);
+          else if (r.has_update) toast.message(`发现新版本 ${r.latest}（一键安装未启用，请从源码编译升级）`);
           else if (r.comparable) toast.success("当前已是最新版本");
         }
       })

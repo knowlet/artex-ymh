@@ -4,7 +4,10 @@ on:
     paths:
       - 'selfupdate/**'
       - 'server/update*.go'
+      - 'cmd/artex/main.go'
+      - 'web/src/app/(main)/_components/update-badge.tsx'
       - 'web/src/app/(main)/system/settings/_components/update-card.tsx'
+      - 'web/src/lib/api.ts'
       - 'web/src/lib/types.ts'
       - 'web/package*.json'
       - 'go.mod'
@@ -15,7 +18,10 @@ on:
     paths:
       - 'selfupdate/**'
       - 'server/update*.go'
+      - 'cmd/artex/main.go'
+      - 'web/src/app/(main)/_components/update-badge.tsx'
       - 'web/src/app/(main)/system/settings/_components/update-card.tsx'
+      - 'web/src/lib/api.ts'
       - 'web/src/lib/types.ts'
       - 'web/package*.json'
       - 'go.mod'
@@ -54,6 +60,6 @@ jobs:
         working-directory: web
         run: |
           npm ci --ignore-scripts
-          npx biome check 'src/app/(main)/system/settings/_components/update-card.tsx' src/lib/types.ts
+          npx biome check 'src/app/(main)/_components/update-badge.tsx' 'src/app/(main)/system/settings/_components/update-card.tsx' src/lib/types.ts
           npx tsc --noEmit
           npm run build:static

@@ -262,7 +262,9 @@ func Rollback() error {
 	if _, err := os.Stat(p.Old); err != nil {
 		return errors.New("没有可回滚的上一版本（" + p.Old + " 不存在）")
 	}
-	cleanStaged(p)
+	if InstallEnabled {
+		cleanStaged(p)
+	}
 	if err := smokeTest(p.Old); err != nil {
 		return fmt.Errorf("上一版本无法执行，拒绝回滚: %w", err)
 	}

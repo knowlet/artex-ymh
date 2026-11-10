@@ -168,7 +168,9 @@ func TestApplyStagedBlockedPreservesFiles(t *testing.T) {
 				t.Fatal(err)
 			}
 			if content == "tampered" {
-				fakeBin(t, p.New, "tampered", 0)
+				if err := os.WriteFile(p.Sum, []byte("deadbeef"), 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := writeMarker(p.Marker, marker{From: "0.3.12", To: "0.3.13"}); err != nil {
 				t.Fatal(err)

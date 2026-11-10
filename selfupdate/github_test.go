@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -27,6 +28,7 @@ func TestFetchLatestFailureClassification(t *testing.T) {
 		{"repo permission", []int{404, 403}, nil, nil, "access_denied"},
 		{"unauthorized", []int{401}, nil, nil, "access_denied"},
 		{"forbidden is not necessarily a limit", []int{403}, nil, nil, "access_denied"},
+		{"secondary limit body", []int{403}, []string{`{"message":"You have exceeded a secondary rate limit. Please wait a few minutes."}`}, nil, "rate_limited"},
 		{"limit", []int{403}, nil, http.Header{"X-Ratelimit-Remaining": {"0"}}, "rate_limited"},
 		{"secondary limit", []int{403}, nil, http.Header{"Retry-After": {"60"}}, "rate_limited"},
 		{"too many requests", []int{429}, nil, nil, "rate_limited"},
@@ -34,6 +36,7 @@ func TestFetchLatestFailureClassification(t *testing.T) {
 		{"server failure", []int{500}, nil, nil, "github_error"},
 		{"invalid repo response", []int{404, 200}, []string{"", `<html>not metadata</html>`}, nil, "github_error"},
 		{"redirected repo identity", []int{404, 200}, []string{"", `{"full_name":"Autumn-27/artex"}`}, nil, "github_error"},
+		{"trailing json garbage", []int{404, 200}, []string{"", `{"full_name":"knowlet/artex-ymh"} trailing`}, nil, "github_error"},
 		{"invalid release JSON", []int{200}, []string{`<html>`}, nil, "invalid_release"},
 		{"missing tag", []int{200}, []string{`{}`}, nil, "invalid_release"},
 		{"draft", []int{200}, []string{`{"tag_name":"v0.3.13","draft":true}`}, nil, "invalid_release"},
@@ -76,12 +79,31 @@ func TestFetchLatestFailureClassification(t *testing.T) {
 }
 
 func TestFetchLatestNetworkAndCancellation(t *testing.T) {
-	for _, networkErr := range []error{errors.New("connection failed"), context.Canceled} {
-		c := &http.Client{Transport: checkTransport(func(*http.Request) (*http.Response, error) { return nil, networkErr })}
-		_, err := FetchLatest(t.Context(), c)
-		if CheckErrorCode(err) != "network" || !errors.Is(err, networkErr) {
-			t.Fatalf("network error lost classification/cause: %v", err)
+	c := &http.Client{Transport: checkTransport(func(*http.Request) (*http.Response, error) { return nil, errors.New("connection failed") })}
+	_, err := FetchLatest(t.Context(), c)
+	if CheckErrorCode(err) != "network" {
+		t.Fatalf("network error misclassified: %v", err)
+	}
+	canceled := &http.Client{Transport: checkTransport(func(*http.Request) (*http.Response, error) { return nil, context.Canceled })}
+	_, err = FetchLatest(t.Context(), canceled)
+	if CheckErrorCode(err) != "unknown" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation misclassified: %v", err)
+	}
+}
+
+func TestFetchLatestRejectsRedirectedRepoPath(t *testing.T) {
+	c := &http.Client{Transport: checkTransport(func(r *http.Request) (*http.Response, error) {
+		resp := &http.Response{
+			StatusCode: 200,
+			Body:       io.NopCloser(strings.NewReader(`{"tag_name":"v9.9.9","html_url":"https://github.com/Autumn-27/artex/releases/tag/v9.9.9"}`)),
+			Request:    r,
 		}
+		resp.Request.URL, _ = url.Parse("https://api.github.com/repos/Autumn-27/artex/releases/latest")
+		return resp, nil
+	})}
+	rel, err := FetchLatest(t.Context(), c)
+	if err == nil || rel != nil || CheckErrorCode(err) != "github_error" {
+		t.Fatalf("redirected release accepted: rel=%+v err=%v", rel, err)
 	}
 }
 
