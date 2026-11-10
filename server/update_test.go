@@ -171,29 +171,93 @@ func TestUpdateApplyDisabledBeforeManagerCacheOrProgress(t *testing.T) {
 func TestUpdateCheckReportsDisabledPolicyForMetadataOutcomes(t *testing.T) {
 	originalCache, originalVersion := relCache, BuildVersion
 	t.Cleanup(func() { relCache, BuildVersion = originalCache, originalVersion })
-	BuildVersion = "0.3.12"
-	for _, failure := range []bool{false, true} {
-		relCache = newTestCache(func(context.Context, *http.Client) (*selfupdate.Release, error) {
-			if failure {
-				return nil, &selfupdate.CheckError{Code: "no_release", Err: errors.New("no release")}
+	for _, version := range []string{"0.3.12", "dev"} {
+		for _, code := range []string{"", "no_release", "network", "repository_unavailable", "rate_limited", "access_denied", "invalid_release"} {
+			name := code
+			if name == "" {
+				name = "available"
 			}
+			t.Run(version+"/"+name, func(t *testing.T) {
+				BuildVersion = version
+				relCache = newTestCache(func(context.Context, *http.Client) (*selfupdate.Release, error) {
+					if code != "" {
+						return nil, &selfupdate.CheckError{Code: code, Err: errors.New("metadata outcome: " + code)}
+					}
+					return &selfupdate.Release{TagName: "v0.3.13"}, nil
+				})
+				w := httptest.NewRecorder()
+				s := &Server{m: &Manager{}}
+				s.updateCheck(w, httptest.NewRequest(http.MethodGet, "/api/update/check", nil))
+				var body map[string]any
+				if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if w.Code != http.StatusOK || body["current"] != version || body["install_enabled"] != false || body["install_reason"] != selfupdate.InstallDisabledReason || body["repo"] != "knowlet/artex-ymh" {
+					t.Fatalf("disabled policy or build identity omitted: %d %+v", w.Code, body)
+				}
+				if code == "" {
+					if body["release_status"] != "available" || body["latest"] != "v0.3.13" || body["has_update"] != (version != "dev") || body["comparable"] != (version != "dev") {
+						t.Fatalf("fork metadata or comparison lost: %+v", body)
+					}
+					return
+				}
+				for _, key := range []string{"has_update", "comparable", "asset_available"} {
+					if body[key] != false {
+						t.Errorf("%s must be explicitly false without a release: %+v", key, body)
+					}
+				}
+				for _, key := range []string{"latest", "asset", "html_url"} {
+					if _, ok := body[key]; ok {
+						t.Errorf("%s must be absent without a release: %+v", key, body)
+					}
+				}
+				if code == "no_release" {
+					if body["release_status"] != "no_release" || body["message"] != "metadata outcome: no_release" {
+						t.Fatalf("no-release result omitted: %+v", body)
+					}
+					for _, key := range []string{"error", "error_code"} {
+						if _, ok := body[key]; ok {
+							t.Errorf("successful no-release check must not include %s: %+v", key, body)
+						}
+					}
+				} else if body["release_status"] != "error" || body["error_code"] != code || body["error"] != "metadata outcome: "+code {
+					t.Fatalf("failure classification lost: %+v", body)
+				}
+			})
+		}
+	}
+}
+
+func TestReleaseCacheNoReleaseUsesNormalTTL(t *testing.T) {
+	calls := 0
+	published := false
+	c := newTestCache(func(context.Context, *http.Client) (*selfupdate.Release, error) {
+		calls++
+		if published {
 			return &selfupdate.Release{TagName: "v0.3.13"}, nil
-		})
-		w := httptest.NewRecorder()
-		s := &Server{m: &Manager{}}
-		s.updateCheck(w, httptest.NewRequest(http.MethodGet, "/api/update/check", nil))
-		var body map[string]any
-		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-			t.Fatal(err)
 		}
-		if w.Code != http.StatusOK || body["install_enabled"] != false || body["install_reason"] != selfupdate.InstallDisabledReason || body["repo"] != "knowlet/artex-ymh" {
-			t.Fatalf("disabled policy omitted: %d %+v", w.Code, body)
+		return nil, &selfupdate.CheckError{Code: "no_release", Err: errors.New("no release")}
+	})
+	checkEmpty := func(wantCalls int) {
+		t.Helper()
+		rel, err := c.get(t.Context(), nil, false)
+		if rel != nil || selfupdate.CheckErrorCode(err) != "no_release" || calls != wantCalls {
+			t.Fatalf("get: release=%v error=%v calls=%d; want %d calls", rel, err, calls, wantCalls)
 		}
-		if failure && body["error_code"] != "no_release" {
-			t.Fatalf("classification lost: %+v", body)
-		}
-		if !failure && body["has_update"] != true {
-			t.Fatalf("newer fork metadata not retained: %+v", body)
+	}
+	checkEmpty(1)
+	// A successful empty result remains cached beyond the transient error TTL.
+	c.at = time.Now().Add(-releaseErrTTL - time.Second)
+	checkEmpty(1)
+	c.at = time.Now().Add(-releaseTTL - time.Second)
+	checkEmpty(2)
+	published = true
+	checkEmpty(2)
+	// A manual check sees a newly published release immediately and caches it.
+	for _, force := range []bool{true, false} {
+		rel, err := c.get(t.Context(), nil, force)
+		if err != nil || rel == nil || rel.TagName != "v0.3.13" || calls != 3 {
+			t.Fatalf("new release: release=%v error=%v calls=%d", rel, err, calls)
 		}
 	}
 }
