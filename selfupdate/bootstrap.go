@@ -34,17 +34,18 @@ const (
 // State 描述本次启动时的升级状态，供 /api/update/check 如实告诉前端
 // "上一次升级是成功了还是被回滚了"。
 type State struct {
-	Pending     bool   // 换装后尚未确认稳定
-	RolledBack  bool   // 本次启动刚刚执行过自动回滚
-	FailedStage bool   // 暂存件校验/冒烟未通过，已丢弃
-	Detail      string // 面向用户的一句话说明
+	Pending      bool   // 换装后尚未确认稳定
+	RolledBack   bool   // 本次启动刚刚执行过自动回滚
+	FailedStage  bool   // 暂存件校验/冒烟未通过，已丢弃
+	BlockedStage bool   // 安装策略禁止执行/换装，暂存件原样保留
+	Detail       string // 面向用户的一句话说明
 }
 
 // Bootstrap 在 main 的最开头运行，必须在任何监听端口、打开数据库之前调用。
 //
 // 三种局面：
 //
-//	① 存在暂存件 artex.new  → 校验 + 冒烟，通过则换装并要求重启；不通过则丢弃继续跑旧版
+//	① 存在暂存件 artex.new  → 二开版当前禁用换装，原样保留暂存件并继续运行
 //	② 只剩标记文件          → 说明刚换装完，累计一次尝试；连续失败够多次则回滚
 //	③ 什么都没有            → 正常启动
 func Bootstrap() (Action, State) {
@@ -57,6 +58,10 @@ func Bootstrap() (Action, State) {
 		return Continue, State{}
 	}
 
+	return bootstrap(p)
+}
+
+func bootstrap(p Paths) (Action, State) {
 	if _, err := os.Stat(p.New); err == nil {
 		return applyStaged(p)
 	}
@@ -74,6 +79,11 @@ func Bootstrap() (Action, State) {
 // 下载损坏、架构选错、动态链接缺失这类问题。一旦放行一个跑不起来的二进制，
 // 守护脚本会不知疲倦地反复拉起它，而 Go 代码根本没机会运行，自动回滚也就无从谈起。
 func applyStaged(p Paths) (Action, State) {
+	if !InstallEnabled {
+		// A previous upstream updater may have left staged bytes. Do not
+		// execute, install or delete them while fork installation is disabled.
+		return Continue, State{BlockedStage: true, Detail: InstallDisabledReason + "；已保留但不会执行或安装现有暂存文件"}
+	}
 	m, _ := readMarker(p.Marker)
 
 	if err := verifyStaged(p); err != nil {
@@ -143,6 +153,11 @@ func Settle() {
 }
 
 func settle(p Paths) {
+	if !InstallEnabled {
+		if _, err := os.Stat(p.New); err == nil {
+			return // blocked staging is not a completed upgrade; retain its marker
+		}
+	}
 	if _, ok := readMarker(p.Marker); !ok {
 		return // 不是升级后的启动，无事可做
 	}
@@ -247,7 +262,9 @@ func Rollback() error {
 	if _, err := os.Stat(p.Old); err != nil {
 		return errors.New("没有可回滚的上一版本（" + p.Old + " 不存在）")
 	}
-	cleanStaged(p)
+	if InstallEnabled {
+		cleanStaged(p)
+	}
 	if err := smokeTest(p.Old); err != nil {
 		return fmt.Errorf("上一版本无法执行，拒绝回滚: %w", err)
 	}
