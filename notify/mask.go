@@ -198,12 +198,29 @@ func sameConfigValue(a, b any) bool {
 	if isBlankConfigValue(a) && isBlankConfigValue(b) {
 		return true
 	}
+	if ba, okA := configBoolValue(a); okA {
+		if bb, okB := configBoolValue(b); okB {
+			return ba == bb
+		}
+	}
 	ra, errA := json.Marshal(a)
 	rb, errB := json.Marshal(b)
 	if errA != nil || errB != nil {
 		return false
 	}
 	return string(ra) == string(rb)
+}
+
+// configBoolValue treats a missing destination boolean as false so legacy stored
+// configs without allow_insecure still compare equal to an explicit false from the UI.
+func configBoolValue(v any) (bool, bool) {
+	if v == nil {
+		return false, true
+	}
+	if x, ok := v.(bool); ok {
+		return x, true
+	}
+	return false, false
 }
 
 // isBlankConfigValue 判定一个配置值是否为「空」。

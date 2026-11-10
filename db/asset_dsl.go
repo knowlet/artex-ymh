@@ -394,7 +394,9 @@ func buildDSLWhereBase(node *astNode, base int) (string, []any, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	return clause, b.args, nil
+	// Callers append independent task/type restrictions with AND. Group the
+	// entire DSL expression so a top-level OR cannot escape those predicates.
+	return "(" + clause + ")", b.args, nil
 }
 
 // ── helpers (shared with parser) ─────────────────────────────────────────────

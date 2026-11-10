@@ -25,6 +25,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/endpoint"
 	"github.com/Autumn-27/artex/skillprovider"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/skill"
@@ -899,6 +900,17 @@ func (s *Server) pgSaveMCP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	if err := prepareMCPSave(pg, &m); err != nil {
+		switch {
+		case errors.Is(err, endpoint.ErrCredentialDestination):
+			writeErr(w, 400, err.Error())
+		case mcpNotFoundMessage(err):
+			writeErr(w, 404, err.Error())
+		default:
+			writeErr(w, 500, err.Error())
+		}
+		return
+	}
 	isNew := m.ID == 0
 	id, err := pg.SaveMCP(&m)
 	if err != nil {
@@ -1293,20 +1305,23 @@ const (
 // skillNameFromFrontmatter extracts the `name:` value from a SKILL.md's YAML
 // frontmatter (the block between the first two `---` lines). "" if absent.
 func skillNameFromFrontmatter(md []byte) string {
-	lines := strings.Split(string(md), "\n")
 	inFM := false
-	for _, ln := range lines {
-		t := strings.TrimSpace(ln)
-		if t == "---" {
+	// Iterate over byte slices: Split allocates one string header per newline,
+	// allowing a tiny compressed file to amplify memory far beyond the ZIP cap.
+	for len(md) > 0 {
+		ln, rest, _ := bytes.Cut(md, []byte{'\n'})
+		md = rest
+		t := bytes.TrimSpace(ln)
+		if bytes.Equal(t, []byte("---")) {
 			if !inFM {
 				inFM = true
 				continue
 			}
 			break // end of frontmatter
 		}
-		if inFM && strings.HasPrefix(t, "name:") {
-			v := strings.TrimSpace(strings.TrimPrefix(t, "name:"))
-			return strings.Trim(v, `"'`) // name: "中文技能" 也认
+		if inFM && bytes.HasPrefix(t, []byte("name:")) {
+			v := bytes.TrimSpace(bytes.TrimPrefix(t, []byte("name:")))
+			return string(bytes.Trim(v, `"'`)) // name: "中文技能" 也认
 		}
 	}
 	return ""
@@ -1473,12 +1488,22 @@ func (s *Server) fsUploadSkill(w http.ResponseWriter, r *http.Request) {
 // readZipEntry reads a single entry's bytes (capped). Takes the *zip.File rather than
 // a name because zr.Open rejects names that aren't valid UTF-8 (GBK-named archives).
 func readZipEntry(f *zip.File) ([]byte, error) {
+	if f.UncompressedSize64 > maxSkillFileBytes {
+		return nil, fmt.Errorf("skill file exceeds %d bytes", maxSkillFileBytes)
+	}
 	rc, err := f.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer rc.Close()
-	return io.ReadAll(io.LimitReader(rc, maxSkillFileBytes))
+	data, err := io.ReadAll(io.LimitReader(rc, maxSkillFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxSkillFileBytes {
+		return nil, fmt.Errorf("skill file exceeds %d bytes", maxSkillFileBytes)
+	}
+	return data, nil
 }
 
 func (s *Server) fsDeleteSkill(w http.ResponseWriter, r *http.Request) {
@@ -1848,6 +1873,10 @@ func (s *Server) pgSaveProfile(w http.ResponseWriter, r *http.Request) {
 	p := body.LLMProfile
 	p.APIKey = body.APIKey
 	p.Streaming = body.Streaming == nil || *body.Streaming
+	if _, err := endpoint.LLM(p.Format, p.BaseURL, p.Proxy); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
 	// 输出上限:负数无意义,归零(= 不发送该字段)。字段名开关只有 Chat Completions
 	// 用得上——anthropic 与 openai-responses 各自定死了字段名,存下来只会误导后续读者,
 	// 故非 openai 格式一律清空。未知取值同样清空,避免把 DB CHECK 的报错甩给用户。
@@ -1859,7 +1888,14 @@ func (s *Server) pgSaveProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := pg.SaveProfile(&p)
 	if err != nil {
-		writeErr(w, 500, err.Error())
+		switch {
+		case errors.Is(err, endpoint.ErrCredentialDestination):
+			writeErr(w, 400, err.Error())
+		case errors.Is(err, db.ErrLLMProfileNotFound):
+			writeErr(w, 404, err.Error())
+		default:
+			writeErr(w, 500, err.Error())
+		}
 		return
 	}
 	// Editing a profile rebuilds any task pinned to it on its next round. Reapply
@@ -2028,19 +2064,34 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Resolve API key: form input > profile stored key.
-	apiKey := strings.TrimSpace(req.APIKey)
-	if apiKey == "" && req.ProfileID != nil {
-		if p, err := s.m.pg.ProfileByID(*req.ProfileID); err == nil && p != nil {
-			apiKey = p.APIKey
+	cfg := agent.ConfigFrom(req.Provider, "", req.BaseURL, req.APIKey, req.Proxy)
+	if cfg.APIKey == "" && req.ProfileID != nil {
+		pg := s.pg(w)
+		if pg == nil {
+			return
+		}
+		p, err := pg.ProfileByID(*req.ProfileID)
+		if err != nil || p == nil {
+			writeErr(w, 400, "LLM 配置不存在或无法读取")
+			return
+		}
+		if err := reuseLLMKey(&cfg, agent.ConfigFrom(p.Format, p.Model, p.BaseURL, p.APIKey, p.Proxy)); err != nil {
+			writeErr(w, 400, err.Error())
+			return
 		}
 	}
+	apiKey := cfg.APIKey
 	if apiKey == "" {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": "未提供 API Key"})
 		return
 	}
 
-	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
-	provider := strings.TrimSpace(req.Provider)
+	dest, err := endpoint.LLM(cfg.Provider(), cfg.BaseURL, cfg.Proxy)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	baseURL, provider := dest.BaseURL, dest.Provider
 
 	// Candidate endpoints to try in order. Some Anthropic-compatible providers
 	// (e.g. DeepSeek) implement /v1/messages under an /anthropic path but expose
@@ -2095,7 +2146,7 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 			transport.Proxy = http.ProxyURL(pu)
 		}
 	}
-	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	client := &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: endpoint.CheckRedirect}
 
 	// Try each candidate; return the first that yields a non-empty model list.
 	var lastErr string

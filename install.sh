@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ARTEX 安装脚本：① 全部 Docker  ② 本地编译运行
 set -euo pipefail
+umask 077
 cd "$(cd "$(dirname "$0")" && pwd)"
 
 info(){ printf '\033[36m[*]\033[0m %s\n' "$*"; }
@@ -10,31 +11,27 @@ die(){  printf '\033[31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 ask(){  local p="$1" d="${2:-}" a; read -rp "$p${d:+ [$d]}: " a; echo "${a:-$d}"; }
 rand(){ head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
 
-# ── docker 环境检测 / 自动安装 ───────────────────
+chown_install_artifacts(){
+  local u="${SUDO_USER:-}"
+  [ -n "$u" ] && [ "$(id -u)" -eq 0 ] || return 0
+  id -u "$u" >/dev/null 2>&1 || return 0
+  chown "$u" artex config.json 2>/dev/null || true
+}
+
+# ── docker 环境检测 ────────────────────────────
 ensure_docker(){
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     ok "已检测到 docker 与 docker compose"; return
   fi
-  warn "未检测到 docker / docker compose"
-  case "$(uname -s)" in
-    Linux)
-      if [ "$(ask '自动安装 Docker? (y/n)' y)" = y ]; then
-        curl -fsSL https://get.docker.com | sh
-        sudo usermod -aG docker "$USER" || true
-        ok "Docker 安装完成（用户组变更需重新登录后免 sudo）"
-      else
-        die "请自行安装 docker 后重试"
-      fi ;;
-    Darwin) die "macOS 请安装 Docker Desktop：https://www.docker.com/products/docker-desktop/" ;;
-    *)      die "请自行安装 docker 后重试" ;;
-  esac
+  die "未检测到 Docker / Compose。请先按官方安装文档安装后重试：https://docs.docker.com/engine/install/ （macOS/Windows：https://docs.docker.com/desktop/）"
 }
 
 # ── ① 全部 Docker ───────────────────────────────
 install_docker(){
   ensure_docker
   if [ ! -f .env ]; then
-    cp .env.example .env 2>/dev/null || true
+    cp .env.example .env
+    chmod 600 .env
     local pw key
     pw="$(ask 'Postgres 密码（回车随机生成）' "$(rand)")"
     key="$(ask 'ANTHROPIC_API_KEY（可留空，后续在 UI 配）' '')"
@@ -43,6 +40,7 @@ install_docker(){
     rm -f .env.bak
     ok "已生成 .env（POSTGRES_PASSWORD 已设置）"
   else
+    chmod 600 .env
     info "沿用已存在的 .env"
   fi
   info "拉取镜像并启动…"
@@ -74,19 +72,32 @@ install_local(){
       DB_SSL="$(ask 'sslmode (disable/require)' disable)" ;;
   esac
 
+  command -v python3 >/dev/null 2>&1 || die "未检测到 python3，本地安装需要 python3 以安全生成 config.json"
+
   # 生成 config.json
-  cat > config.json <<JSON
-{
+  # Replace atomically: umask alone does not tighten an existing 0644 file.
+  local config_tmp=""
+  cleanup_config_tmp(){ [ -n "$config_tmp" ] && rm -f "$config_tmp"; }
+  trap cleanup_config_tmp EXIT INT TERM
+  config_tmp="$(mktemp ./config.json.XXXXXX)"
+  DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_USER="$DB_USER" DB_PASS="$DB_PASS" DB_NAME="$DB_NAME" DB_SSL="$DB_SSL" \
+    python3 - <<'PY' > "$config_tmp"
+import json, os
+print(json.dumps({
   "database": {
-    "host": "${DB_HOST}",
-    "port": ${DB_PORT},
-    "user": "${DB_USER}",
-    "password": "${DB_PASS}",
-    "dbname": "${DB_NAME}",
-    "sslmode": "${DB_SSL}"
+    "host": os.environ["DB_HOST"],
+    "port": int(os.environ["DB_PORT"]),
+    "user": os.environ["DB_USER"],
+    "password": os.environ["DB_PASS"],
+    "dbname": os.environ["DB_NAME"],
+    "sslmode": os.environ["DB_SSL"],
   }
-}
-JSON
+}, indent=2))
+PY
+  chmod 600 "$config_tmp"
+  mv -f "$config_tmp" config.json
+  config_tmp=""
+  trap - EXIT INT TERM
   ok "已生成 config.json"
 
   # go 环境检查
@@ -106,6 +117,7 @@ JSON
     CGO_ENABLED=0 go build -o artex ./cmd/artex
   fi
   ok "编译完成 → ./artex"
+  chown_install_artifacts
 
   # 可选：托管给 systemd（崩溃自动拉起 + 开机自启）。守护职责移交 systemd，
   # 不再套 start.sh；页面一键更新（退出码 75）由 Restart=on-failure 重新拉起。

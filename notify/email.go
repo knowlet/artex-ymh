@@ -36,7 +36,9 @@ func (emailChannel) SecretKeys() []string { return []string{"password"} }
 
 // host/port 决定把密码交给哪台服务器；tls 决定是否加密传输。三者任一变化都
 // 要求重新表态密码——顺带让「关掉 TLS」这一步必须显式带上凭据，而不是顺手一改。
-func (emailChannel) DestinationKeys() []string { return []string{"host", "port", "tls"} }
+func (emailChannel) DestinationKeys() []string {
+	return []string{"host", "port", "tls", "allow_insecure"}
+}
 
 func (emailChannel) Validate(cfg map[string]any) error {
 	if cfgString(cfg, "host") == "" {
@@ -79,12 +81,15 @@ func (c emailChannel) Send(ctx context.Context, cfg map[string]any, m Message) (
 	}
 	defer client.Close()
 
-	// STARTTLS：对端支持就升级。明文会话下不能发凭据（见下面的 auth 说明）。
+	// Protect the message body even for anonymous relays. Capability stripping
+	// must fail closed unless this channel explicitly permits plaintext mail.
 	if !implicitTLS {
 		if ok, _ := client.Extension("STARTTLS"); ok {
 			if err := client.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
 				return 0, fmt.Errorf("STARTTLS 失败: %w", err)
 			}
+		} else if !cfgBool(cfg, "allow_insecure") {
+			return 0, Permanent(errors.New("SMTP 服务器未提供 STARTTLS，拒绝明文发送邮件；请启用隐式 TLS，或仅为可信中继显式允许明文邮件"))
 		}
 	}
 	if username != "" {

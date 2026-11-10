@@ -318,7 +318,11 @@ func (s *Server) toolUpdateMCP() actool.CoreTool {
 			if a.ID == 0 {
 				return actool.Errorf("id 必填"), nil
 			}
-			if _, err := s.m.pg.SaveMCP(a.toDB()); err != nil {
+			mcpRow := a.toDB()
+			if err := prepareMCPSave(s.m.pg, mcpRow); err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			if _, err := s.m.pg.SaveMCP(mcpRow); err != nil {
 				return actool.Errorf(err.Error()), nil
 			}
 			return actool.Text(fmt.Sprintf("mcp updated: id=%d", a.ID)), nil

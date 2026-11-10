@@ -28,20 +28,27 @@ type fakeSMTP struct {
 	// mailReply 是 MAIL FROM 的应答；默认 250。
 	mailReply string
 	// advertiseAuth 为 true 时在 EHLO 里声明支持 AUTH PLAIN。
-	advertiseAuth bool
+	advertiseAuth     bool
+	advertiseSTARTTLS bool
+	// acceptMultiple keeps accepting connections until the listener closes.
+	acceptMultiple bool
 
 	mu       sync.Mutex
 	data     string
 	commands []string
+	accepts  int
 }
 
-func newFakeSMTP(t *testing.T) *fakeSMTP {
+func newFakeSMTP(t *testing.T, configure ...func(*fakeSMTP)) *fakeSMTP {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeSMTP{ln: ln, rcptReply: "250 OK", mailReply: "250 OK"}
+	for _, fn := range configure {
+		fn(f)
+	}
 	go f.serve()
 	t.Cleanup(func() { ln.Close() })
 	return f
@@ -79,11 +86,31 @@ func (f *fakeSMTP) sawCommand(prefix string) bool {
 	return false
 }
 
+func (f *fakeSMTP) connectionCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.accepts
+}
+
 func (f *fakeSMTP) serve() {
-	conn, err := f.ln.Accept()
-	if err != nil {
+	for {
+		conn, err := f.ln.Accept()
+		if err != nil {
+			return
+		}
+		f.mu.Lock()
+		f.accepts++
+		f.mu.Unlock()
+		if f.acceptMultiple {
+			go f.handleConn(conn)
+			continue
+		}
+		f.handleConn(conn)
 		return
 	}
+}
+
+func (f *fakeSMTP) handleConn(conn net.Conn) {
 	defer conn.Close()
 	br := bufio.NewReader(conn)
 	w := func(s string) { _, _ = conn.Write([]byte(s + "\r\n")) }
@@ -102,7 +129,12 @@ func (f *fakeSMTP) serve() {
 			if f.advertiseAuth {
 				w("250-AUTH PLAIN")
 			}
+			if f.advertiseSTARTTLS {
+				w("250-STARTTLS")
+			}
 			w("250 8BITMIME")
+		case strings.HasPrefix(line, "STARTTLS"):
+			w("454 4.7.0 TLS unavailable")
 		case strings.HasPrefix(line, "AUTH"):
 			// 简化处理：PLAIN 的初始应答可能跨多行，直接接受。
 			w("235 2.7.0 Authentication successful")
@@ -140,10 +172,11 @@ func emailCfg(t *testing.T, f *fakeSMTP, extra map[string]any) map[string]any {
 	t.Helper()
 	host, port := f.hostPort(t)
 	cfg := map[string]any{
-		"host": host,
-		"port": float64(port),
-		"from": "artex@example.com",
-		"to":   []any{"a@example.com", "b@example.com"},
+		"host":           host,
+		"port":           float64(port),
+		"from":           "artex@example.com",
+		"to":             []any{"a@example.com", "b@example.com"},
+		"allow_insecure": true, // this fixture deliberately has no STARTTLS
 	}
 	for k, v := range extra {
 		cfg[k] = v

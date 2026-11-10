@@ -10,9 +10,15 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
+
+// Every public mutation of executable-adjacent update state shares this lock.
+// HTTP admission is a separate concern: package callers must also be safe.
+var mutationMu sync.Mutex
 
 // smokeEnv 让被冒烟测试拉起的子进程直接跳过 Bootstrap。
 //
@@ -52,6 +58,8 @@ func Bootstrap() (Action, State) {
 	if os.Getenv(smokeEnv) != "" {
 		return Continue, State{}
 	}
+	mutationMu.Lock()
+	defer mutationMu.Unlock()
 	p, err := ResolvePaths()
 	if err != nil {
 		log.Printf("[update] 跳过自举：%v", err)
@@ -153,10 +161,12 @@ func Settle() {
 }
 
 func settle(p Paths) {
-	if !InstallEnabled {
-		if _, err := os.Stat(p.New); err == nil {
-			return // blocked staging is not a completed upgrade; retain its marker
-		}
+	mutationMu.Lock()
+	defer mutationMu.Unlock()
+	if _, err := os.Stat(p.New); err == nil {
+		// Blocked staging or a newer stage written during the settle delay must not
+		// clear the active upgrade marker.
+		return
 	}
 	if _, ok := readMarker(p.Marker); !ok {
 		return // 不是升级后的启动，无事可做
@@ -259,6 +269,13 @@ func Rollback() error {
 	if err != nil {
 		return err
 	}
+	return rollbackPaths(p)
+}
+
+// rollbackPaths keeps the real mutation path testable in an isolated directory.
+func rollbackPaths(p Paths) error {
+	mutationMu.Lock()
+	defer mutationMu.Unlock()
 	if _, err := os.Stat(p.Old); err != nil {
 		return errors.New("没有可回滚的上一版本（" + p.Old + " 不存在）")
 	}
@@ -269,17 +286,25 @@ func Rollback() error {
 		return fmt.Errorf("上一版本无法执行，拒绝回滚: %w", err)
 	}
 	// 交换当前与备份：回滚之后还能再滚回来。
-	tmp := p.Current + ".swap"
-	_ = os.Remove(tmp)
+	tmpDir, err := os.MkdirTemp(p.Dir, ".artex-rollback-*")
+	if err != nil {
+		return fmt.Errorf("创建回滚暂存目录: %w", err)
+	}
+	// Only remove an empty directory. If recovery fails, the preserved binary
+	// must remain available instead of being deleted by deferred cleanup.
+	defer os.Remove(tmpDir)
+	tmp := filepath.Join(tmpDir, "current")
 	if err := os.Rename(p.Current, tmp); err != nil {
 		return fmt.Errorf("移走当前版本: %w", err)
 	}
 	if err := os.Rename(p.Old, p.Current); err != nil {
-		_ = os.Rename(tmp, p.Current)
+		if restoreErr := os.Rename(tmp, p.Current); restoreErr != nil {
+			return fmt.Errorf("装入上一版本失败 (%v)，恢复当前版本失败 (%v)，保留副本: %s", err, restoreErr, tmp)
+		}
 		return fmt.Errorf("装入上一版本: %w", err)
 	}
 	if err := os.Rename(tmp, p.Old); err != nil {
-		log.Printf("[update] 回滚后整理备份失败（不影响运行）：%v", err)
+		log.Printf("[update] 回滚后整理备份失败，副本保留在 %s（不影响运行）：%v", tmp, err)
 	}
 	_ = os.Remove(p.Marker)
 	return nil
