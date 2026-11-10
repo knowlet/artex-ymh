@@ -105,6 +105,14 @@ def refresh(fetch=github.github_json) -> dict:
         sha = commit.get("sha")
         if not isinstance(sha, str) or not HASH.fullmatch(sha):
             raise ValueError(repository + ": missing full commit SHA")
+        if tracking != "commit":
+            release2 = expect_object(fetch(base + "/releases/latest"), repository + " release recheck")
+            if release2.get("tag_name") != ref or release2.get("published_at") != published:
+                raise ValueError(repository + ": latest release changed during refresh")
+            commit2 = expect_object(fetch(base + "/commits/" + ref), repository + " commit recheck")
+            sha2 = commit2.get("sha")
+            if not isinstance(sha2, str) or sha2 != sha:
+                raise ValueError(repository + ": release tag retargeted during refresh")
         records.append({
             "repository": repository, "license": license_name, "tracking": tracking,
             "role": role, "ref": ref, "commit": sha,
@@ -126,8 +134,16 @@ def main(argv=None, fetch=github.github_json) -> int:
     try:
         previous = None
         if args.output.exists():
-            previous = json.loads(args.output.read_text(encoding="utf-8"))
-            validate(previous)
+            loaded = json.loads(args.output.read_text(encoding="utf-8"))
+            if args.validate:
+                validate(loaded)
+                previous = loaded
+            else:
+                try:
+                    validate(loaded)
+                    previous = loaded
+                except ValueError:
+                    previous = None
         if args.validate:
             if previous is None:
                 raise ValueError("index absent")

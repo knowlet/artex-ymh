@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,19 +42,13 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise UpdateError("GitHub metadata redirect refused")
 
 
-def github_json(url: str) -> dict:
-    parsed = urllib.parse.urlsplit(url)
-    if (parsed.scheme, parsed.netloc) != ("https", "api.github.com"):
-        raise UpdateError("metadata must use https://api.github.com")
+def _github_json_request(url: str, *, use_token: bool) -> dict:
     request = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "ARTEX-release-lock-review",
         "X-GitHub-Api-Version": "2022-11-28",
     })
-    # Optional Actions token prevents shared-runner anonymous API rate limiting.
-    # This request is restricted to api.github.com and redirects are refused;
-    # never forward this credential to release files or raw content hosts.
-    if os.environ.get("GH_TOKEN"):
+    if use_token and os.environ.get("GH_TOKEN"):
         request.add_header("Authorization", "Bearer " + os.environ["GH_TOKEN"])
     opener = urllib.request.build_opener(NoRedirect)
     with opener.open(request, timeout=TIMEOUT) as response:
@@ -67,6 +62,37 @@ def github_json(url: str) -> dict:
     if not isinstance(value, dict):
         raise UpdateError("GitHub metadata must be a JSON object")
     return value
+
+
+def github_json(url: str) -> dict:
+    parsed = urllib.parse.urlsplit(url)
+    if (parsed.scheme, parsed.netloc) != ("https", "api.github.com"):
+        raise UpdateError("metadata must use https://api.github.com")
+    # Optional Actions token prevents shared-runner anonymous API rate limiting.
+    # This request is restricted to api.github.com and redirects are refused;
+    # never forward this credential to release files or raw content hosts.
+    use_token = bool(os.environ.get("GH_TOKEN"))
+    delays = (0, 2, 4)
+    last_error: BaseException | None = None
+    for delay in delays:
+        if delay:
+            time.sleep(delay)
+        try:
+            return _github_json_request(url, use_token=use_token)
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code == 401 and use_token:
+                use_token = False
+                continue
+            if exc.code in {429, 500, 502, 503, 504} and delay != delays[-1]:
+                continue
+            raise UpdateError(f"GitHub metadata HTTP {exc.code}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            last_error = exc
+            if delay != delays[-1]:
+                continue
+            raise UpdateError("GitHub metadata request failed") from exc
+    raise UpdateError("GitHub metadata request failed") from last_error
 
 
 def release_entry(name: str, release: dict, commit: dict) -> dict:
