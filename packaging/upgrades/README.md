@@ -38,3 +38,10 @@ cd packaging/upgrades/e2e && npm ci && npx playwright install chromium
 # start local artex with embed UI + PG, then:
 ARTEX_E2E_BASE_URL=http://127.0.0.1:8787 npx playwright test
 ```
+
+Findings export, task report, and upload byte round-trip (disposable PG17 + deterministic seed):
+
+```bash
+# Requires PostgreSQL on ARTEX_PG_HOST:ARTEX_PG_PORT (default 127.0.0.1:5433).
+scripts/rehearse_findings_report_e2e.sh
+```

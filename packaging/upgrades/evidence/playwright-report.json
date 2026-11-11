@@ -3,7 +3,11 @@
     "argv": [
       "/exec-daemon/node",
       "/agent/repos/artex-ymh/packaging/upgrades/e2e/node_modules/.bin/playwright",
-      "test"
+      "test",
+      "findings-report-workflows.spec.ts",
+      "ui-workflows.spec.ts",
+      "workflows.spec.ts",
+      "smoke.spec.ts"
     ],
     "configFile": "/agent/repos/artex-ymh/packaging/upgrades/e2e/playwright.config.ts",
     "rootDir": "/agent/repos/artex-ymh/packaging/upgrades/e2e",
@@ -55,7 +59,7 @@
         "testMatch": "**/*.@(spec|test).?(c|m)[jt]s?(x)",
         "timeout": 60000,
         "use": {
-          "baseURL": "http://127.0.0.1:8790",
+          "baseURL": "http://127.0.0.1:8787",
           "trace": "on-first-retry"
         },
         "dependencies": [],
@@ -90,6 +94,167 @@
   },
   "suites": [
     {
+      "title": "findings-report-workflows.spec.ts",
+      "file": "findings-report-workflows.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "findings export, report, upload bytes (real PG17 backend)",
+          "file": "findings-report-workflows.spec.ts",
+          "line": 34,
+          "column": 6,
+          "specs": [
+            {
+              "title": "export JSON contains seeded finding id and summary bytes",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 90,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-11T12:38:39.524Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "522d499adc5b738b3cb6-4988ab367d5c5ae5c877",
+              "file": "findings-report-workflows.spec.ts",
+              "line": 37,
+              "column": 3
+            },
+            {
+              "title": "finding detail and task report markdown include markers",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 75,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-11T12:38:39.646Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "522d499adc5b738b3cb6-2bdafa81b560b25152f2",
+              "file": "findings-report-workflows.spec.ts",
+              "line": 53,
+              "column": 3
+            },
+            {
+              "title": "staging upload preserves fixture bytes on disk (abs path)",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 70,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-11T12:38:39.733Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "522d499adc5b738b3cb6-06125eaea817591ffbd6",
+              "file": "findings-report-workflows.spec.ts",
+              "line": 72,
+              "column": 3
+            }
+          ]
+        },
+        {
+          "title": "rendered findings export and report tabs",
+          "file": "findings-report-workflows.spec.ts",
+          "line": 110,
+          "column": 6,
+          "specs": [
+            {
+              "title": "findings page export selected + task report tab",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1092,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-11T12:38:39.811Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "522d499adc5b738b3cb6-2a5fadda5989a71cb8c0",
+              "file": "findings-report-workflows.spec.ts",
+              "line": 113,
+              "column": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
       "title": "smoke.spec.ts",
       "file": "smoke.spec.ts",
       "column": 0,
@@ -118,12 +283,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 230,
+                      "duration": 121,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T12:25:42.508Z",
+                      "startTime": "2026-11-11T12:38:40.973Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -152,12 +317,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 14,
+                      "duration": 3,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T12:25:42.834Z",
+                      "startTime": "2026-11-11T12:38:41.101Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -203,12 +368,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 536,
+                      "duration": 354,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T12:25:42.864Z",
+                      "startTime": "2026-11-11T12:38:41.113Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -237,12 +402,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 1077,
+                      "duration": 1033,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T12:25:43.412Z",
+                      "startTime": "2026-11-11T12:38:41.475Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -271,12 +436,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 521,
+                      "duration": 394,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T12:25:44.504Z",
+                      "startTime": "2026-11-11T12:38:42.516Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -305,12 +470,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 379,
+                      "duration": 274,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T12:25:45.041Z",
+                      "startTime": "2026-11-11T12:38:42.920Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -356,12 +521,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 321,
+                      "duration": 213,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T12:25:45.439Z",
+                      "startTime": "2026-11-11T12:38:43.207Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -390,12 +555,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 6,
+                      "duration": 5,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T12:25:45.773Z",
+                      "startTime": "2026-11-11T12:38:43.428Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -424,12 +589,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 152,
+                      "duration": 122,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T12:25:45.789Z",
+                      "startTime": "2026-11-11T12:38:43.440Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -449,9 +614,9 @@
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-11-11T12:25:42.027Z",
-    "duration": 3970.5250000000005,
-    "expected": 9,
+    "startTime": "2026-11-11T12:38:39.098Z",
+    "duration": 4512.231000000001,
+    "expected": 13,
     "skipped": 0,
     "unexpected": 0,
     "flaky": 0
