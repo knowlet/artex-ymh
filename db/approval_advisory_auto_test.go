@@ -123,12 +123,21 @@ func TestApprovalAdvisoryListPendingFIFO(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = d.Exec(`DELETE FROM intercept_pending WHERE id IN ($1,$2)`, a, b)
 	})
-	ids, err := d.ListPendingIDsForAutoAdvisory(t.Context(), 10)
+	ids, err := d.ListPendingIDsForAutoAdvisory(t.Context(), 50)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ids) < 2 || ids[0] != a {
-		t.Fatalf("fifo order: got %v want head %d", ids, a)
+	ai, bi := -1, -1
+	for i, id := range ids {
+		switch id {
+		case a:
+			ai = i
+		case b:
+			bi = i
+		}
+	}
+	if ai < 0 || bi < 0 || ai >= bi {
+		t.Fatalf("fifo order among fixtures: got %v want %d before %d (indexes %d,%d)", ids, a, b, ai, bi)
 	}
 }
 

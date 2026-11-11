@@ -38,7 +38,9 @@ PostgreSQL row lock 僅用於短暫認領和保存，不涵蓋模型呼叫。每
 
 `POST /api/intercept/pending/{id}/advisory`：空 body 或 `{}`，只能審查資料庫中的 pending 動作，不接受替換命令、prompt 或 model。沿用既有 Bearer 認證，無匿名或 SSE ticket 例外。
 
-`POST /api/intercept/pending/{id}/advisory/cancel`：停止該筆的自動重試（不影響人工核准／拒絕）。
+`POST /api/intercept/pending/{id}/advisory/cancel`：**停止自動重試**（`auto_cancelled`）。不會中斷已在進行中的模型 HTTP 呼叫；若取消發生在推理期間，完成的回應會在保存前丟棄，不會成為「目前建議」。手動審查與人工核准／拒絕不受影響。
+
+**每日預算**僅計入成功**認領**後、**觸發=auto** 的審查次數（非金額上限）；`manual` 路徑不扣減。
 
 `GET/PUT /api/intercept/advisory-auto`：背景審查開關、資料外送同意時間戳、全域並行上限、失敗重試與每日預算。啟用時必須提供 `consent_at`（RFC3339）。
 
@@ -54,5 +56,6 @@ HTTP 200：已保存／重用結果（仍須檢查 state，200 不代表模型�
 - `db`：多連線單一租約、持久快取、人工決策、過期租約、舊回應、動作變更、原 audit 與舊紀錄缺失快照保留。
 - `server`：實際 HTTP 路由／JWT、GET 不呼叫、手動重試與快取、重複點擊、人工決策競態、模型格式／工具／逾時失敗、敏感錯誤不外洩、scope／背景界線、取消與容量。
 - `web/tests/approval-advisory.test.mjs`：結果與紀錄 ID／狀態一致性、已完成／失效建議、租約有界輪詢。另執行 TypeScript 型別檢查與正式靜態建置。
+- 本機瀏覽器 E2E（`scripts/e2e-advisory.sh`，Playwright + 拋棄式 PG + `advisoryFake`）：驗證審批列表、背景自動狀態文案與取消標籤；不跑真實 LLM。
 
-這些自動測試不等於真實 provider 行為、瀏覽器互動或正式部署已驗收；發布時應另外檢查實際 UI、反向代理逾時及既有審批計時設定。
+這些自動測試不等於真實 provider 行為、多 replica 壓力或正式部署已驗收；發布時應另外檢查實際 UI、反向代理逾時及既有審批計時設定。

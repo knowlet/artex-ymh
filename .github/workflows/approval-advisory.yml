@@ -80,7 +80,7 @@ jobs:
               path = pathlib.Path(name)
               tests = re.findall(r'^func (TestApprovalAdvisory\w*)\(t \*testing\.T\)', path.read_text(), re.M)
               expected.update((module + '/' + str(path.parent), test) for test in tests)
-          if len(expected) < 21:
+          if len(expected) < 24:
               sys.exit('Required advisory regression coverage is missing')
           cmd = ['go', 'test', '-json', '-race', '-count=1', '-p=1', '-timeout=10m',
                  './approvalreview', './db', './intercept', './server', '-run', '^TestApprovalAdvisory']

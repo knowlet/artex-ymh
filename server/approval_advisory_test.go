@@ -379,3 +379,96 @@ func TestApprovalAdvisoryAPICancelAndCapacity(t *testing.T) {
 		t.Fatalf("cancel altered decisions or stranded leases: %d/%d", pending, failed)
 	}
 }
+
+func TestApprovalAdvisoryManualDoesNotConsumeAutoBudget(t *testing.T) {
+	p := &advisoryFake{}
+	s, h, id, token := advisoryAPIFixture(t, p)
+	if err := s.m.pg.SaveAdvisoryAutoConfig(db.AdvisoryAutoConfig{
+		Enabled: true, ConsentAt: time.Now().UTC(), GlobalSlots: 4, MaxRetries: 1, DailyBudget: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := advisoryRequest(h, id, token, "POST", "{}")
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	cfg, err := s.m.pg.ReadAdvisoryAutoConfig(t.Context())
+	if err != nil || cfg.DailyUsed != 0 {
+		t.Fatalf("manual post consumed auto budget: used=%d err=%v", cfg.DailyUsed, err)
+	}
+}
+
+func TestApprovalAdvisoryCancelInFlightDiscardsAutoResult(t *testing.T) {
+	entered := make(chan struct{})
+	p := &advisoryFake{hook: func(ctx context.Context) {
+		close(entered)
+		<-time.After(400 * time.Millisecond)
+	}}
+	s, h, id, token := advisoryAPIFixture(t, p)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		advisoryRequest(h, id, token, "POST", "{}")
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("model not started")
+	}
+	if err := s.m.pg.CancelApprovalAdvisoryAuto(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	src, err := s.m.pg.ReadApprovalAdvisory(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.Status != "pending" {
+		t.Fatal("cancel altered approval status")
+	}
+	if src.Advisory != nil && src.Advisory.State == "succeeded" && src.Advisory.Result != nil {
+		t.Fatal("cancel during inference published succeeded advisory")
+	}
+	meta, _ := s.m.pg.ReadAdvisoryAutoMeta(t.Context(), id)
+	if meta == nil || !meta.Cancelled {
+		t.Fatal("cancel meta missing")
+	}
+}
+
+func TestApprovalAdvisoryWorkerSkipsPoisonThenReviewsNext(t *testing.T) {
+	p := &advisoryFake{}
+	s, _, _, _ := advisoryAPIFixture(t, p)
+	if err := s.m.pg.SaveAdvisoryAutoConfig(db.AdvisoryAutoConfig{
+		Enabled: true, ConsentAt: time.Now().UTC(), GlobalSlots: 4, MaxRetries: 1, DailyBudget: 20,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	poison, err := s.m.pg.CreateInterceptPending(1, 0, "", "fixture", "Write", []byte(`{"x":1}`), "poison")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, err := s.m.pg.CreateInterceptPending(1, 0, "", "fixture", "Write", []byte(`{"file_path":"b.txt"}`), "ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit := `{"model_input":{"version":4,"tool_name":"Write","arguments":{"file_path":"b.txt"}}}`
+	if _, err := s.m.pg.Exec(`UPDATE intercept_pending SET audit=$2::jsonb WHERE id=$1`, ok, audit); err != nil {
+		t.Fatal(err)
+	}
+	big, _ := json.Marshal(map[string]string{"cmd": strings.Repeat("y", approvalreview.MaxInputBytes)})
+	if _, err := s.m.pg.Exec(`UPDATE intercept_pending SET tool_input=$2 WHERE id=$1`, poison, big); err != nil {
+		t.Fatal(err)
+	}
+	s.startApprovalAdvisoryWorker(t.Context())
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if p.calls.Load() >= 1 {
+			src, err := s.m.pg.ReadApprovalAdvisory(t.Context(), ok)
+			if err == nil && src.Advisory != nil && src.Advisory.State == "succeeded" {
+				return
+			}
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	t.Fatalf("worker never reviewed non-poison pending; calls=%d", p.calls.Load())
+}
