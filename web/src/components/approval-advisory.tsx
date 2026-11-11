@@ -4,6 +4,7 @@ import * as React from "react";
 import { Loader2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getApprovalAdvisory, requestApprovalAdvisory } from "@/lib/approval-advisory";
+import { cancelApprovalAdvisoryAuto } from "@/lib/approval-advisory-auto";
 import { type AdvisoryResponse, advisoryIsCurrent, advisoryIsRunning } from "@/lib/approval-advisory-state";
 import { MOCK } from "@/lib/mock/enabled";
 
@@ -24,6 +25,13 @@ const errorLabels: Record<string, string> = {
   snapshot_changed: "審批或政策已改變",
 };
 
+function advisoryNeedsPoll(data: AdvisoryResponse | null, id: number, status: string, current: boolean): boolean {
+  if (status !== "pending" || data?.pending_id !== id) return false;
+  if (advisoryIsRunning(data, id)) return true;
+  if (data.auto_queued) return true;
+  return Boolean(data.auto_enabled && !data.auto_cancelled && !current);
+}
+
 export function ApprovalAdvisory({ id, status, readOnly = false }: { id: number; status: string; readOnly?: boolean }) {
   const [data, setData] = React.useState<AdvisoryResponse | null>(null);
   const [error, setError] = React.useState("");
@@ -32,8 +40,6 @@ export function ApprovalAdvisory({ id, status, readOnly = false }: { id: number;
   const generation = React.useRef(0);
   const lifetime = React.useRef<AbortController | null>(null);
 
-  // GET retrieves saved data only. Switching records, settling an approval or
-  // unmounting cancels the obsolete request and prevents late UI updates.
   // biome-ignore lint/correctness/useExhaustiveDependencies: explicit reload restarts the saved-state GET loop.
   React.useEffect(() => {
     const controller = new AbortController();
@@ -48,7 +54,10 @@ export function ApprovalAdvisory({ id, status, readOnly = false }: { id: number;
         const next = await getApprovalAdvisory(id, controller.signal);
         if (controller.signal.aborted || generation.current !== ownGeneration) return;
         setData(next);
-        if (status === "pending" && advisoryIsRunning(next, id)) timer = setTimeout(() => void load(), 2000);
+        const current = advisoryIsCurrent(next, id, status);
+        if (advisoryNeedsPoll(next, id, status, current)) {
+          timer = setTimeout(() => void load(), 2000);
+        }
       } catch (e) {
         if (!controller.signal.aborted && generation.current === ownGeneration) setError((e as Error).message);
       }
@@ -85,25 +94,43 @@ export function ApprovalAdvisory({ id, status, readOnly = false }: { id: number;
     }
   }
 
+  async function cancelAuto() {
+    if (readOnly || MOCK || !data?.auto_enabled) return;
+    try {
+      await cancelApprovalAdvisoryAuto(id);
+      setReload((n) => n + 1);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   return (
     <section aria-label="智慧審查建議" className="flex min-w-0 flex-col gap-3 rounded-xl border p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="font-medium text-sm">智慧審查建議</h3>
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" disabled={running} onClick={() => setReload((n) => n + 1)}>更新狀態</Button>
+          {!readOnly && data?.auto_enabled && status === "pending" && !data.auto_cancelled ? (
+            <Button variant="ghost" size="sm" onClick={() => void cancelAuto()}>停止自動重試</Button>
+          ) : null}
           {!readOnly && status === "pending" ? (
           <Button variant="outline" size="sm" disabled={running || current || MOCK} onClick={() => void review()}>
             {running ? <Loader2Icon aria-hidden="true" className="animate-spin" /> : null}
-            {running ? "審查中" : current ? "已保存審查" : assessment ? "重新審查" : "按需審查"}
+            {running ? "審查中" : current ? "已保存審查" : assessment ? "手動重新審查" : "手動審查"}
           </Button>
           ) : null}
         </div>
       </div>
       <p className="text-muted-foreground text-xs leading-6">
-        僅提供風險建議，不會核准、拒絕或執行工具，也不會延長原審批期限。點擊後，將把命令、已選取的背景與政策送至設定的裁判模型，可能產生費用；內容可能含敏感資料。
+        僅提供風險建議，不會核准、拒絕或執行工具，也不會延長原審批期限。背景審查（若已啟用）與手動審查皆會把命令、已選取背景與政策送至裁判模型，可能產生費用；內容可能含敏感資料。
       </p>
+      {data?.auto_enabled && !data.auto_cancelled ? (
+        <p className="text-muted-foreground text-xs">背景自動審查已啟用：新待審批會自動排程，仍須人工核准／拒絕。</p>
+      ) : null}
+      {data?.auto_cancelled ? <p className="text-muted-foreground text-xs">此筆已停止自動重試；可手動審查或人工決定。</p> : null}
       {MOCK ? <p className="text-muted-foreground text-xs">演示模式不呼叫模型。</p> : null}
       <div role="status" aria-live="polite" className="text-sm">
+        {data?.auto_queued && !running ? "已加入背景審查佇列，無需手動點擊。" : null}
         {running ? "正在分析；人工核准／拒絕仍可獨立操作。" : null}
         {error ? <p className="text-destructive">{error}。未變更審批結果。</p> : null}
         {assessment?.state === "failed" || assessment?.state === "stale" ? (
@@ -126,7 +153,9 @@ export function ApprovalAdvisory({ id, status, readOnly = false }: { id: number;
       </div>
       {assessment ? (
         <p className="text-muted-foreground text-xs">
-          裁判設定 #{assessment.profile_id} · {assessment.model} · {new Date(assessment.finished_at || assessment.started_at).toLocaleString("zh-TW")}
+          裁判設定 #{assessment.profile_id} · {assessment.model}
+          {assessment.trigger === "auto" ? " · 背景自動" : ""}
+          {" · "}{new Date(assessment.finished_at || assessment.started_at).toLocaleString("zh-TW")}
         </p>
       ) : null}
     </section>

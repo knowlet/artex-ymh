@@ -17,6 +17,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/approvalreview"
+	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/norma/llm"
 )
@@ -145,6 +146,9 @@ func advisoryAPIFixture(t *testing.T, p *advisoryFake) (*Server, http.Handler, i
 		t.Fatal(err)
 	}
 	if err := s.m.pg.SetSetting("llm_judge_profile_id", "42"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.m.pg.SetSetting(db.SettingAdvisoryGlobalSlots, "4"); err != nil {
 		t.Fatal(err)
 	}
 	s.ctx = t.Context()

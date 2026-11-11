@@ -2,7 +2,7 @@
 
 ## 使用
 
-在全域審批清單、任務審批清單或對話中的共用審批詳情開啟「智慧審查建議」，按 **按需審查**。只有這個明確的操作會請求模型；開啟詳情與輪詢只讀取已保存的結果。演示模式不呼叫模型。
+在 **系統 → 攔截 → 模型配置** 可選啟用 **背景智慧審查**（需勾選資料外送同意）。啟用後，新進入 `pending` 的審批會由背景 worker 自動排程審查，無需手動點擊；UI 會自動輪詢顯示佇列／進行中／完成狀態。仍可在詳情內 **手動審查** 或 **停止自動重試**。手動與背景皆不變更核准結果。演示模式不呼叫模型。
 
 沿用「攔截設定 → 裁判模型」選擇的 profile；未指定（ID 0）時使用當下的全域啟用 profile。明確指定的 profile 不存在或不可用時失敗，不另找其他模型。此功能沒有新增 Agent，也不使用執行 harness、工具清單或模型故障轉移鏈。自動兜底裁判的啟用開關不等於手動審查開關：停用兜底裁判仍可主動要求這次諮詢。
 
@@ -37,6 +37,10 @@ PostgreSQL row lock 僅用於短暫認領和保存，不涵蓋模型呼叫。每
 `GET /api/intercept/pending/{id}/advisory`：已登入使用者讀取最新審查，無模型呼叫，`Cache-Control: no-store`。
 
 `POST /api/intercept/pending/{id}/advisory`：空 body 或 `{}`，只能審查資料庫中的 pending 動作，不接受替換命令、prompt 或 model。沿用既有 Bearer 認證，無匿名或 SSE ticket 例外。
+
+`POST /api/intercept/pending/{id}/advisory/cancel`：停止該筆的自動重試（不影響人工核准／拒絕）。
+
+`GET/PUT /api/intercept/advisory-auto`：背景審查開關、資料外送同意時間戳、全域並行上限、失敗重試與每日預算。啟用時必須提供 `consent_at`（RFC3339）。
 
 回應 `advisory_only: true`、`approval_status`、`current`、`assessment`。`assessment.state` 為 `running`、`succeeded`、`failed` 或 `stale`，內部 lease ID 不對外輸出。
 

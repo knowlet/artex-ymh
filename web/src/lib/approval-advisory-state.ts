@@ -11,8 +11,13 @@ export interface AdvisoryResponse {
   approval_status: string;
   advisory_only: true;
   current: boolean;
+  auto_enabled?: boolean;
+  auto_cancelled?: boolean;
+  auto_queued?: boolean;
+  auto_meta?: { attempts?: number; next_retry_at?: string | null; last_error?: string };
   assessment: {
     state: "running" | "succeeded" | "failed" | "stale";
+    trigger?: "manual" | "auto";
     fingerprint: string;
     profile_id: number;
     model: string;

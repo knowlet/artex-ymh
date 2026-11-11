@@ -24,6 +24,7 @@ var ErrAdvisoryTooLarge = errors.New("approval snapshot exceeds advisory limit")
 type ApprovalAdvisory struct {
 	Version           string                 `json:"version"`
 	State             string                 `json:"state"`
+	Trigger           string                 `json:"trigger,omitempty"` // manual|auto
 	Fingerprint       string                 `json:"fingerprint"`
 	ActionFingerprint string                 `json:"action_fingerprint"`
 	ProfileID         int64                  `json:"profile_id"`
@@ -136,6 +137,9 @@ func (d *DB) ClaimApprovalAdvisory(ctx context.Context, id int64, attempt Approv
 		return nil, false, err
 	}
 	attempt.Version, attempt.State = approvalreview.Version, "running"
+	if attempt.Trigger == "" {
+		attempt.Trigger = "manual"
+	}
 	attempt.StartedAt, attempt.LeaseUntil = now.UTC(), now.Add(duration+30*time.Second).UTC()
 	attempt.LeaseID = hex.EncodeToString(nonce[:])
 	attempt.FinishedAt, attempt.Result, attempt.ErrorCode = nil, nil, ""

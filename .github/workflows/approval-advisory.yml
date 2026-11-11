@@ -74,13 +74,13 @@ jobs:
           python3 - <<'PYTEST'
           import json, pathlib, re, subprocess, sys
           module = re.search(r'^module\s+(\S+)', pathlib.Path('go.mod').read_text(), re.M)[1]
-          files = ['approvalreview/review_test.go', 'db/approval_advisory_test.go', 'server/approval_advisory_test.go']
+          files = ['approvalreview/review_test.go', 'db/approval_advisory_test.go', 'db/approval_advisory_auto_test.go', 'server/approval_advisory_test.go', 'server/approval_advisory_worker_test.go']
           expected = set()
           for name in files:
               path = pathlib.Path(name)
               tests = re.findall(r'^func (TestApprovalAdvisory\w*)\(t \*testing\.T\)', path.read_text(), re.M)
               expected.update((module + '/' + str(path.parent), test) for test in tests)
-          if len(expected) < 13:
+          if len(expected) < 21:
               sys.exit('Required advisory regression coverage is missing')
           cmd = ['go', 'test', '-json', '-race', '-count=1', '-p=1', '-timeout=10m',
                  './approvalreview', './db', './intercept', './server', '-run', '^TestApprovalAdvisory']

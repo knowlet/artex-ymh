@@ -15,21 +15,22 @@ import (
 	"github.com/Autumn-27/artex/approvalreview"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
-	"github.com/Autumn-27/artex/llmrec"
 	"github.com/Autumn-27/norma/llm"
 )
 
 type approvalAdvisoryAPI struct {
-	s     *Server
-	slots chan struct{}
+	s *Server
 }
 
 // registerApprovalAdvisoryRoutes registers authenticated, explicit-consent
 // consultation endpoints. The service has no reference to Interceptor.Decide.
 func (s *Server) registerApprovalAdvisoryRoutes(mux *http.ServeMux) {
-	a := &approvalAdvisoryAPI{s: s, slots: make(chan struct{}, 4)}
+	a := &approvalAdvisoryAPI{s: s}
 	mux.HandleFunc("GET /api/intercept/pending/{id}/advisory", a.get)
 	mux.HandleFunc("POST /api/intercept/pending/{id}/advisory", a.post)
+	mux.HandleFunc("POST /api/intercept/pending/{id}/advisory/cancel", a.cancelAuto)
+	mux.HandleFunc("GET /api/intercept/advisory-auto", s.interceptGetAdvisoryAuto)
+	mux.HandleFunc("PUT /api/intercept/advisory-auto", s.interceptSetAdvisoryAuto)
 }
 
 type advisoryPreparation struct {
@@ -221,8 +222,14 @@ func (a *approvalAdvisoryAPI) source(w http.ResponseWriter, r *http.Request) (*d
 	return src, true
 }
 
-func advisoryView(src *db.ApprovalAdvisorySource, current bool) map[string]any {
-	out := map[string]any{"pending_id": src.ID, "approval_status": src.Status, "advisory_only": true, "current": false, "assessment": nil}
+func advisoryView(src *db.ApprovalAdvisorySource, current bool, auto *db.AdvisoryAutoMeta, autoCfg db.AdvisoryAutoConfig) map[string]any {
+	out := map[string]any{"pending_id": src.ID, "approval_status": src.Status, "advisory_only": true, "current": false, "assessment": nil,
+		"auto_enabled": autoCfg.Ready, "auto_cancelled": auto != nil && auto.Cancelled, "auto_queued": false}
+	if autoCfg.Ready && src.Status == "pending" && (auto == nil || !auto.Cancelled) {
+		if src.Advisory == nil || (src.Advisory.State == "failed" && auto != nil && auto.NextRetryAt != nil && time.Now().Before(*auto.NextRetryAt)) {
+			out["auto_queued"] = src.Advisory == nil || src.Advisory.State != "running"
+		}
+	}
 	if src.Advisory == nil {
 		return out
 	}
@@ -232,9 +239,12 @@ func advisoryView(src *db.ApprovalAdvisorySource, current bool) map[string]any {
 		state, code = "failed", "interrupted"
 	}
 	out["current"] = current && src.Status == "pending" && state == "succeeded"
-	out["assessment"] = map[string]any{"state": state, "fingerprint": r.Fingerprint, "profile_id": r.ProfileID,
+	out["assessment"] = map[string]any{"state": state, "trigger": r.Trigger, "fingerprint": r.Fingerprint, "profile_id": r.ProfileID,
 		"model": r.Model, "started_at": r.StartedAt, "finished_at": r.FinishedAt, "lease_until": r.LeaseUntil,
 		"error_code": code, "result": r.Result}
+	if auto != nil {
+		out["auto_meta"] = map[string]any{"attempts": auto.Attempts, "next_retry_at": auto.NextRetryAt, "last_error": auto.LastError}
+	}
 	return out
 }
 
@@ -243,14 +253,16 @@ func (a *approvalAdvisoryAPI) get(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
 	current := false
 	if src.Advisory != nil && src.Advisory.State == "succeeded" && src.Status == "pending" {
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
 		prep, err := prepareApprovalAdvisory(ctx, a.s.m.pg, src)
 		current = err == nil && prep.fingerprint == src.Advisory.Fingerprint && src.Fingerprint() == src.Advisory.ActionFingerprint
 	}
-	writeJSON(w, 200, advisoryView(src, current))
+	auto, _ := a.s.m.pg.ReadAdvisoryAutoMeta(ctx, src.ID)
+	autoCfg, _ := a.s.m.pg.ReadAdvisoryAutoConfig(ctx)
+	writeJSON(w, 200, advisoryView(src, current, auto, autoCfg))
 }
 
 func (a *approvalAdvisoryAPI) post(w http.ResponseWriter, r *http.Request) {
@@ -271,109 +283,101 @@ func (a *approvalAdvisoryAPI) post(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "審查僅接受既有紀錄，不接受替換命令或模型參數")
 		return
 	}
-	// No unbounded queue; the limit is per registered server handler. Database
-	// leases additionally deduplicate the same approval across server processes.
-	select {
-	case a.slots <- struct{}{}:
-		defer func() { <-a.slots }()
-	default:
-		writeErr(w, 429, "審查忙碌中；請稍後手動重試")
+	res, err := a.s.runApprovalAdvisoryReview(r.Context(), src.ID, "manual")
+	if err != nil {
+		a.writeAdvisoryErr(w, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 70*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	if a.s.ctx != nil {
-		stop := context.AfterFunc(a.s.ctx, cancel)
-		defer stop()
+	auto, _ := a.s.m.pg.ReadAdvisoryAutoMeta(ctx, src.ID)
+	autoCfg, _ := a.s.m.pg.ReadAdvisoryAutoConfig(ctx)
+	status := res.http
+	if status == 0 {
+		status = http.StatusOK
 	}
-	prep, err := prepareApprovalAdvisory(ctx, a.s.m.pg, src)
-	if err != nil {
+	writeJSON(w, status, advisoryView(res.src, res.current, auto, autoCfg))
+}
+
+func (a *approvalAdvisoryAPI) cancelAuto(w http.ResponseWriter, r *http.Request) {
+	src, ok := a.source(w, r)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := a.s.m.pg.CancelApprovalAdvisoryAuto(ctx, src.ID); err != nil {
+		writeErr(w, 503, "無法取消自動審查")
+		return
+	}
+	auto, _ := a.s.m.pg.ReadAdvisoryAutoMeta(ctx, src.ID)
+	autoCfg, _ := a.s.m.pg.ReadAdvisoryAutoConfig(ctx)
+	writeJSON(w, 200, advisoryView(src, false, auto, autoCfg))
+}
+
+func (a *approvalAdvisoryAPI) writeAdvisoryErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errAdvisoryNotFound):
+		writeErr(w, 404, "找不到審批紀錄")
+	case errors.Is(err, errAdvisorySettled):
+		writeErr(w, 409, "審批已結束；不再呼叫模型")
+	case errors.Is(err, errAdvisoryBusy):
+		writeErr(w, 429, "審查忙碌中；請稍後手動重試")
+	case errors.Is(err, db.ErrAdvisoryNotPending), errors.Is(err, db.ErrAdvisoryChanged):
+		writeErr(w, 409, "審批已結束或內容改變")
+	case errors.Is(err, errAdvisoryBudget):
+		writeErr(w, 429, "已達今日自動審查上限")
+	default:
 		writeErr(w, 503, "裁判模型或政策快照不可用；未變更審批結果")
+	}
+}
+
+func (s *Server) interceptGetAdvisoryAuto(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
 		return
 	}
-	attempt, claimed, err := a.s.m.pg.ClaimApprovalAdvisory(ctx, src.ID, db.ApprovalAdvisory{
-		Fingerprint: prep.fingerprint, ActionFingerprint: src.Fingerprint(), ProfileID: prep.profileID,
-		Model: prep.model, ProfileVersion: prep.profileVersion}, prep.timeout)
+	cfg, err := pg.ReadAdvisoryAutoConfig(r.Context())
 	if err != nil {
-		if errors.Is(err, db.ErrAdvisoryNotPending) || errors.Is(err, db.ErrAdvisoryChanged) {
-			writeErr(w, 409, "審批已結束或內容改變")
-		} else {
-			writeErr(w, 503, "無法保存審查狀態")
-		}
+		writeErr(w, 503, err.Error())
 		return
 	}
-	if !claimed {
-		src.Advisory = attempt
-		status := 200
-		if attempt.State == "running" {
-			status = 202
-		}
-		writeJSON(w, status, advisoryView(src, attempt.Fingerprint == prep.fingerprint))
+	writeJSON(w, 200, cfg)
+}
+
+func (s *Server) interceptSetAdvisoryAuto(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
 		return
 	}
-	errorCode := ""
-	var result *approvalreview.Result
-	prov, cfg, available := a.s.providerForProfile(prep.profileID)
-	if !available {
-		errorCode = "provider_unavailable"
-	} else if cfg.Model != prep.model || cfg.Stream != prep.streaming {
-		errorCode = "policy_unavailable"
-	} else {
-		// Ensure provider construction did not race a settings/profile edit.
-		check, checkErr := prepareApprovalAdvisory(ctx, a.s.m.pg, src)
-		if checkErr != nil || check.fingerprint != prep.fingerprint {
-			errorCode = "policy_unavailable"
-		} else {
-			callCtx, callCancel := context.WithTimeout(ctx, prep.timeout)
-			value, callErr := runApprovalAdvisory(llmrec.WithWorker(callCtx, judgeWorkerLane), prov, prep.input, prep.streaming)
-			callCancel()
-			if callErr != nil {
-				switch {
-				case errors.Is(callErr, context.DeadlineExceeded):
-					errorCode = "timeout"
-				case errors.Is(callErr, context.Canceled):
-					errorCode = "cancelled"
-				default:
-					errorCode = "invalid_response"
-				}
-			} else {
-				result = &value
-			}
-		}
+	var req db.AdvisoryAutoConfig
+	if err := decode(r, &req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
 	}
-	// Cleanup is bounded independently so a disconnected browser does not leave
-	// a running lease until expiry. There is no background inference or retry.
-	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer finishCancel()
-	stale := false
-	if result != nil {
-		latest, readErr := a.s.m.pg.ReadApprovalAdvisory(finishCtx, src.ID)
-		if readErr != nil {
-			errorCode = "policy_unavailable"
-			result = nil
-		} else if latest == nil || latest.Status != "pending" {
-			stale = true
-		} else {
-			check, checkErr := prepareApprovalAdvisory(finishCtx, a.s.m.pg, latest)
-			if checkErr != nil {
-				errorCode = "policy_unavailable"
-				result = nil
-			} else {
-				stale = check.fingerprint != prep.fingerprint
-			}
-		}
+	if req.Enabled && req.ConsentAt.IsZero() {
+		writeErr(w, 400, "啟用背景審查前必須確認資料外送同意")
+		return
 	}
-	_, err = a.s.m.pg.FinishApprovalAdvisory(finishCtx, src.ID, attempt.LeaseID, result, errorCode, stale)
+	if req.GlobalSlots <= 0 {
+		req.GlobalSlots = 8
+	}
+	if req.MaxRetries < 0 {
+		req.MaxRetries = 3
+	}
+	if req.DailyBudget <= 0 {
+		req.DailyBudget = 200
+	}
+	if err := pg.SaveAdvisoryAutoConfig(req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	cfg, err := pg.ReadAdvisoryAutoConfig(r.Context())
 	if err != nil {
-		writeErr(w, 503, "審查結果未能保存；未變更審批結果")
+		writeErr(w, 503, err.Error())
 		return
 	}
-	latest, err := a.s.m.pg.ReadApprovalAdvisory(finishCtx, src.ID)
-	if err != nil || latest == nil {
-		writeErr(w, 503, "無法讀回審查結果")
-		return
-	}
-	writeJSON(w, 200, advisoryView(latest, !stale && errorCode == "" && latest.Advisory != nil && latest.Advisory.LeaseID == attempt.LeaseID))
+	writeJSON(w, 200, cfg)
 }
 
 func runApprovalAdvisory(ctx context.Context, prov llm.Provider, input []byte, streaming bool) (approvalreview.Result, error) {
