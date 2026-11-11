@@ -3,7 +3,9 @@ package db
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -49,14 +51,22 @@ func matchOne(r AssetInterceptRule, domains, ips, urls []string) (string, bool) 
 	}
 	switch r.Kind {
 	case "exact_domain":
+		p = DomainKey(p)
+		if p == "" {
+			return "", false
+		}
 		for _, d := range domains {
-			if strings.EqualFold(strings.TrimSpace(d), p) {
+			if strings.EqualFold(DomainKey(d), p) {
 				return d, true
 			}
 		}
 	case "exact_ip":
+		want := net.ParseIP(p)
+		if want == nil {
+			return "", false
+		}
 		for _, ip := range ips {
-			if strings.TrimSpace(ip) == p {
+			if got := net.ParseIP(strings.TrimSpace(ip)); got != nil && want.Equal(got) {
 				return ip, true
 			}
 		}
@@ -103,6 +113,7 @@ func matchOne(r AssetInterceptRule, domains, ips, urls []string) (string, bool) 
 // MatchAssetInterceptRules 返回第一条命中给定 域名/IP/URL 候选串的启用规则，及命中的具体值。
 // 供 insert_assets 用原始输入（尚未落库的 assetInputItem）匹配。
 func MatchAssetInterceptRules(rules []AssetInterceptRule, domains, ips, urls []string) (AssetInterceptRule, string, bool) {
+	domains, ips = assetInterceptHosts(domains, ips, urls)
 	for _, r := range rules {
 		if !r.Enabled {
 			continue
@@ -112,6 +123,99 @@ func MatchAssetInterceptRules(rules []AssetInterceptRule, domains, ips, urls []s
 		}
 	}
 	return AssetInterceptRule{}, "", false
+}
+
+// assetInterceptHosts is shared by insertion and stored-asset checks. Retain
+// original candidates for existing domain/fuzzy rules, and add canonical IP
+// candidates for numeric host spellings accepted by common URL clients. This
+// is local parsing only; policy evaluation must never perform DNS lookups.
+func assetInterceptHosts(domains, ips, urls []string) ([]string, []string) {
+	domains = append([]string(nil), domains...)
+	ips = append([]string(nil), ips...)
+	seen := make(map[string]bool, len(ips))
+	for _, ip := range ips {
+		seen[ip] = true
+	}
+	addIP := func(host string) {
+		if ip := assetInterceptIP(host); ip != nil {
+			canonical := ip.String()
+			if !seen[canonical] {
+				ips = append(ips, canonical)
+				seen[canonical] = true
+			}
+		}
+	}
+	for _, host := range domains {
+		addIP(host)
+	}
+	for _, host := range ips {
+		addIP(host)
+	}
+	for _, raw := range urls {
+		if u, err := url.Parse(strings.TrimSpace(raw)); err == nil {
+			if host := u.Hostname(); host != "" {
+				if net.ParseIP(host) == nil {
+					domains = append(domains, host)
+				}
+				addIP(host)
+			}
+		}
+	}
+	return domains, ips
+}
+
+// assetInterceptIP accepts canonical IP literals and the bounded inet_aton
+// IPv4 forms: one to four decimal/octal/hex parts, with the final part filling
+// the remaining bytes. It deliberately does not accept signs, underscores,
+// overflow or arbitrary hostname resolution.
+func assetInterceptIP(host string) net.IP {
+	host = DomainKey(host)
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return net.IP(addr.WithZone("").AsSlice())
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) > 4 {
+		return nil
+	}
+	var value uint64
+	for index, part := range parts {
+		base, digits := 10, part
+		if strings.HasPrefix(part, "0x") {
+			base, digits = 16, part[2:]
+		} else if len(part) > 1 && part[0] == '0' {
+			base, digits = 8, part[1:]
+		}
+		if digits == "" {
+			return nil
+		}
+		for _, ch := range digits {
+			digit := -1
+			if ch >= '0' && ch <= '9' {
+				digit = int(ch - '0')
+			} else if ch >= 'a' && ch <= 'f' {
+				digit = int(ch-'a') + 10
+			}
+			if digit < 0 || digit >= base {
+				return nil
+			}
+		}
+		number, err := strconv.ParseUint(digits, base, 32)
+		if err != nil {
+			return nil
+		}
+		if index < len(parts)-1 {
+			if number > 255 {
+				return nil
+			}
+			value |= number << uint(8*(3-index))
+		} else {
+			if number >= uint64(1)<<uint(8*(5-len(parts))) {
+				return nil
+			}
+			value |= number
+		}
+	}
+	return net.IPv4(byte(value>>24), byte(value>>16), byte(value>>8), byte(value))
 }
 
 // interceptCandidates 提取一个已落库资产用于拦截匹配的 域名/IP/URL 候选串。

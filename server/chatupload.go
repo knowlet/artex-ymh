@@ -123,6 +123,18 @@ func uniqueUploadPath(dir, name string) string {
 	}
 }
 
+func validateChatAttachmentPath(path string) error {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	if !strings.HasPrefix(path, "uploads/") || strings.Contains(path, "..") {
+		return fmt.Errorf("附件路径无效")
+	}
+	clean := filepath.ToSlash(filepath.Clean(path))
+	if clean != path || strings.HasPrefix(clean, "../") {
+		return fmt.Errorf("附件路径无效")
+	}
+	return nil
+}
+
 // composeAgentMessage appends an attachment manifest to the user's message so the agent
 // knows which files were uploaded and where to Read them. baseDir is the agent's working
 // dir (its CWD); we emit ABSOLUTE paths (baseDir + relative) so the agent can Read/Bash

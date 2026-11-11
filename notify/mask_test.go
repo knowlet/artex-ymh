@@ -265,6 +265,36 @@ func TestPrepareConfigUpdateAllowsLegitimateEdits(t *testing.T) {
 // 前端提交的端口是 JSON number（float64），库里读回来也是 float64，
 // 但两个值的类型可能不同（如 int vs float64）。用 == 比较会把「没改」判成「改了」，
 // 从而对只改了名字的用户弹出「请重新填写密码」——假警报会让人不再信任这个防护。
+func TestPrepareConfigUpdateAllowsLegacyEmailWithoutAllowInsecure(t *testing.T) {
+	stored := map[string]any{
+		"host": "smtp.example.test", "port": 587.0,
+		"from": "noreply@example.test", "to": []any{"ops@example.test"},
+		"password": "synthetic-stored-secret",
+	}
+	incoming := map[string]any{
+		"host": "smtp.example.test", "port": 587,
+		"from": "noreply@example.test", "to": []any{"ops@example.test"},
+		"password": MaskedValue("synthetic-stored-secret"),
+		"allow_insecure": false,
+	}
+	if _, err := PrepareConfigUpdate(KindEmail, stored, incoming); err != nil {
+		t.Fatalf("legacy email channel edit rejected: %v", err)
+	}
+}
+
+func TestPrepareConfigUpdateStillRequiresPasswordOnPortChange(t *testing.T) {
+	stored := map[string]any{
+		"host": "smtp.example.test", "port": 587.0,
+		"from": "noreply@example.test", "to": []any{"ops@example.test"},
+		"password": "synthetic-stored-secret", "allow_insecure": false,
+	}
+	if _, err := PrepareConfigUpdate(KindEmail, stored, map[string]any{
+		"port": 465, "allow_insecure": false, "password": MaskedValue("synthetic-stored-secret"),
+	}); err == nil {
+		t.Fatal("port change must require explicit SMTP password")
+	}
+}
+
 func TestPrepareConfigUpdatePortTypeTolerance(t *testing.T) {
 	stored := map[string]any{"host": "smtp.corp.com", "port": float64(587), "password": "PW"}
 	// 同一个端口，以 int 形式提交。

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,7 +18,7 @@ func (s *Server) pgListCommands(w http.ResponseWriter, r *http.Request) {
 
 	records, total, err := s.m.PG().ListCommands(commandTaskFilter(q.Get("task")), keyword, page, size)
 	if err != nil {
-		writeErr(w, 500, err.Error())
+		writeRecordListError(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"commands": records, "total": total})
@@ -65,10 +66,18 @@ func (s *Server) pgListLLMRecords(w http.ResponseWriter, r *http.Request) {
 
 	records, total, err := s.m.PG().ListLLMRecords(model, session, task, page, size)
 	if err != nil {
-		writeErr(w, 500, err.Error())
+		writeRecordListError(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"records": records, "total": total})
+}
+
+func writeRecordListError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	if errors.Is(err, db.ErrRecordPageSize) {
+		status = http.StatusBadRequest
+	}
+	writeErr(w, status, err.Error())
 }
 
 // pgTokenByModel returns a task's LLM token usage grouped by model, from the

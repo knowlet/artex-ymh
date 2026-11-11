@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	endpointpolicy "github.com/Autumn-27/artex/internal/endpoint"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
@@ -30,6 +31,18 @@ import (
 
 const protocolVersion = "2025-06-18"
 const legacySSEProtocolVersion = "2024-11-05"
+
+const (
+	maxSSELineBytes     = 8 << 20
+	maxSSEEventBytes    = 8 << 20
+	maxMCPJSONBytes     = 8 << 20
+	mcpHandshakeTimeout = 120 * time.Second
+)
+
+var (
+	errSSELineTooLarge  = errors.New("mcp: SSE line exceeds 8 MiB")
+	errSSEEventTooLarge = errors.New("mcp: SSE event exceeds 8 MiB")
+)
 
 // ToolName mirrors mcp.ToolName so remote tools share the mcp__server__tool scheme.
 func ToolName(server, name string) string { return "mcp__" + server + "__" + name }
@@ -97,17 +110,21 @@ func normalizeHeaders(headers map[string]string) (map[string]string, error) {
 // When insecure is true, TLS certificate verification is skipped so servers that
 // present a self-signed certificate can still be reached (issue #108).
 func New(ctx context.Context, server, url string, headers map[string]string, insecure bool) (*Client, error) {
+	target, err := endpointpolicy.URL(url)
+	if err != nil {
+		return nil, err
+	}
 	cleanHeaders, err := normalizeHeaders(headers)
 	if err != nil {
 		return nil, err
 	}
-	hc := &http.Client{Timeout: 120 * time.Second}
+	hc := &http.Client{Timeout: 120 * time.Second, CheckRedirect: endpointpolicy.CheckRedirect}
 	if insecure {
 		hc.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	}
 	c := &Client{
 		server:   server,
-		url:      url,
+		url:      target,
 		headers:  cleanHeaders,
 		http:     hc,
 		protocol: protocolVersion,
@@ -122,15 +139,35 @@ func New(ctx context.Context, server, url string, headers map[string]string, ins
 // announces a per-session POST /message endpoint, while JSON-RPC responses are
 // delivered asynchronously as SSE message events.
 func NewSSE(ctx context.Context, server, sseURL string, headers map[string]string, insecure bool) (*Client, error) {
+	target, err := endpointpolicy.URL(sseURL)
+	if err != nil {
+		return nil, err
+	}
+	sseURL = target
 	cleanHeaders, err := normalizeHeaders(headers)
 	if err != nil {
 		return nil, err
 	}
-	hc := &http.Client{} // the SSE stream is intentionally long-lived.
+	hc := &http.Client{CheckRedirect: endpointpolicy.CheckRedirect} // the SSE stream is intentionally long-lived.
 	if insecure {
 		hc.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	}
 	streamCtx, cancel := context.WithCancel(context.Background())
+	// The caller owns the handshake, not the lifetime of a successfully
+	// connected session. Stop forwarding cancellation before returning it.
+	handshakeCtx, handshakeCancel := context.WithTimeout(ctx, mcpHandshakeTimeout)
+	defer handshakeCancel()
+	stopHandshake := context.AfterFunc(handshakeCtx, cancel)
+	connected := false
+	defer func() {
+		stopHandshake()
+		if !connected {
+			cancel()
+		}
+	}()
+	if err := handshakeCtx.Err(); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(streamCtx, http.MethodGet, sseURL, nil)
 	if err != nil {
 		cancel()
@@ -143,6 +180,9 @@ func NewSSE(ctx context.Context, server, sseURL string, headers map[string]strin
 	resp, err := hc.Do(req)
 	if err != nil {
 		cancel()
+		if handshakeCtx.Err() != nil {
+			return nil, handshakeCtx.Err()
+		}
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -151,11 +191,24 @@ func NewSSE(ctx context.Context, server, sseURL string, headers map[string]strin
 		return nil, fmt.Errorf("mcp sse http %d: %s", resp.StatusCode, readSnippet(resp.Body))
 	}
 	reader := bufio.NewReader(resp.Body)
-	endpoint, err := readSSEEndpoint(reader, sseURL)
+	messageURL, err := readSSEEndpoint(reader, sseURL)
 	if err != nil {
 		resp.Body.Close()
 		cancel()
+		if handshakeCtx.Err() != nil {
+			return nil, handshakeCtx.Err()
+		}
 		return nil, err
+	}
+	// A server-announced endpoint is another credential-bearing destination,
+	// even though it is not an HTTP redirect. Apply the same origin boundary.
+	messageRequest, err := http.NewRequest(http.MethodPost, messageURL, nil)
+	if err == nil {
+		err = endpointpolicy.CheckRedirect(messageRequest, []*http.Request{req})
+	}
+	if err != nil {
+		resp.Body.Close()
+		return nil, fmt.Errorf("mcp sse message endpoint: %w", err)
 	}
 	c := &Client{
 		server:       server,
@@ -163,7 +216,7 @@ func NewSSE(ctx context.Context, server, sseURL string, headers map[string]strin
 		headers:      cleanHeaders,
 		http:         hc,
 		legacySSE:    true,
-		messageURL:   endpoint,
+		messageURL:   messageURL,
 		streamBody:   resp.Body,
 		streamCancel: cancel,
 		streamDone:   make(chan struct{}),
@@ -172,30 +225,33 @@ func NewSSE(ctx context.Context, server, sseURL string, headers map[string]strin
 		protocol:     legacySSEProtocolVersion,
 	}
 	go c.readLegacySSE(reader)
-	if err := c.initialize(ctx); err != nil {
+	if err := c.initialize(handshakeCtx); err != nil {
 		_ = c.Close()
 		return nil, err
 	}
+	if !stopHandshake() {
+		_ = c.Close()
+		return nil, handshakeCtx.Err()
+	}
+	connected = true
 	return c, nil
 }
 
 func readSSEEndpoint(r *bufio.Reader, base string) (string, error) {
 	for {
-		line, err := r.ReadString('\n')
+		payload, err := readSSEEventWithEOF(r, false)
 		if err != nil {
 			return "", fmt.Errorf("mcp sse endpoint: %w", err)
 		}
-		line = strings.TrimRight(line, "\r\n")
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		candidate := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		candidate := strings.TrimSpace(payload)
 		if candidate == "" {
 			continue
 		}
 		u, err := url.Parse(candidate)
 		if err != nil {
-			return "", fmt.Errorf("mcp sse endpoint URL: %w", err)
+			// URL parse errors include the server-controlled input, which may
+			// contain secrets or nearly an entire maximum-sized SSE event.
+			return "", errors.New("mcp sse endpoint URL: invalid URL")
 		}
 		if !u.IsAbs() {
 			b, err := url.Parse(base)
@@ -210,8 +266,10 @@ func readSSEEndpoint(r *bufio.Reader, base string) (string, error) {
 
 func (c *Client) readLegacySSE(r *bufio.Reader) {
 	defer close(c.streamDone)
+	defer c.streamCancel()
+	defer c.streamBody.Close()
 	for {
-		line, err := r.ReadString('\n')
+		payload, err := readSSEEvent(r)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
 				select {
@@ -221,12 +279,8 @@ func (c *Client) readLegacySSE(r *bufio.Reader) {
 			}
 			return
 		}
-		line = strings.TrimRight(line, "\r\n")
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
 		var response rpcResponse
-		if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &response); err != nil || response.ID == 0 {
+		if err := json.Unmarshal([]byte(payload), &response); err != nil || response.ID == 0 {
 			continue
 		}
 		c.pendingMu.Lock()
@@ -469,8 +523,17 @@ func (c *Client) roundTrip(ctx context.Context, body rpcRequest, expectResp bool
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return parseSSE(resp.Body, body.ID)
 	}
+	// The peer chooses the response encoding. Applying the bound only to SSE
+	// would let the same endpoint bypass it with an application/json response.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxMCPJSONBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("mcp: read json response: %w", err)
+	}
+	if len(raw) > maxMCPJSONBytes {
+		return nil, errors.New("mcp: JSON response exceeds 8 MiB")
+	}
 	var out rpcResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("mcp: decode json response: %w", err)
 	}
 	return &out, nil
@@ -533,43 +596,91 @@ func (c *Client) legacyRoundTrip(ctx context.Context, body rpcRequest, expectRes
 // parseSSE reads an SSE stream and returns the first data frame that is a JSON-RPC
 // response matching wantID (server-to-client requests/notifications are skipped).
 func parseSSE(r io.Reader, wantID int) (*rpcResponse, error) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	var dataBuf strings.Builder
-	flush := func() (*rpcResponse, bool) {
-		if dataBuf.Len() == 0 {
-			return nil, false
+	reader := bufio.NewReader(r)
+	for {
+		payload, err := readSSEEvent(reader)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, fmt.Errorf("mcp: no matching response in event stream")
+			}
+			return nil, err
 		}
-		payload := dataBuf.String()
-		dataBuf.Reset()
 		var out rpcResponse
 		if err := json.Unmarshal([]byte(payload), &out); err != nil {
-			return nil, false
-		}
-		if out.ID != wantID {
-			return nil, false
-		}
-		return &out, true
-	}
-	for sc.Scan() {
-		line := sc.Text()
-		if line == "" { // event boundary
-			if resp, ok := flush(); ok {
-				return resp, nil
-			}
 			continue
 		}
-		if strings.HasPrefix(line, "data:") {
-			dataBuf.WriteString(strings.TrimSpace(line[len("data:"):]))
+		if out.ID != wantID {
+			continue
+		}
+		return &out, nil
+	}
+}
+
+// readSSELine uses ReadSlice's fixed-size fragments rather than ReadString,
+// which allocates until a remote peer finally sends a newline.
+func readSSELine(r *bufio.Reader) (string, error) {
+	var line []byte
+	for {
+		fragment, err := r.ReadSlice('\n')
+		if len(line)+len(fragment) > maxSSELineBytes {
+			return "", errSSELineTooLarge
+		}
+		line = append(line, fragment...)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return string(line), err
+	}
+}
+
+// Bound the complete event as well as each line: many short data/comment lines
+// without an event separator must not bypass the allocation limit. Data lines
+// are joined with newlines as required by SSE; the last event may end at EOF.
+func readSSEEvent(r *bufio.Reader) (string, error) {
+	return readSSEEventWithEOF(r, true)
+}
+
+// Endpoints require a complete event before they can direct a POST. Response
+// parsing retains its historical acceptance of a final event ending at EOF.
+func readSSEEventWithEOF(r *bufio.Reader, allowEOF bool) (string, error) {
+	var data strings.Builder
+	eventBytes := 0
+	hasData := false
+	for {
+		line, err := readSSELine(r)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", err
+		}
+		eventBytes += len(line)
+		if eventBytes > maxSSEEventBytes {
+			return "", errSSEEventTooLarge
+		}
+		if errors.Is(err, io.EOF) && !allowEOF {
+			if hasData || len(line) > 0 {
+				return "", io.ErrUnexpectedEOF
+			}
+			return "", io.EOF
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			if hasData {
+				return data.String(), nil
+			}
+			eventBytes = 0
+		} else if strings.HasPrefix(line, "data:") {
+			if hasData {
+				data.WriteByte('\n')
+			}
+			hasData = true
+			data.WriteString(strings.TrimPrefix(line[len("data:"):], " "))
+		}
+		if errors.Is(err, io.EOF) {
+			if hasData {
+				return data.String(), nil
+			}
+			return "", io.EOF
 		}
 	}
-	if resp, ok := flush(); ok {
-		return resp, nil
-	}
-	if err := sc.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("mcp: no matching response in event stream")
 }
 
 func readSnippet(r io.Reader) string {

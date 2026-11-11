@@ -110,7 +110,13 @@ export const CHANNEL_FIELDS: Record<string, FieldDef[]> = {
     { key: "password", label: "密码 / 授权码", kind: "password" },
     { key: "from", label: "发件人", kind: "text", placeholder: "artex@example.com" },
     { key: "to", label: "收件人", kind: "list", help: "多个地址用逗号分隔" },
-    { key: "tls", label: "隐式 TLS", kind: "switch", help: "465 端口打开；587 保持关闭（会自动 STARTTLS）" },
+    { key: "tls", label: "隐式 TLS", kind: "switch", help: "465 端口打开；587 保持关闭（要求服务器支持 STARTTLS）" },
+    {
+      key: "allow_insecure",
+      label: "允许明文邮件",
+      kind: "switch",
+      help: "仅用于明确可信且不支持 TLS 的中继；开启后漏洞详情可能明文传输。默认关闭。",
+    },
   ],
 };
 

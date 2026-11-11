@@ -2,10 +2,30 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 	"unicode/utf8"
 )
+
+const maxRecordPageSize = 200
+
+// ErrRecordPageSize is returned before querying when a history request could
+// materialize an excessive number of potentially large tool/LLM records.
+var ErrRecordPageSize = errors.New("record page size exceeds 200")
+
+func recordPage(page, size int) (int, int, error) {
+	if size <= 0 {
+		size = 50
+	}
+	if size > maxRecordPageSize {
+		return 0, 0, ErrRecordPageSize
+	}
+	if page < 0 {
+		page = 0
+	}
+	return page, size, nil
+}
 
 // CommandRecord is a paired tool_use + tool_result from the activity table
 // (any tool, not just Bash). Command holds the raw tool input (JSON).
@@ -82,13 +102,10 @@ ORDER BY total DESC, tool ASC`, args...)
 // explorations, with optional filtering and pagination. Covers every tool, not
 // just Bash; q matches the tool name or its input.
 func (d *DB) ListCommands(expID *int64, q string, page, size int) ([]CommandRecord, int, error) {
-	if size <= 0 {
-		size = 50
+	page, size, err := recordPage(page, size)
+	if err != nil {
+		return nil, 0, err
 	}
-	if page < 0 {
-		page = 0
-	}
-	offset := page * size
 
 	where, args, argN := commandFilter(expID, q)
 
@@ -98,6 +115,12 @@ func (d *DB) ListCommands(expID *int64, q string, page, size int) ([]CommandReco
 	if err := d.QueryRow(countQ, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
+	// Check against the count before multiplying, so very large page numbers
+	// neither overflow OFFSET nor cause an unnecessary data scan.
+	if total == 0 || page > (total-1)/size {
+		return []CommandRecord{}, total, nil
+	}
+	offset := page * size
 
 	// data query: join tool_use with its tool_result
 	dataQ := `
@@ -240,13 +263,10 @@ func capLLMRawBody(s string) string {
 
 // ListLLMRecords returns paginated LLM records with optional filters.
 func (d *DB) ListLLMRecords(model, session, task string, page, size int) ([]LLMRecord, int, error) {
-	if size <= 0 {
-		size = 50
+	page, size, err := recordPage(page, size)
+	if err != nil {
+		return nil, 0, err
 	}
-	if page < 0 {
-		page = 0
-	}
-	offset := page * size
 
 	where := `WHERE true`
 	args := []any{}
@@ -271,6 +291,10 @@ func (d *DB) ListLLMRecords(model, session, task string, page, size int) ([]LLMR
 	if err := d.QueryRow(`SELECT COUNT(*) FROM llm_records `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
+	if total == 0 || page > (total-1)/size {
+		return []LLMRecord{}, total, nil
+	}
+	offset := page * size
 
 	dataQ := `SELECT id, ts, COALESCE(model,''), COALESCE(profile_name,''), COALESCE(session_id,''), COALESCE(task_id,''), COALESCE(worker,''),
 		COALESCE(latency_ms,0), COALESCE(input_tokens,0), COALESCE(output_tokens,0), COALESCE(cache_read,0), COALESCE(cache_write,0),
