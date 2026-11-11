@@ -286,6 +286,14 @@ func TestUpsertAppByName(t *testing.T) {
 // HTTPService
 // =====================================================================
 
+func TestUpsertHTTPServiceRejectsNonHTTPScheme(t *testing.T) {
+	d, av2, _ := testSetup(t)
+	defer d.Close()
+	if _, err := av2.UpsertHTTPService(UpsertHTTPServiceReq{URL: "javascript:alert(1)"}); err == nil {
+		t.Fatal("javascript: asset URL must be rejected")
+	}
+}
+
 func TestUpsertHTTPService(t *testing.T) {
 	d, av2, _ := testSetup(t)
 	defer d.Close()

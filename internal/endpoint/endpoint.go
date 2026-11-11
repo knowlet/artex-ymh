@@ -72,6 +72,19 @@ func URL(raw string) (string, error) {
 	return u.String(), nil
 }
 
+// AssetURL validates an http(s) service URL before it is stored and may be
+// rendered as a clickable link in the operator UI.
+func AssetURL(raw string) (string, error) {
+	u, err := parseURL(raw, false)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", errors.New("资产 URL 仅支持 HTTP 或 HTTPS")
+	}
+	return u.String(), nil
+}
+
 func parseURL(raw string, proxy bool) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u == nil || u.Hostname() == "" || u.Opaque != "" || u.Fragment != "" {
