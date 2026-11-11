@@ -1,6 +1,10 @@
 *
 !.gitignore
 !TEST-SUMMARY-2026-11-11.json
-!playwright-report.json
+!go-test-pg17-summary.txt
+!docker-build-summary.json
+!docker-run-health.json
 !govulncheck-go1.26.11.txt
+!govulncheck-verbose-*.txt
 !npm-audit-*.json
+!npm-audit-summary-*.json

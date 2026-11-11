@@ -1,10 +1,10 @@
 {
   "schema": "artex-upgrade-inventory/v1",
-  "generated_at": "2026-11-11T11:46:09+00:00",
+  "generated_at": "2026-11-11T12:00:06+00:00",
   "repo": "knowlet/artex-ymh",
   "reference_date": "2026-11-11",
   "toolchains": {
-    "go": "go version go1.26.11 linux/amd64",
+    "go": "go version go1.27.4 linux/amd64",
     "node": "v22.23.4",
     "npm": "10.9.9"
   },
@@ -120,7 +120,7 @@
     },
     {
       "name": "@hookform/resolvers",
-      "version": "5.9.2"
+      "version": "7.0.5"
     },
     {
       "name": "@shadcn/react",
@@ -132,7 +132,7 @@
     },
     {
       "name": "@tanstack/react-table",
-      "version": "8.21.3"
+      "version": "9.3.1"
     },
     {
       "name": "@types/d3-geo",
@@ -318,7 +318,7 @@
     },
     {
       "file": "Dockerfile.source",
-      "from": "golang:1.26-alpine"
+      "from": "golang:1.27.4-alpine"
     },
     {
       "file": "Dockerfile.source",
@@ -499,7 +499,7 @@
       "uses": "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020"
     }
   ],
-  "ci_postgres_image": "postgres:16",
+  "ci_postgres_image": "postgres:17",
   "pr_integration_notes": {
     "pr15": "Adds intercept advisory Playwright e2e; no go.mod diff vs main at fetch time.",
     "pr17": "Audn URL validation; no dependency manifest diff vs main at fetch time."

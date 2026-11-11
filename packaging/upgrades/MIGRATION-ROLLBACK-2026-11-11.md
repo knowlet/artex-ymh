@@ -27,7 +27,8 @@ Runtime dependency bumps (Go modules, npm lockfile, Docker Node/Playwright pins)
 | npm bundle | prior lock | new lock | Yes — rebuild old tag |
 | Docker runtime Node | 20/22.14 | 22.23.4 tarball | Yes — rebuild old Dockerfile tag |
 | Playwright in image | 1.63 | 1.65 | Yes — rebuild; browser cache mismatch may need `playwright install` once |
-| PostgreSQL server | 16.x | 16.x (held) | N/A this PR |
+| PostgreSQL server | 16.x | 17.x | **Restore-only** — `pg_dump -Fc` before cutover; major downgrade unsupported |
+| Go toolchain | 1.26.x | 1.27.4 | Rebuild prior tag binary; no automatic down-compile |
 
 **Irreversible upgrades (not in this PR)**: PostgreSQL 16→17 dump/restore; Node 22→24 default; Go 1.26→1.27 toolchain default in CI.
 

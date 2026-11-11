@@ -18,9 +18,10 @@ COPY web/ ./
 RUN npm run build:static
 
 # ---------- ② Go 编译(内嵌前端) ----------
-FROM golang:1.26-alpine AS gobuild
+FROM golang:1.27.4-alpine AS gobuild
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=$GOPROXY
+ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

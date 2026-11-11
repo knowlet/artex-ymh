@@ -86,7 +86,7 @@ def main() -> int:
         "npm_packages": npm_inventory(),
         "docker_base_images": docker_base_images(),
         "github_actions_uses": github_actions_pins(),
-        "ci_postgres_image": "postgres:16",
+        "ci_postgres_image": "postgres:17",
         "pr_integration_notes": {
             "pr15": "Adds intercept advisory Playwright e2e; no go.mod diff vs main at fetch time.",
             "pr17": "Audn URL validation; no dependency manifest diff vs main at fetch time.",

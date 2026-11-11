@@ -17,7 +17,7 @@
     "grepInvert": null,
     "maxFailures": 0,
     "metadata": {
-      "actualWorkers": 1
+      "actualWorkers": 2
     },
     "preserveOutput": "always",
     "projects": [
@@ -26,7 +26,7 @@
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
-          "actualWorkers": 1
+          "actualWorkers": 2
         },
         "id": "",
         "name": "",
@@ -46,7 +46,7 @@
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
-          "actualWorkers": 1
+          "actualWorkers": 2
         },
         "name": "",
         "testDir": "/agent/repos/artex-ymh/packaging/upgrades/e2e",
@@ -55,7 +55,7 @@
         "testMatch": "**/*.@(spec|test).?(c|m)[jt]s?(x)",
         "timeout": 60000,
         "use": {
-          "baseURL": "http://127.0.0.1:8787",
+          "baseURL": "http://127.0.0.1:8790",
           "trace": "on-first-retry"
         },
         "dependencies": [],
@@ -103,7 +103,7 @@
           "column": 6,
           "specs": [
             {
-              "title": "login page renders",
+              "title": "login route and API health",
               "ok": true,
               "tags": [],
               "tests": [
@@ -118,12 +118,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 78,
+                      "duration": 208,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T11:46:02.185Z",
+                      "startTime": "2026-11-11T11:57:03.248Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -131,13 +131,13 @@
                   "status": "expected"
                 }
               ],
-              "id": "4219922fea2e2bd3c691-4840f7fbf312af44d953",
+              "id": "4219922fea2e2bd3c691-614a44a911603b5a5be6",
               "file": "smoke.spec.ts",
               "line": 5,
               "column": 3
             },
             {
-              "title": "setup route reachable when unconfigured",
+              "title": "unauthenticated tasks API rejected",
               "ok": true,
               "tags": [],
               "tests": [
@@ -152,12 +152,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 55,
+                      "duration": 26,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T11:46:02.758Z",
+                      "startTime": "2026-11-11T11:57:03.566Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -165,9 +165,128 @@
                   "status": "expected"
                 }
               ],
-              "id": "4219922fea2e2bd3c691-5f81b6b6488691091506",
+              "id": "4219922fea2e2bd3c691-53ab950a790de2b13ca1",
               "file": "smoke.spec.ts",
-              "line": 10,
+              "line": 13,
+              "column": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "workflows.spec.ts",
+      "file": "workflows.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "core workflows (real backend)",
+          "file": "workflows.spec.ts",
+          "line": 5,
+          "column": 6,
+          "specs": [
+            {
+              "title": "authorized API: login and list tasks",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 1,
+                      "status": "passed",
+                      "duration": 407,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-11T11:57:03.231Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "26aa48cee8983222f549-8e460492b236360424bc",
+              "file": "workflows.spec.ts",
+              "line": 18,
+              "column": 3
+            },
+            {
+              "title": "rejected API without token",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 1,
+                      "status": "passed",
+                      "duration": 8,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-11T11:57:03.727Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "26aa48cee8983222f549-cfd5478355b78ecec884",
+              "file": "workflows.spec.ts",
+              "line": 36,
+              "column": 3
+            },
+            {
+              "title": "health and setup UI",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 1,
+                      "status": "passed",
+                      "duration": 129,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-11T11:57:03.747Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "26aa48cee8983222f549-be5c5425d414c97b2604",
+              "file": "workflows.spec.ts",
+              "line": 41,
               "column": 3
             }
           ]
@@ -177,9 +296,9 @@
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-11-11T11:46:01.894Z",
-    "duration": 974.3770000000001,
-    "expected": 2,
+    "startTime": "2026-11-11T11:57:02.797Z",
+    "duration": 1136.9859999999999,
+    "expected": 5,
     "skipped": 0,
     "unexpected": 0,
     "flaky": 0
