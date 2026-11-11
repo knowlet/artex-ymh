@@ -46,6 +46,15 @@ def lock_for(data):
             "sha256": hashlib.sha256(data).hexdigest()}]}]}
 
 
+def broken_pipe_stream(name):
+    stream = mock.Mock(spec=io.TextIOBase)
+    # argparse probes output streams for terminal color support on Python 3.14.
+    stream.fileno.side_effect = io.UnsupportedOperation("fixture has no file descriptor")
+    stream.isatty.return_value = False
+    stream.write.side_effect = BrokenPipeError(f"fixture closed {name}")
+    return stream
+
+
 class InstallerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -229,8 +238,7 @@ class InstallerTests(unittest.TestCase):
         lock = Path(self.tmp.name) / "lock.json"
         bundle.write_bytes(data)
         lock.write_text(json.dumps(lock_for(data)))
-        output = mock.Mock()
-        output.write.side_effect = BrokenPipeError("fixture closed stdout")
+        output = broken_pipe_stream("stdout")
         errors = io.StringIO()
         with mock.patch.object(installer.sys, "stdout", output), mock.patch.object(installer.sys, "stderr", errors):
             code = installer.main(["--tool", "httpx", "--lock", str(lock), "--archive", str(bundle), "--data-dir", str(self.data_dir)])
@@ -246,9 +254,7 @@ class InstallerTests(unittest.TestCase):
         lock = Path(self.tmp.name) / "lock.json"
         bundle.write_bytes(data)
         lock.write_text(json.dumps(lock_for(data)))
-        output, errors = mock.Mock(), mock.Mock()
-        output.write.side_effect = BrokenPipeError("fixture closed stdout")
-        errors.write.side_effect = BrokenPipeError("fixture closed stderr")
+        output, errors = broken_pipe_stream("stdout"), broken_pipe_stream("stderr")
         with mock.patch.object(installer.sys, "stdout", output), mock.patch.object(installer.sys, "stderr", errors):
             code = installer.main(["--tool", "httpx", "--lock", str(lock), "--archive", str(bundle), "--data-dir", str(self.data_dir)])
         self.assertEqual(code, 3)

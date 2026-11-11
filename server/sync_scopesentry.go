@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/endpoint"
 	"github.com/Autumn-27/artex/mcphttp"
 )
 
@@ -26,6 +28,8 @@ const (
 	scopeSentryMCPName = "ScopeSentry"
 	syncMaxPerType     = 5000 // 单目标单类型的入库保护上限
 	syncDefaultPage    = 100
+	maxSyncBodyBytes   = 64 << 10
+	maxSyncTargets     = 100
 )
 
 // findMCPByName returns the MCP server row with the given name, or nil.
@@ -137,14 +141,39 @@ func (s *Server) syncSSDatasource(w http.ResponseWriter, r *http.Request) {
 		m = &db.MCPServer{Name: scopeSentryMCPName, Transport: "http", Env: json.RawMessage(`{"X-API-Key":""}`)}
 	}
 	if body.URL != "" {
-		m.URL = body.URL
+		prev := m.URL
+		next, err := resolveCredentialEndpoint(m.URL, body.URL, body.APIKey == "" && envHasValue(m.Env))
+		if err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		m.URL = next
+		if mcpEndpointChanged(prev, next) {
+			m.Insecure = false
+		}
 	}
 	if body.APIKey != "" {
-		env, _ := json.Marshal(map[string]string{"X-API-Key": body.APIKey})
-		m.Env = env
+		b, err := mcpEnvSetAPIKey(m.Env, body.APIKey)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		m.Env = b
 	}
 	// Enable only once it can actually be used.
 	m.Enabled = m.URL != "" && envHasValue(m.Env)
+
+	if err := prepareMCPSave(pg, m); err != nil {
+		switch {
+		case errors.Is(err, endpoint.ErrCredentialDestination):
+			writeErr(w, 400, err.Error())
+		case mcpNotFoundMessage(err):
+			writeErr(w, 404, err.Error())
+		default:
+			writeErr(w, 500, err.Error())
+		}
+		return
+	}
 
 	id, err := pg.SaveMCP(m)
 	if err != nil {
@@ -255,6 +284,52 @@ type ssSyncReq struct {
 	PageSize      int      `json:"page_size"`
 }
 
+// validate bounds work before any MCP request or asset/company mutation. The
+// public API has exactly three asset types; repeated selections do not create
+// additional fetch loops.
+func (req *ssSyncReq) validate() error {
+	if req.Dimension != "project" && req.Dimension != "task" {
+		return fmt.Errorf("dimension 必须是 project 或 task")
+	}
+	if len(req.Targets) == 0 || len(req.Targets) > maxSyncTargets {
+		return fmt.Errorf("targets 必须包含 1 至 %d 个目标", maxSyncTargets)
+	}
+	seen := make(map[string]bool, len(req.Targets))
+	targets := make([]string, 0, len(req.Targets))
+	for _, target := range req.Targets {
+		target = strings.TrimSpace(target)
+		if target == "" || len(target) > 512 {
+			return fmt.Errorf("目标名称不能为空且最多 512 字节")
+		}
+		if !seen[target] {
+			seen[target] = true
+			targets = append(targets, target)
+		}
+	}
+	req.Targets = targets
+	if len(req.AssetTypes) == 0 {
+		req.AssetTypes = []string{"subdomain", "service", "app"}
+	}
+	if len(req.AssetTypes) > 3 {
+		return fmt.Errorf("asset_types 最多包含 3 个类型")
+	}
+	seen = make(map[string]bool, 3)
+	types := make([]string, 0, 3)
+	for _, typ := range req.AssetTypes {
+		switch typ {
+		case "subdomain", "service", "app":
+		default:
+			return fmt.Errorf("未知资产类型: %s", typ)
+		}
+		if !seen[typ] {
+			seen[typ] = true
+			types = append(types, typ)
+		}
+	}
+	req.AssetTypes = types
+	return nil
+}
+
 func (s *Server) syncSSRun(w http.ResponseWriter, r *http.Request) {
 	if s.pg(w) == nil {
 		return
@@ -266,20 +341,12 @@ func (s *Server) syncSSRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req ssSyncReq
-	if err := decode(r, &req); err != nil {
-		writeErr(w, 400, "invalid JSON: "+err.Error())
+	if !decodeBoundedJSON(w, r, &req, maxSyncBodyBytes) {
 		return
 	}
-	if req.Dimension != "project" && req.Dimension != "task" {
-		writeErr(w, 400, "dimension 必须是 project 或 task")
+	if err := req.validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
-	}
-	if len(req.Targets) == 0 {
-		writeErr(w, 400, "targets 不能为空")
-		return
-	}
-	if len(req.AssetTypes) == 0 {
-		req.AssetTypes = []string{"subdomain", "service", "app"}
 	}
 	pageSize := req.PageSize
 	if pageSize <= 0 || pageSize > 500 {

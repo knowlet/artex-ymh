@@ -93,14 +93,18 @@ func TestLegacySSEClientDiscoverAndCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	tools, err := c.Tools(ctx)
+	// Constructor cancellation must not terminate the established stream.
+	cancel()
+	callCtx, callCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer callCancel()
+	tools, err := c.Tools(callCtx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(tools) != 1 || !strings.Contains(tools[0].Name(), "echo") {
 		t.Fatalf("unexpected tools: %#v", tools)
 	}
-	got, err := c.Call(ctx, "echo", map[string]any{"value": "x"})
+	got, err := c.Call(callCtx, "echo", map[string]any{"value": "x"})
 	if err != nil || got != "ok" {
 		t.Fatalf("Call() = %q, %v", got, err)
 	}

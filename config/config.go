@@ -236,16 +236,31 @@ func TaskProxyPortRange() string {
 	return "21100-21199"
 }
 
-// String is a redacted view of the resolved DSN (password masked) for logging.
+// Redact never returns an unparsed DSN. libpq keyword values may be quoted,
+// escaped or malformed, and URL query options can also carry passwords.
 func Redact(dsn string) string {
 	u, err := url.Parse(dsn)
-	if err != nil {
-		return dsn
+	if err != nil || u == nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Opaque != "" {
+		return "[redacted PostgreSQL DSN]"
+	}
+	// An unescaped /, ? or # in a password can make parsing succeed while
+	// treating credentials as a host/port or path. A raw @ outside userinfo
+	// makes that interpretation ambiguous, so do not preserve its identity.
+	if (u.User == nil && strings.Contains(dsn, "@")) ||
+		strings.Contains(u.EscapedPath(), "@") ||
+		strings.Contains(u.RawQuery, "@") ||
+		strings.Contains(u.EscapedFragment(), "@") {
+		return "[redacted PostgreSQL DSN]"
 	}
 	if u.User != nil {
 		if _, hasPw := u.User.Password(); hasPw {
 			u.User = url.UserPassword(u.User.Username(), "****")
 		}
 	}
-	return fmt.Sprintf("%s", u.String())
+	if u.RawQuery != "" {
+		u.RawQuery = "redacted"
+	}
+	u.Fragment = ""
+	u.RawFragment = ""
+	return u.String()
 }

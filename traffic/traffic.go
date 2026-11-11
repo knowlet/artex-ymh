@@ -354,15 +354,12 @@ func (a *proxyAuth) check(_ http.ResponseWriter, req *http.Request) (bool, error
 	return true, nil
 }
 
-// sslInsecure reports whether the MITM accepts any target certificate. Default
-// true — historical behavior, and pentest targets routinely have broken or
-// self-signed TLS. Set env ARTEX_PROXY_SSL_INSECURE=0/false to verify target
-// certificates instead: safer against target-side MitM, but expect many
-// targets to fail interception and fall back to transparent passthrough
-// (unrecorded). Leave it on unless the engagement forbids it.
+// sslInsecure reports an explicit opt-in to accepting unverified target
+// certificates. Self-signed test targets remain supported with true/1; unset,
+// false/0 and malformed values keep upstream certificate verification enabled.
 func sslInsecure() bool {
 	v := strings.TrimSpace(os.Getenv("ARTEX_PROXY_SSL_INSECURE"))
-	return !(v == "0" || strings.EqualFold(v, "false"))
+	return v == "1" || strings.EqualFold(v, "true")
 }
 
 const (
@@ -1546,9 +1543,38 @@ func (t *Traffic) hostTrees(where string, args ...any) ([]string, error) {
 		if err := rows.Scan(&h); err != nil {
 			return nil, err
 		}
-		dirs = append(dirs, filepath.Join(t.dir, sanitize(h)))
+		if path, ok := t.legacyHostPath(h); ok {
+			dirs = append(dirs, path)
+		}
 	}
 	return dirs, rows.Err()
+}
+
+// legacyHostPath only names disposable, direct children of the traffic store.
+// Host strings still belong in SQLite even when their sanitized names alias
+// store internals: deleting those rows must never move the index, CA, auth file,
+// blob store, or the store itself. This matches allHostTrees' reserved namespace.
+func (t *Traffic) legacyHostPath(host string) (string, bool) {
+	path := filepath.Join(t.dir, sanitize(host))
+	return path, t.isLegacyHostPath(path)
+}
+
+func (t *Traffic) isLegacyHostPath(path string) bool {
+	name, ok := directChildName(t.dir, path)
+	return ok && !strings.HasPrefix(name, "_")
+}
+
+func directChildName(root, candidate string) (string, bool) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", false
+	}
+	candidateAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(rootAbs, candidateAbs)
+	return rel, err == nil && rel != "." && filepath.IsLocal(rel) && filepath.Base(rel) == rel
 }
 
 type stagedTrafficPath struct {
@@ -1585,6 +1611,12 @@ func (t *Traffic) stageTreesForArchive(dirs, hosts []string, archiveID, taskID i
 	seen := make(map[string]struct{}, len(dirs))
 	planned := make([]stagedTrafficPath, 0, len(dirs))
 	for _, source := range dirs {
+		// Enforce the boundary here as well as at host-to-path conversion so
+		// every deletion caller, including archive compaction, is protected.
+		if !t.isLegacyHostPath(source) {
+			continue
+		}
+		source = filepath.Clean(source)
 		if _, dup := seen[source]; dup {
 			continue
 		}
@@ -1608,6 +1640,9 @@ func (t *Traffic) stageTreesForArchive(dirs, hosts []string, archiveID, taskID i
 	parent := filepath.Join(t.dir, "_delete_staging")
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return "", nil, fmt.Errorf("创建流量暂存目录: %w", err)
+	}
+	if info, err := os.Lstat(parent); err != nil || !info.IsDir() {
+		return "", nil, fmt.Errorf("流量暂存路径必须是目录而非链接: %s", parent)
 	}
 	if stageDir, err = os.MkdirTemp(parent, "hosts-"); err != nil {
 		return "", nil, fmt.Errorf("创建流量暂存目录: %w", err)
@@ -1779,7 +1814,9 @@ func (t *Traffic) stageDeleteHostsExact(hosts []string, archiveID, taskID int64)
 	// own an orphaned directory that this deletion should take with it.
 	legacy := make([]string, 0, len(unique))
 	for _, h := range unique {
-		legacy = append(legacy, filepath.Join(t.dir, sanitize(h)))
+		if path, ok := t.legacyHostPath(h); ok {
+			legacy = append(legacy, path)
+		}
 	}
 
 	tx, err := t.db.Begin()
@@ -1847,7 +1884,8 @@ func (t *Traffic) RecoverHostDeleteStages(archiveCommitted func(int64, int64) (b
 		}
 		moves := make([]stagedTrafficPath, 0, len(journal.Moves))
 		for _, move := range journal.Moves {
-			if !pathWithin(t.dir, move.Source) || !pathWithin(stageDir, move.Staged) {
+			stagedName, stagedChild := directChildName(stageDir, move.Staged)
+			if !t.isLegacyHostPath(move.Source) || !stagedChild || stagedName == hostDeleteStageJournalName {
 				errs = append(errs, fmt.Errorf("流量暂存日志包含越界路径: %s", stageDir))
 				moves = nil
 				break

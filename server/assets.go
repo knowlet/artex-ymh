@@ -16,7 +16,11 @@ import (
 // historical ["example.com","203.0.113.10"] contract.
 type companyScopeInputs []db.ScopeInput
 
-const maxCompanyMutationBodyBytes = 2 << 20
+const (
+	maxCompanyMutationBodyBytes = 2 << 20
+	maxAssetInsertBodyBytes     = 2 << 20
+	maxAssetInsertBatch         = 1000
+)
 
 func decodeCompanyMutationRequest(w http.ResponseWriter, r *http.Request, value any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxCompanyMutationBodyBytes)
@@ -488,8 +492,11 @@ func (s *Server) insertAssets(w http.ResponseWriter, r *http.Request) {
 			Params []map[string]any `json:"params"`
 		} `json:"assets"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, 400, "invalid JSON: "+err.Error())
+	if !decodeBoundedJSON(w, r, &req, maxAssetInsertBodyBytes) {
+		return
+	}
+	if len(req.Assets) > maxAssetInsertBatch {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("单次最多登记 %d 条资产", maxAssetInsertBatch))
 		return
 	}
 
