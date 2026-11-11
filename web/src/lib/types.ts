@@ -1290,8 +1290,7 @@ export interface InterceptPending {
   task_id?: string;
   agent_name: string;
   tool_name: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  tool_input: Record<string, any>;
+  tool_input: Record<string, unknown>;
   status: "pending" | "allowed" | "denied" | "timeout";
   reason: string; // 规则 message 或模型判定理由(模型判定带 [模型] 前缀)
   decided_at?: string;
