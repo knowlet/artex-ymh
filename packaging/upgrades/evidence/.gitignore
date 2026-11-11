@@ -8,3 +8,6 @@
 !govulncheck-verbose-*.txt
 !npm-audit-*.json
 !npm-audit-summary-*.json
+!pg-major-migration-evidence.json
+!security-advisory-resolution.json
+!playwright-full.log

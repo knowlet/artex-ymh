@@ -1,63 +1,28 @@
 {
   "branch": "cursor/comprehensive-upgrades-a947",
-  "toolchain": {
-    "go": "1.27.4",
-    "postgres_integration": "17.11-alpine (disposable)",
-    "node_web": "lockfile post npm ci",
-    "docker_image": "artex-ymh:upgrade-verify (Dockerfile.source)"
+  "pg_major_migration": {
+    "script": "scripts/rehearse_pg16_to_pg17_major.sh",
+    "evidence": "pg-major-migration-evidence.json",
+    "pre": "PG16 + main baseline binary (go1.26.3)",
+    "cutover": "pg_dump Fc (PG16 client) → pg_restore on PG17",
+    "post_verify": "upgrade binary go1.27.4 preserves companies/tasks/auth",
+    "rollback": "same pre-cutover dump → fresh PG16 + baseline binary",
+    "pg17_dump_to_pg16": "unsupported (documented error in evidence)"
   },
   "go_test_pg17": {
-    "command": "GOTOOLCHAIN=go1.27.4 go test -json -count=1 -p=1 -timeout=20m ./...",
-    "dsn": "postgres://artex_test:***@127.0.0.1:5433/artex_upgrade",
     "pass": 2098,
     "fail": 0,
     "skip": 6,
-    "artifact": "go-test-pg17-summary.txt",
-    "skipped": [
-      "enrich <package>",
-      "server TestLiveContextReview",
-      "session TestGenerateShellPHP",
-      "session TestGenerateShellPHPObfuscated",
-      "session/ldpreloadgen <package>",
-      "tunnel TestPerturbRealPayloads"
-    ]
-  },
-  "go_race_pg17": {
-    "artifact": "go-race-pg17.txt",
-    "result": "pass (security subset + ./traffic)"
-  },
-  "db_lifecycle_pg17": {
-    "script": "scripts/rehearse_upgrade_lifecycle.sh",
-    "steps": ["bootstrap", "auth seed", "pg_dump Fc", "legacy column strip", "migration", "pg_restore to artex_restore"],
-    "artifact": "lifecycle-run.log"
-  },
-  "docker": {
-    "build_log": "docker-build-Dockerfile.source.log",
-    "build_result": "success (tag artex-ymh:upgrade-verify)",
-    "run_health": "docker-run-health.json (ARTEX_GATE=off, PG via host.docker.internal:5433)",
-    "note": "Bridge DNS to artex-pg17 timed out under VM firewall; host-gateway publish path used instead"
-  },
-  "frontend": {
-    "tsc": "pass",
-    "build_static": "pass",
-    "npm_majors": "@hookform/resolvers@7 @tanstack/react-table@9",
-    "biome": "biome check src fails on repo config in this VM; lint not weakened"
+    "artifact": "go-test-pg17-summary.txt"
   },
   "browser_e2e": {
-    "engine": "playwright 1.65 chromium",
-    "backend": "real artex-smoke + PG17 artex_e2e",
-    "tests_passed": 5,
+    "tests_passed": 9,
+    "includes": "rendered task create, upload control, settings update UI, auth denial",
     "artifact": "playwright-full.log",
-    "scope": "auth init/login, tasks 401/200, login UI, no LLM"
+    "llm": "none"
   },
   "security": {
-    "govulncheck_reachable": 0,
-    "govulncheck_unreachable_modules": ["GO-2026-6888 brotli v1.2.1→1.2.7", "GO-2026-5932 x/crypto openpgp unmaintained"],
-    "npm": "see npm-audit-*.json (moderate=4 low=2 high=0 critical=0)"
-  },
-  "limitations": [
-    "PR15 jwt historical exposure not addressed",
-    "Docker bridge inter-container PG blocked in VM; validated via published port + host-gateway",
-    "Biome check src configuration error in agent VM (pre-existing gate policy unchanged)"
-  ]
+    "artifact": "security-advisory-resolution.json",
+    "govulncheck_reachable": 0
+  }
 }

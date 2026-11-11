@@ -2,58 +2,50 @@
 
 ## Scope
 
-Runtime dependency bumps (Go modules, npm lockfile, Docker Node/Playwright pins). **No** PostgreSQL major migration, **no** schema.sql semantic changes, **no** production deploy.
+Runtime dependency bumps (Go 1.27.4, PostgreSQL **17**, npm, Docker pins). Schema source remains `db/schema.sql` (idempotent). **Not** a production deploy.
 
-## Order of operations
+## PostgreSQL major (16 → 17) — supported path
 
-1. **Backup** — `pg_dump -Fc` of operator DB; copy `data/` (config, keys, archives) to dated snapshot. Required before any prod attempt; disposable rehearsals use throwaway DBs only.
-2. **Stop writers** — `systemctl stop artex` or `docker compose stop artex`; confirm no active tasks (`/api/tasks` idle).
-3. **Replace artifact** — new binary or image from this branch tag; config.json unchanged unless release notes say otherwise.
-4. **Start** — `schema.sql` re-`Exec` on boot (idempotent DDL); `llmRecordsMigrate` and inline migrations run once per missing column.
-5. **Verify** — login, gate path, one task list fetch, `SELECT max(updated_at) FROM tasks`; compare app version string.
+**Rehearsed** (`scripts/rehearse_pg16_to_pg17_major.sh` → `packaging/upgrades/evidence/pg-major-migration-evidence.json`):
 
-## Schema / data compatibility
+1. Run **pre-cutover** binary built from **`main`** (Go 1.26.3) against **PostgreSQL 16**.
+2. Seed auth, `companies`, `tasks`, and `data/` marker files.
+3. **`pg_dump -Fc` using the PG16 client** (matches source server major).
+4. Restore into a **fresh PostgreSQL 17** database with **`pg_restore` (PG17 client)** — supported logical upgrade. **`pg_upgrade` not used** in this rehearsal.
+5. Run **upgrade-branch** binary on PG17; verify login, row counts, task name.
+6. **Rollback:** restore the **same PRE-cutover PG16 dump** into a **fresh PG16** database; run **baseline `main` binary**; verify rows + auth.
 
-- Single source: `db/schema.sql` (idempotent). Existing installs upgrade **in place** on first startup after binary swap.
-- **Rehearsed path**: `db/llm_records_migrate_test.go` — strips `raw_*` columns, applies `llmRecordsMigrate`, asserts idempotency (transaction rolled back; real PG).
-- **Fresh install**: empty DB → full `schema.sql` via `db.Open` (covered by PG security regressions when `ARTEX_PG_DSN` set).
+**Not supported / not claimed:**
 
-## Version ladder
+- Importing a **PostgreSQL 17** dump into **16** (rehearsal observed `pg_restore: unsupported version (1.16) in file header` when attempting PG17 dump → PG16).
 
-| Step | From | To | Reversible |
-| --- | --- | --- | --- |
-| App binary + embed UI | prior release | this commit | Yes — redeploy prior binary |
-| Go/stdlib deps | go.mod prior | go.mod this branch | Yes — rebuild old tag |
-| npm bundle | prior lock | new lock | Yes — rebuild old tag |
-| Docker runtime Node | 20/22.14 | 22.23.4 tarball | Yes — rebuild old Dockerfile tag |
-| Playwright in image | 1.63 | 1.65 | Yes — rebuild; browser cache mismatch may need `playwright install` once |
-| PostgreSQL server | 16.x | 17.x | **Restore-only** — `pg_dump -Fc` before cutover; major downgrade unsupported |
-| Go toolchain | 1.26.x | 1.27.4 | Rebuild prior tag binary; no automatic down-compile |
+**Cutover / rollback boundaries:**
 
-**Irreversible upgrades (not in this PR)**: PostgreSQL 16→17 dump/restore; Node 22→24 default; Go 1.26→1.27 toolchain default in CI.
+- Rollback DB state = **instant of PRE-cutover backup** only.
+- **Post-cutover writes** on PG17 (and filesystem deltas after backup, e.g. `post-cutover-write` in `data/`) are **lost** on DB rollback unless separately reconciled.
+- After major cutover, **downgrade without a PG16-era backup is restore-only impossible** for DB contents.
 
-## Downtime
+## Go toolchain (1.26 → 1.27.4)
 
-- Single-instance: brief stop/start (seconds–minutes) while binary swaps; schema migrations are online DDL where supported.
-- No long-running data backfill in this change set.
+- **Not intrinsically data-irreversible**: redeploy a binary built from the prior tag/`main` with Go 1.26.x.
+- Distinct from **PostgreSQL major** rollback, which requires a **matching-era logical backup**.
 
-## Abort criteria
+## App schema migrations (same major)
 
-- Startup fails on `db.Open` / migration error in logs.
-- `go test` / security-regressions equivalent fails on disposable PG.
-- Frontend static build or `tsc` fails.
+- `schema.sql` on startup; `llmRecordsMigrate` for legacy columns (`db/llm_records_migrate_test.go`).
+- Rehearsed on PG17 in addition to full PG major script above.
 
-## Rollback procedure
+## Operator checklist
 
-1. Stop service.
-2. Restore **previous** container image or `artex` binary from last known-good SHA (release artifact or local build).
-3. Restore DB only if a failed migration partially applied (rare — most DDL is `IF NOT EXISTS`). If needed: `pg_restore` from pre-upgrade dump.
-4. Start previous version; confirm gate + auth.
+1. Stop writers; `pg_dump -Fc` on **PG16** with **PG16 client**.
+2. Restore to PG17 test instance; smoke upgrade binary.
+3. Cutover production; **keep PG16 dump** until PG17 stable.
+4. Rollback: stop app → restore **PG16 dump** to PG16 → deploy **prior** binary tag.
 
-## Evidence (this branch)
+## Evidence
 
-Produced under `packaging/upgrades/evidence/` by `scripts/verify_upgrade_gates.sh` with disposable `ARTEX_PG_DSN`. CI on the draft PR is authoritative for merge readiness; local logs are rehearsal only.
+- `packaging/upgrades/evidence/pg-major-migration-evidence.json`
+- `packaging/upgrades/evidence/TEST-SUMMARY-2026-11-11.json`
+- CI on draft PR #18 at merge head.
 
-## PR15 / PR17
-
-Read-only comparison: no manifest conflicts. Merge order recommendation: land this upgrade first or rebase security PRs onto it; **do not** cherry-pick advisory/jwt work from PR15 into this branch.
+PR15/PR17: not merged here; jwt historical exposure **out of scope**.

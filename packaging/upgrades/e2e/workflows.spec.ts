@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const E2E_PASSWORD = process.env.ARTEX_E2E_PASSWORD ?? "upgrade-e2e-disposable";
+const E2E_PASSWORD = process.env.ARTEX_E2E_PASSWORD ?? "ui-e2e-disposable";
 
 test.describe("core workflows (real backend)", () => {
   test.beforeEach(async ({ request }) => {

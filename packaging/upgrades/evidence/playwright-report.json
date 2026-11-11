@@ -17,7 +17,7 @@
     "grepInvert": null,
     "maxFailures": 0,
     "metadata": {
-      "actualWorkers": 2
+      "actualWorkers": 1
     },
     "preserveOutput": "always",
     "projects": [
@@ -26,7 +26,7 @@
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
-          "actualWorkers": 2
+          "actualWorkers": 1
         },
         "id": "",
         "name": "",
@@ -46,7 +46,7 @@
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
-          "actualWorkers": 2
+          "actualWorkers": 1
         },
         "name": "",
         "testDir": "/agent/repos/artex-ymh/packaging/upgrades/e2e",
@@ -85,7 +85,7 @@
     "updateSnapshots": "default",
     "updateSourceMethod": "patch",
     "version": "1.65.0",
-    "workers": 2,
+    "workers": 1,
     "webServer": null
   },
   "suites": [
@@ -118,12 +118,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 208,
+                      "duration": 230,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T11:57:03.248Z",
+                      "startTime": "2026-11-11T12:25:42.508Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -152,12 +152,12 @@
                       "workerIndex": 0,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 26,
+                      "duration": 14,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T11:57:03.566Z",
+                      "startTime": "2026-11-11T12:25:42.834Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -168,6 +168,159 @@
               "id": "4219922fea2e2bd3c691-53ab950a790de2b13ca1",
               "file": "smoke.spec.ts",
               "line": 13,
+              "column": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "ui-workflows.spec.ts",
+      "file": "ui-workflows.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "rendered UI workflows (real backend)",
+          "file": "ui-workflows.spec.ts",
+          "line": 20,
+          "column": 6,
+          "specs": [
+            {
+              "title": "login page rejects anonymous tasks; authorized list loads",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 536,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-11T12:25:42.864Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "6b52986496c08f8250f8-9dec422245294e32a4e9",
+              "file": "ui-workflows.spec.ts",
+              "line": 21,
+              "column": 3
+            },
+            {
+              "title": "create task via rendered sheet (CRUD create + list read)",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1077,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-11T12:25:43.412Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "6b52986496c08f8250f8-c3e2337e952f660731cf",
+              "file": "ui-workflows.spec.ts",
+              "line": 35,
+              "column": 3
+            },
+            {
+              "title": "staging chat upload via UI control",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 521,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-11T12:25:44.504Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "6b52986496c08f8250f8-cc1fd3d4c46f035cf0b8",
+              "file": "ui-workflows.spec.ts",
+              "line": 48,
+              "column": 3
+            },
+            {
+              "title": "settings update card renders for authorized user",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 379,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-11T12:25:45.041Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "6b52986496c08f8250f8-f6bf70e5a4c517dce675",
+              "file": "ui-workflows.spec.ts",
+              "line": 59,
               "column": 3
             }
           ]
@@ -200,15 +353,15 @@
                   "projectName": "",
                   "results": [
                     {
-                      "workerIndex": 1,
-                      "parallelIndex": 1,
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 407,
+                      "duration": 321,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T11:57:03.231Z",
+                      "startTime": "2026-11-11T12:25:45.439Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -234,15 +387,15 @@
                   "projectName": "",
                   "results": [
                     {
-                      "workerIndex": 1,
-                      "parallelIndex": 1,
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 8,
+                      "duration": 6,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T11:57:03.727Z",
+                      "startTime": "2026-11-11T12:25:45.773Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -268,15 +421,15 @@
                   "projectName": "",
                   "results": [
                     {
-                      "workerIndex": 1,
-                      "parallelIndex": 1,
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 129,
+                      "duration": 152,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-11-11T11:57:03.747Z",
+                      "startTime": "2026-11-11T12:25:45.789Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -296,9 +449,9 @@
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-11-11T11:57:02.797Z",
-    "duration": 1136.9859999999999,
-    "expected": 5,
+    "startTime": "2026-11-11T12:25:42.027Z",
+    "duration": 3970.5250000000005,
+    "expected": 9,
     "skipped": 0,
     "unexpected": 0,
     "flaky": 0

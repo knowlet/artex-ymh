@@ -24,6 +24,13 @@ scripts/verify_upgrade_gates.sh
 scripts/run_security_audits.sh
 ```
 
+PostgreSQL major rehearsal (PG16 dump → PG17 → rollback on PG16):
+
+```bash
+# Requires docker containers artex-pg16 and artex-pg17; builds baseline from main worktree.
+scripts/rehearse_pg16_to_pg17_major.sh
+```
+
 Browser smoke (real Playwright, isolated from PR15 advisory suite):
 
 ```bash
