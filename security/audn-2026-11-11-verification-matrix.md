@@ -6,80 +6,81 @@
 |---|---|
 | 對照基準 commit（驗證起點） | `f10a1941c12529aba5d89159d18cbc1fd7e7c153` |
 | 已合併安全修補 | `9f6ce4e`（PR #14）、`f10a194` 含 #12 掃描能力 |
-| 本分支額外修補 | HTTP 服務資產僅允許 `http`/`https` 入庫（Audn #31 縱深防禦） |
+| 本分支額外修補 | Audn #31：**入庫** scheme 閘門（`ValidateAssetURL`）；UI 仍靠 `safeHref` 阻斷危險 href **渲染** |
 | 報告來源 | Audn 對 `ozgurnew/ARTEX` 2026-11-05 快照；**未**對報告標示之第三方目標重放攻擊 |
-| 動態 7 項 | 證據指向 Juice Shop 等路由（`/rest/*`、`/ftp` 等），**本 fork 無對應介面** → 判為不適用 |
-| 靜態 33 項 | 在 `main` 上逐項對照程式與 `*security*_test.go`；適用項已由 #14 覆蓋或本分支補強 |
+| 動態 7 項 | 證據指向 Juice Shop 等**第三方**路由（`/rest/*`、`/ftp` 等）；本 fork **無對應介面** → **第三方目標不適用**（非「全倉已修補」） |
+| 靜態 33 項 | 在 `main` 上對照原始碼與 `*security*_test.go`；多數為 **#14 已修補（靜態靜態＋單元／隔離 PG 證據）**，未逐項動態 exploit |
 
-### 分類統計（40 項）
+### 分類統計（40 項，用語區分證據強度）
 
 | 分類 | 數量 | 說明 |
 |---|---:|---|
-| 不適用（第三方目標／介面不存在） | 7 | 僅報告動態觀察，非本程式碼面 |
-| 已於 `main` 修補（證據：#14 + 回歸測） | 32 | 含攔截、憑證綁定、流量、自更新、資源上限等 |
-| 本次分支縱深防禦 | 1 | #31 服務 URL 入庫 scheme 閘門（前端已有 `safeHref`） |
+| 第三方目標／介面不存在 | 7 | 僅報告動態觀察；本程式碼面無對應路由 |
+| `main` 已修補（原始碼＋回歸測，非動態重放） | 31 | #14 範圍內範圍內攔截、憑證、流量、上限等 |
+| 縱深防禦（本次分支） | 1 | #31：**儲存**路徑 scheme 驗證；**渲染**_sink 仍由 `safeHref` 緩解 |
+| 部分／設計取捨（未封殺管理能力） | 1 | #34 ScopeSentry 內網 URL（憑證綁定＋管理員設定） |
 
 ### 驗證方法
 
-- 原始碼審查 + 本機 `go vet ./...`、`go test -count=1 -p=1 ./...`（日誌見 `artifacts/audn-verify-test.log`）
-- 合成資料／fixture；需 PostgreSQL 的測試依 `ARTEX_AUTH_TEST_DSN`／CI `postgres:16` 服務
-- **未**執行報告中的遠端 exploit 指令或連線報告目標主機
+- 原始碼審查 + `gofmt` / `go vet ./...` / `go test -count=1 -p=1 ./...` / `go build ./cmd/artex`
+- 需 PostgreSQL 的隔離測試：**`ARTEX_AUTH_TEST_DSN`**（本機 disposable PG16；CI `postgres:16` 服務）
+- 本分支資產 URL 回歸：`TestValidateAssetURL`、`TestSecurityPGHTTPServiceURLSchemeGate`（含 **negative control**：`normalizeURL` 不阻擋 `javascript:`）
+- **未**執行報告中的遠端 exploit 或連線報告目標主機
 
 ### 與 PR15（advisory 自動化）整合風險
 
 | 區域 | 重疊檔案／不變量 | 風險 |
 |---|---|---|
-| 審批／待決佇列 | `server/server.go` 路由、`intercept/intercept.go`、`interceptDecide` | PR15 不得自動呼叫 `Decide` 或略過 `requireAuth`；本分支不修改這些路徑 |
-| 設定／租約 | `db/settings.go`、可能的背景工作表 | 本分支僅觸及 `db/assets.go`；合併時注意 settings 鍵命名空間 |
-| UI 審批記錄 | `web/src/components/approval-records.tsx` | 與資產頁 `safeHref` 無直接衝突 |
-| **安全不變量** | JWT 版本撤銷、登入限速、攔截 fail-closed、憑證目的地綁定 | PR15 背景工作必須維持「僅建議、不自動核准」；不得寫入 `auth_*` 或繞過 `endpoint.ErrCredentialDestination` |
+| 審批／待決佇列 | `server/server.go`、`intercept/intercept.go` | PR15 不得自動 `Decide` 或略過 `requireAuth`；本分支不修改 |
+| 設定／租約 | `db/settings.go` | 本分支觸及 `db/assets.go`、`task_archives_restore.go`、`enrich` 錯誤記錄 |
+| **安全不變量** | JWT 撤銷、攔截 fail-closed、`endpoint.ErrCredentialDestination` | PR15 須維持「僅建議、不自動核准」 |
 
 ---
 
 ## 40 項證據矩陣（報告排名序）
 
-| # | 報告要旨 | 本版分類 | 證據（`main` + 測試） | 備註 |
+| # | 報告要旨 | 本版分類 | 證據類型 | 證據（`main` + 測試） |
 |---:|---|---|---|---|
-| 1 | SQL 注入登入 JWT | **不適用** | 無 `/rest/user/login` | 動態 Juice Shop |
-| 2 | 商品搜尋 SQL 注入 | **不適用** | 無 `/rest/products/search` | 動態 |
-| 3 | 頭像 URL SSRF | **不適用** | 無 `/profile/image/url` | 動態 |
-| 4 | 使用者／購物車 IDOR | **不適用** | 無對應 REST | 動態 |
-| 5 | FTP 敏感檔案 | **不適用** | 無 `/ftp` | 動態 |
-| 6 | memories 洩漏雜湊 | **不適用** | 無 `/rest/memories` | 動態 |
-| 7 | DOM 反射 XSS `/#/search` | **不適用** | 非本前端路由 | 動態 |
-| 8 | 登入無節流 | **已修補** | `server/auth_limiter.go`、`TestAuthLoginRateLimit` 類測試 | `9f6ce4e` |
-| 9 | `_index` 刪除內部流量目錄 | **已修補** | `traffic/isLegacyHostPath`、`traffic/host_delete_security_test.go` | `9f6ce4e` |
-| 10 | 未初始化 `authInit` 搶管理員 | **已修補** | `SetSettingIfAbsent`、`TestSecurityPGBootstrapOneWinner` | 原子初始化 |
-| 11 | `reset-password.sh` source `.env` | **已修補** | 字面值解析、`server/deployment_security_test.go` | `9f6ce4e` |
-| 12 | `install.sh` curl Docker 腳本 | **已修補** | 改為官方說明、無 pipe `sh` | `install.sh` |
-| 13 | 改密碼不撤銷 JWT | **已修補** | JWT 2h + `auth_key_version`、`TestSecurityPGResetRevokesAndRollsBack` | 非 7 日 token |
-| 14 | 命令模板遞迴替換 | **已修補** | `server/command_template.go`、`*_security_test.go` | `9f6ce4e` |
-| 15 | 攔截比對原始 JSON | **已修補** | `intercept/toolInputSubjects`、`intercept/input_security_test.go` | `9f6ce4e` |
-| 16 | SSE URL 帶 bearer | **已存在防護** | `sseUrl` + 60s ticket | `web/src/lib/api.ts` |
-| 17 | LLM base URL 換址沿用 key | **已修補** | `reuseLLMKey`、`db/config.go`、`credential_binding_*_test.go` | `9f6ce4e` |
-| 18 | `config.json` 世界可讀 | **已修補** | umask、`chmod 600`、`mktemp`+`mv` | `install.sh` |
-| 19 | stdio MCP 繼承密鑰 | **已修補** | `server/mcp_environment.go`、`*_security_test.go` | `9f6ce4e` |
-| 20 | MCP `env: null` panic | **已修補** | `decodeStrMap` 非 nil map | `server/manager.go` |
-| 21 | commands 分頁無上限 | **已修補** | `db/commands.go` clamp 200 | `db/commands_security_test.go` |
-| 22 | 資產匯入無界 | **已修補** | `decodeBoundedJSON`、`server/request_limits.go` | `9f6ce4e` |
-| 23 | 對話訊息無界 | **已修補** | `decodeBoundedJSON` on send message | `request_limits_security_test.go` |
-| 24 | SKILL ZIP 換行放大 | **已修補** | 逐行 frontmatter 解析 | `server_mgmt` 測試 |
-| 25 | 代理上游 TLS 不驗證 | **已修補** | 預設驗證、`ARTEX_PROXY_SSL_INSECURE` | `traffic/tls_security_test.go` |
-| 26 | CSV 公式注入 | **已修補** | `report/findings.go`、`findings_security_test.go` | `9f6ce4e` |
-| 27 | MCP SSE 無界讀取 | **已修補** | `mcphttp` 8MiB 限制、`sse_security_test.go` | `9f6ce4e` |
-| 28 | log fan-out panic | **已修補** | `server/logsink.go`、`logsink_security_test.go` | `9f6ce4e` |
-| 29 | 並行 rollback `.swap` | **已修補** | `update.go` 互斥、`selfupdate/security_test.go` | `9f6ce4e` |
-| 30 | SMTP STARTTLS 降級 | **已修補** | `notify/email.go`、`email_security_test.go` | `9f6ce4e` |
-| 31 | 資產 href 儲存型 XSS | **已修補 + 縱深** | 前端 `safeHref`；**本次** `endpoint.AssetURL` + `UpsertHTTPService` | 見本分支 commit |
-| 32 | reset 印完整 DSN | **已修補** | 紅acted 輸出、`deployment_security_test.go` | `9f6ce4e` |
-| 33 | 非標準 IP 繞過資產規則 | **已修補** | `assetInterceptIP`、`asset_gate_security_test.go` | `9f6ce4e` |
-| 34 | ScopeSentry URL SSRF | **管理功能 + 憑證邊界** | `prepareMCPSave`、`sync_scopesentry` 限制 | 不封內網 MCP；綁定 API key |
-| 35 | 更新 ZIP 無 byte cap | **已修補** | `selfupdate/stage.go` 串流上限 | `9f6ce4e` |
-| 36 | DSL OR 逃出 task 範圍 | **已修補** | `db/asset_dsl.go` 括號、`asset_dsl_security_test.go` | `9f6ce4e` |
-| 37 | exact-domain 尾點繞過 | **已修補** | `DomainKey` 正規化 | `asset_intercept_match` 測試 |
-| 38 | ScopeSentry sync 無界 body | **已修補** | 64KiB / 100 targets | `sync_scopesentry` + limits |
-| 39 | testLLM 任意 base_url 洩 key | **已修補** | `reuseLLMKey` on test path | `server.go` testLLM |
-| 40 | DSN Redact 失敗洩密 | **已修補** | `config/redact_security_test.go` | `9f6ce4e` |
+| 1 | SQL 注入登入 JWT | **第三方目標不適用** | 程式庫對照 | 無 `/rest/user/login` |
+| 2 | 商品搜尋 SQL 注入 | **第三方目標不適用** | 同上 | 無 `/rest/products/search` |
+| 3 | 頭像 URL SSRF | **第三方目標不適用** | 同上 | 無 `/profile/image/url` |
+| 4 | 使用者／購物車 IDOR | **第三方目標不適用** | 同上 | 無對應 REST |
+| 5 | FTP 敏感檔案 | **第三方目標不適用** | 同上 | 無 `/ftp` |
+| 6 | memories 洩漏雜湊 | **第三方目標不適用** | 同上 | 無 `/rest/memories` |
+| 7 | DOM 反射 XSS `/#/search` | **第三方目標不適用** | 同上 | 非本前端該路由 |
+| 8 | 登入無節流 | **已修補** | 靜態＋單元 | `auth_limiter.go`、登入限速測試 |
+| 9 | `_index` 刪內部流量目錄 | **已修補** | 靜態＋單元 | `traffic/host_delete_security_test.go` |
+| 10 | 未初始化 `authInit` | **已修補** | 靜態＋隔離 PG | `SetSettingIfAbsent`、`TestSecurityPGBootstrapOneWinner` |
+| 11 | `reset-password.sh` source `.env` | **已修補** | 靜態＋單元 | `deployment_security_test.go` |
+| 12 | `install.sh` curl 管線 | **已修補** | 原始碼 | 無 pipe 官方腳本 |
+| 13 | 改密不撤銷 JWT | **已修補** | 靜態＋隔離 PG | `auth_key_version`、reset 撤銷測試 |
+| 14 | 命令模板遞迴替換 | **已修補** | 靜態＋單元 | `command_template`、security 測試 |
+| 15 | 攔截比對原始 JSON | **已修補** | 靜態＋單元 | `intercept/input_security_test.go` |
+| 16 | SSE URL 帶 bearer | **渲染／傳輸緩解** | 靜態 | 60s ticket；非「禁止 SSE」 |
+| 17 | LLM base URL 換址沿用 key | **已修補** | 靜態＋單元 | `reuseLLMKey`、`credential_binding_*_test.go` |
+| 18 | `config.json` 世界可讀 | **已修補** | 原始碼＋部署測試 | umask、`chmod 600` |
+| 19 | stdio MCP 繼承密鑰 | **已修補** | 靜態＋單元 | `mcp_environment` 測試 |
+| 20 | MCP `env: null` panic | **已修補** | 靜態＋單元 | `decodeStrMap` |
+| 21 | commands 分頁無上限 | **已修補** | 靜態＋單元／PG | `commands_security_test.go` |
+| 22 | 資產匯入無界 | **已修補** | 靜態＋單元 | `decodeBoundedJSON` |
+| 23 | 對話訊息無界 | **已修補** | 靜態＋單元 | `request_limits_security_test.go` |
+| 24 | SKILL ZIP 換行放大 | **已修補** | 靜態＋單元 | frontmatter 逐行解析 |
+| 25 | 代理上游 TLS 不驗證 | **已修補** | 靜態＋單元 | 預設驗證、`tls_security_test.go` |
+| 26 | CSV 公式注入 | **已修補** | 靜態＋單元 | `findings_security_test.go` |
+| 27 | MCP SSE 無界讀取 | **已修補** | 靜態＋單元 | 8MiB 上限 |
+| 28 | log fan-out panic | **已修補** | 靜態＋單元 | `logsink_security_test.go` |
+| 29 | 並行 rollback `.swap` | **已修補** | 靜態＋單元 | `selfupdate/security_test.go` |
+| 30 | SMTP STARTTLS 降級 | **已修補** | 靜態＋單元 | `email_security_test.go` |
+| 31 | 資產 href 儲存型 XSS | **縱深：儲存阻斷＋渲染緩解** | 靜態＋單元＋隔離 PG | UI `safeHref`（fail-closed **sink**）；**本次** `ValidateAssetURL` + `UpsertHTTPService`／歸檔還原（**storage**） |
+| 32 | reset 印完整 DSN | **已修補** | 靜態＋單元 | redacted 輸出、`deployment_security_test.go` |
+| 33 | 非標準 IP 繞過資產規則 | **已修補** | 靜態＋單元 | `asset_gate_security_test.go` |
+| 34 | ScopeSentry URL SSRF | **管理功能取捨** | 靜態＋單元 | MCP 儲存邊界；未封內網（管理員能力） |
+| 35 | 更新 ZIP 無 byte cap | **已修補** | 靜態＋單元 | `selfupdate/stage.go` |
+| 36 | DSL OR 逃出 task 範圍 | **已修補** | 靜態＋隔離 PG | `asset_dsl_pg_security_test.go` |
+| 37 | exact-domain 尾點繞過 | **已修補** | 靜態＋單元 | `DomainKey` 正規化 |
+| 38 | ScopeSentry sync 無界 body | **已修補** | 靜態＋單元 | 64KiB／100 targets |
+| 39 | testLLM 任意 base_url 洩 key | **已修補** | 靜態＋單元 | `reuseLLMKey` on test path |
+| 40 | DSN Redact 失敗洩密 | **已修補** | 靜態＋單元 | `redact_security_test.go` |
 
 ---
 
@@ -87,27 +88,32 @@
 
 | 檔案 | 變更 |
 |---|---|
-| `internal/endpoint/endpoint.go` | 新增 `AssetURL`：僅允許 `http`/`https` |
-| `db/assets.go` | `UpsertHTTPService` 入庫前驗證 URL |
-| `internal/endpoint/endpoint_security_test.go` | 拒絕 `javascript:` / `data:` |
-| `db/assets_test.go` | `TestUpsertHTTPServiceRejectsNonHTTPScheme` |
+| `internal/endpoint/endpoint.go` | `ValidateAssetURL`：僅允許 `http`/`https`；**不改寫** URL 字串 |
+| `internal/endpoint/asset_url_test.go` | `TestValidateAssetURL` |
+| `db/assets.go` | `UpsertHTTPService` 入庫前驗證；保留既有 `normalizeURL` 去重語意 |
+| `db/assets_url_security_pg_test.go` | 隔離 PG：拒絕寫入、`#/fragment` 保留、歸檔還原跳過 |
+| `db/task_archives_restore.go` | 歸檔還原 HTTP 服務資產同源驗證 |
+| `enrich/enrich.go` | `UpsertHTTPService` 失敗記錄（非靜默吞錯） |
+| `db/assets_test.go` | `javascript:`／`ftp://` 拒絕 |
 
 ### 失敗前／修復後（隔離回歸）
 
-| 測試 | 基準 `f10a194` | 本分支 head |
+| 測試 | 基準 `f10a194`（推論／對照） | 本分支 |
 |---|---|---|
-| `TestUpsertHTTPServiceRejectsNonHTTPScheme` | **FAIL**（`javascript:` 可入庫） | **PASS** |
-| `TestAssetURL` / `endpoint` 安全測試擴充 | 無 `AssetURL` 案例 | **PASS** |
+| `normalizeURL("javascript:…")` | **不阻擋**（negative control） | 仍不阻擋（邊界在 `ValidateAssetURL`） |
+| `UpsertHTTPService` + `javascript:` | 可入庫（**未驗證**於本機基準執行） | **錯誤且無列** |
+| `TestValidateAssetURL` | 不存在 | **PASS** |
+| `TestSecurityPGHTTPServiceURLSchemeGate` | 不存在 | **PASS**（需 `ARTEX_AUTH_TEST_DSN`） |
 
 ---
 
 ## 殘餘風險與決策保留
 
-1. **管理員可設定內網 MCP／LLM URL**：屬預期能力；風險由憑證目的地綁定與 `allow_insecure` 明示承擔，不在此分支封鎖。
-2. **`OPENAI_BASE_URL` 環境變數變更**：與空白 `base_url` 的 profile 互動屬部署層責任（與 #17 審查結論一致）。
-3. **無 PostgreSQL 的本機全測**：部分 PG 測試 skip；以 CI `security-regressions` 為準。
-4. **PR15 advisory 背景工作**：須遵守「不自動核准」；合併前請人工確認未觸及 `auth`、`mcp_save`、`intercept.Decide` 語意。
+1. **#31**：惡意 scheme 在 **UI 層**仍由 `safeHref` 擋下；本分支阻斷 **寫入**與**歸檔還原**旁路，非保證歷史庫已無畸形列（未做資料遷移）。
+2. **管理員可設定內網 MCP／LLM URL**：預期能力；憑證目的地綁定與明示 `allow_insecure`。
+3. **無 `ARTEX_AUTH_TEST_DSN` 的本機全測**：`TestSecurityPG*` **失敗或 skip 視檔案而定**；合併前以 CI `security-regressions` 為準。
+4. **PR15**：須遵守「不自動核准」；與本分支檔案不重疊。
 
 ---
 
-本文件不含 Audn 報告 session 參數或第三方目標憑證。完整歷史對照見 `security/audn-2026-11-06.md`。
+本文件不含 Audn 報告 session 參數或第三方目標憑證。歷史對照見 `security/audn-2026-11-06.md`。

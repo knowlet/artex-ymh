@@ -689,11 +689,9 @@ func (s *AssetStore) UpsertHTTPService(req UpsertHTTPServiceReq) (int64, error) 
 	if req.URL == "" {
 		return 0, fmt.Errorf("url is required")
 	}
-	validated, err := endpoint.AssetURL(req.URL)
-	if err != nil {
+	if err := endpoint.ValidateAssetURL(req.URL); err != nil {
 		return 0, err
 	}
-	req.URL = validated
 	if err := ValidateAssetIP(req.IP); err != nil {
 		return 0, err
 	}

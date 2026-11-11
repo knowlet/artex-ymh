@@ -72,17 +72,35 @@ func URL(raw string) (string, error) {
 	return u.String(), nil
 }
 
-// AssetURL validates an http(s) service URL before it is stored and may be
-// rendered as a clickable link in the operator UI.
-func AssetURL(raw string) (string, error) {
-	u, err := parseURL(raw, false)
-	if err != nil {
-		return "", err
+// ValidateAssetURL checks that a service URL is safe to persist and later
+// render as a clickable http(s) link. It does not rewrite the URL string, so
+// storage keys and operator-entered spelling stay stable (fragments and paths
+// are preserved; only scheme/host sanity is enforced).
+func ValidateAssetURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return errors.New("url is required")
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", errors.New("资产 URL 仅支持 HTTP 或 HTTPS")
+	// Mirror web safeHref: strip ASCII control/space before scheme detection.
+	var b strings.Builder
+	for _, r := range raw {
+		if r > ' ' {
+			b.WriteRune(r)
+		}
 	}
-	return u.String(), nil
+	cleaned := b.String()
+	if cleaned == "" {
+		return errors.New("资产 URL 无效")
+	}
+	u, err := url.Parse(cleaned)
+	if err != nil || u == nil || u.Opaque != "" || u.Hostname() == "" {
+		return errors.New("资产 URL 无效")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return errors.New("资产 URL 仅支持 HTTP 或 HTTPS")
+	}
+	return nil
 }
 
 func parseURL(raw string, proxy bool) (*url.URL, error) {

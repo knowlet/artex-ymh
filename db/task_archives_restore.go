@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Autumn-27/artex/internal/endpoint"
 )
 
 // CompleteTaskArchive performs the hot-store compaction only after the external
@@ -430,6 +432,11 @@ func insertArchiveJSONSequenceRows(tx *sql.Tx, table string, reader io.Reader) (
 	return count, nil
 }
 
+func archiveRowString(row map[string]any, key string) string {
+	v, _ := row[key].(string)
+	return v
+}
+
 func restoreArchiveAssets(tx *sql.Tx, taskID int64, raw json.RawMessage) (map[int64]int64, []string, error) {
 	rows, err := decodeArchiveRows(raw)
 	if err != nil {
@@ -465,6 +472,14 @@ func restoreArchiveAssets(tx *sql.Tx, taskID int64, raw json.RawMessage) (map[in
 			warnings = append(warnings, fmt.Sprintf("资产 ID %d 已被占用，恢复为 %d", oldID, candidate))
 		}
 		row["task_ids"] = mergeJSONTaskID(row["task_ids"], taskID)
+		if archiveRowString(row, "type") == "service" && strings.EqualFold(archiveRowString(row, "service_type"), "http") {
+			if u := archiveRowString(row, "url"); u != "" {
+				if err := endpoint.ValidateAssetURL(u); err != nil {
+					warnings = append(warnings, fmt.Sprintf("资产 %d 因无效 HTTP URL 已跳过: %v", oldID, err))
+					continue
+				}
+			}
+		}
 		assetRaw, _ := json.Marshal(row)
 		res, err := tx.Exec(`INSERT INTO assets SELECT * FROM json_populate_record(NULL::assets,$1::json) ON CONFLICT DO NOTHING`, string(assetRaw))
 		if err != nil {

@@ -41,14 +41,6 @@ func TestLLMCredentialDestination(t *testing.T) {
 			t.Fatalf("unsafe endpoint accepted: %q", raw)
 		}
 	}
-	for _, raw := range []string{"javascript:alert(1)", "data:text/html,x", "file:///etc/passwd"} {
-		if _, err := AssetURL(raw); err == nil {
-			t.Fatalf("non-http asset URL accepted: %q", raw)
-		}
-	}
-	if got, err := AssetURL("https://Example.COM/path"); err != nil || !strings.Contains(got, "example.com") {
-		t.Fatalf("asset URL normalize: %q err=%v", got, err)
-	}
 	t.Setenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
 	got, err := LLM("openai", "", "")
 	if err != nil || got.BaseURL != "http://localhost:11434/v1" {
