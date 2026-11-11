@@ -1,0 +1,104 @@
+{
+  "schema": "artex-upgrade-matrix/v1",
+  "reference_date": "2026-11-11",
+  "baseline_git": "main",
+  "rows": [
+    {
+      "component": "go-toolchain",
+      "current": "1.26.3",
+      "target": "1.26.11",
+      "status": "upgraded",
+      "rationale": "Latest Go 1.26 patch on go.dev (2026-11-11); clears govulncheck stdlib findings (GO-2026-5037, GO-2026-5026). Go 1.27.4 held for coordinated CI/README bump."
+    },
+    {
+      "component": "github.com/Autumn-27/norma",
+      "current": "v0.4.3",
+      "target": "v0.4.4",
+      "status": "upgraded"
+    },
+    {
+      "component": "github.com/jackc/pgx/v5",
+      "current": "v5.10.0",
+      "target": "v5.12.0",
+      "status": "upgraded"
+    },
+    {
+      "component": "golang.org/x/* (crypto, net, sys, text, sync)",
+      "current": "0.55/0.58/0.47/0.41/0.22",
+      "target": "0.58/0.62/0.50/0.44/0.25",
+      "status": "upgraded"
+    },
+    {
+      "component": "web/next",
+      "current": "^16.2.9",
+      "target": "16.4.6",
+      "status": "upgraded",
+      "rationale": "Registry latest 16.4.6 on 2026-11-11; stays on Next 16 LTS line."
+    },
+    {
+      "component": "web/react",
+      "current": "^19.2.7",
+      "target": "19.3.1",
+      "status": "upgraded"
+    },
+    {
+      "component": "@hookform/resolvers",
+      "current": "^5.4.0",
+      "target": "^5.x",
+      "status": "hold",
+      "rationale": "Major 7.x available; API break risk for existing zod v4 forms — defer until dedicated form regression pass."
+    },
+    {
+      "component": "@tanstack/react-table",
+      "current": "^8.21.3",
+      "target": "^8.x",
+      "status": "hold",
+      "rationale": "Major 9.x available; table APIs used across data grids — needs isolated UI regression."
+    },
+    {
+      "component": "postgres-server",
+      "current": "16 (CI + local)",
+      "target": "16",
+      "status": "hold",
+      "rationale": "PostgreSQL 17.11 published (Docker Hub 2026-11-11). schema.sql targets PG16+ features but full CI/service matrix still pins 16; PG17 rehearsal optional post-merge."
+    },
+    {
+      "component": "docker-node-runtime",
+      "current": "22.14.0 / NodeSource 20 (Dockerfile)",
+      "target": "22.23.4 official tarball (both Dockerfiles)",
+      "status": "upgraded"
+    },
+    {
+      "component": "playwright (image global)",
+      "current": "1.63.0",
+      "target": "1.65.0",
+      "status": "upgraded",
+      "rationale": "registry.npmjs.org/playwright latest 1.65.0 on 2026-11-11."
+    },
+    {
+      "component": "python-base-image",
+      "current": "python:3.12-slim-bookworm",
+      "target": "3.12-slim-bookworm",
+      "status": "hold",
+      "rationale": "3.13 images exist but impacket/tool venv paths validated on 3.12 bookworm."
+    },
+    {
+      "component": "pr15-integration",
+      "current": "branch adds Playwright advisory e2e",
+      "target": "no cherry-pick",
+      "status": "compatible",
+      "rationale": "Read-only diff: only web/package.json devDep + script; no go.mod conflict with this branch."
+    },
+    {
+      "component": "pr17-integration",
+      "current": "branch adds endpoint URL validation",
+      "target": "no cherry-pick",
+      "status": "compatible",
+      "rationale": "Read-only diff: no manifest overlap with dependency upgrades here."
+    }
+  ],
+  "security_advisory_scope": {
+    "jwt_historical_exposure_pr15": "out_of_scope_not_addressed",
+    "note": "No production rotation, no reuse of historical jwt.key material."
+  }
+}

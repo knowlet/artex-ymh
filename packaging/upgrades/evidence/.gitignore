@@ -1,0 +1,6 @@
+*
+!.gitignore
+!TEST-SUMMARY-2026-11-11.json
+!playwright-report.json
+!govulncheck-go1.26.11.txt
+!npm-audit-*.json

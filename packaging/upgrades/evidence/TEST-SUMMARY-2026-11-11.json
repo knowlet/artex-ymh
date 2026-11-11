@@ -1,0 +1,41 @@
+{
+  "branch": "cursor/comprehensive-upgrades-a947",
+  "head_note": "populated at commit time from local rehearsal",
+  "go_test_full": {
+    "command": "go test -count=1 -p=1 -timeout=15m ./...",
+    "database": "postgres://artex_test:***@localhost:5432/artex_test_fresh",
+    "result": "pass",
+    "packages_ok": true
+  },
+  "go_race_subset": {
+    "command": "go test -race ... ./server ./mcphttp ./selfupdate ./traffic",
+    "result": "pass"
+  },
+  "go_vet": "pass",
+  "govulncheck": {
+    "toolchain": "go1.26.11",
+    "code_affected": 0,
+    "artifact": "govulncheck-go1.26.11.txt"
+  },
+  "frontend": {
+    "tsc": "pass",
+    "build_static": "pass",
+    "node_unit": "auth-refresh.test.mjs, safe-href.test.mjs pass (CI parity)"
+  },
+  "db_migration_rehearsal": {
+    "test": "TestLLMRecordsMigrateAddsRawColumnsToOldTable",
+    "result": "pass"
+  },
+  "browser_e2e": {
+    "type": "real_playwright_chromium",
+    "scope": "packaging/upgrades/e2e/smoke.spec.ts (not PR15 advisory)",
+    "tests_passed": 2,
+    "artifact": "playwright-report.json"
+  },
+  "limitations": [
+    "Local full suite used fresh disposable PG; polluted shared DB caused TestCompanyScopeAttribution false failure until DB recreated (CI always uses fresh service DB).",
+    "Docker image build not executed on VM (docker unavailable).",
+    "npm moderate findings remain in dev-only shadcn/ts-morph chain; documented hold.",
+    "PR15 jwt.key historical exposure not addressed in this branch."
+  ]
+}
