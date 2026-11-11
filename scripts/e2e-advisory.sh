@@ -11,13 +11,15 @@ fi
 export ARTEX_PG_DSN="$ARTEX_AUTH_TEST_DSN"
 export ARTEX_E2E_SERVE=1
 export ADVISORY_E2E_ADDR="${ADVISORY_E2E_ADDR:-127.0.0.1:9877}"
-export ADVISORY_E2E_ENV_FILE="${ADVISORY_E2E_ENV_FILE:-/tmp/artex-advisory-e2e.env}"
+export ADVISORY_E2E_ENV_FILE="${ADVISORY_E2E_ENV_FILE:-$(mktemp /tmp/artex-advisory-e2e.XXXXXX.env)}"
 export AUTOPENTEST_API="http://127.0.0.1:9877"
 export ADVISORY_E2E_WEB_URL="${ADVISORY_E2E_WEB_URL:-http://127.0.0.1:3000}"
 
 cleanup() {
   [[ -n "${BACKEND_PID:-}" ]] && kill "$BACKEND_PID" 2>/dev/null || true
   [[ -n "${WEB_PID:-}" ]] && kill "$WEB_PID" 2>/dev/null || true
+  [[ -n "${ADVISORY_E2E_ENV_FILE:-}" && -f "${ADVISORY_E2E_ENV_FILE}" ]] && rm -f "${ADVISORY_E2E_ENV_FILE}"
+  rm -f "$ROOT/server/jwt.key" 2>/dev/null || true
 }
 trap cleanup EXIT
 

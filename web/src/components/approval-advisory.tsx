@@ -127,7 +127,11 @@ export function ApprovalAdvisory({ id, status, readOnly = false }: { id: number;
       {data?.auto_enabled && !data.auto_cancelled ? (
         <p className="text-muted-foreground text-xs">背景自動審查已啟用：新待審批會自動排程，仍須人工核准／拒絕。</p>
       ) : null}
-      {data?.auto_cancelled ? <p className="text-muted-foreground text-xs">此筆已停止自動重試；可手動審查或人工決定。</p> : null}
+      {data?.auto_cancelled ? (
+        <p className="text-muted-foreground text-xs">
+          此筆已停止自動重試；可手動審查或人工決定。不會中斷進行中的模型請求；若推理已完成，結果不會成為目前建議。
+        </p>
+      ) : null}
       {MOCK ? <p className="text-muted-foreground text-xs">演示模式不呼叫模型。</p> : null}
       <div role="status" aria-live="polite" className="text-sm">
         {data?.auto_queued && !running ? "已加入背景審查佇列，無需手動點擊。" : null}

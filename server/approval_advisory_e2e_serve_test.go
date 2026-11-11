@@ -46,22 +46,24 @@ func TestAdvisoryE2EServeForPlaywright(t *testing.T) {
 	srv := New(ctx, mgr, skillDir, dataDir, config.BaseDir())
 	srv.jwtKey = testJWTKey
 
-	fake := &advisoryFake{text: advisoryFixtureReply}
-	token, autoPendingID, cancelPendingID, err := srv.AdvisoryE2EBootstrap(ctx, fake, "e2e-fixture")
+	fake := newAdvisoryE2EBarrierFake(advisoryE2EFixtureReply)
+	ctl := &advisoryE2EControl{srv: srv, fake: fake, envPath: envPath}
+	token, cancelPendingID, err := srv.AdvisoryE2EBootstrap(ctx, fake, "e2e-fixture")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteAdvisoryE2EEnv(envPath, "http://"+addr, token, autoPendingID, cancelPendingID); err != nil {
+	if err := WriteAdvisoryE2EEnv(envPath, "http://"+addr, token, cancelPendingID); err != nil {
 		t.Fatal(err)
 	}
 	meta, _ := json.Marshal(map[string]any{
-		"baseURL": "http://" + addr, "token": token, "pendingID": autoPendingID, "cancelPendingID": cancelPendingID, "envFile": envPath,
+		"baseURL": "http://" + addr, "cancelPendingID": cancelPendingID, "envFile": envPath,
 	})
 	fmt.Println("ADVISORY_E2E_META=" + string(meta))
 
-	httpSrv := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	handler := wrapAdvisoryE2EHandler(srv.Handler(), ctl)
+	httpSrv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
-		log.Printf("[advisory-e2e] listening on http://%s auto_pending=%d cancel_pending=%d", addr, autoPendingID, cancelPendingID)
+		log.Printf("[advisory-e2e] listening on http://%s cancel_pending=%d (jwt: in-memory test constant)", addr, cancelPendingID)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("[advisory-e2e] serve: %v", err)
 		}

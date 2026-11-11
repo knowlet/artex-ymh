@@ -16,26 +16,28 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// AdvisoryE2EBootstrap seeds auth, judge profile, fake provider, two pending rows and auto config.
-// autoPendingID is for the queued→running path; cancelPendingID is isolated for cancel UX checks.
-func (s *Server) AdvisoryE2EBootstrap(ctx context.Context, fake llm.Provider, model string) (token string, autoPendingID, cancelPendingID int64, err error) {
+const advisoryE2EFixtureReply = `{"risk":"low","summary":"受控測試資料","consequences":"不執行任何操作","recommendation":"consider_approval","suggestions":["人工確認"]}`
+
+// AdvisoryE2EBootstrap seeds auth, judge profile, fake provider, one cancel-path pending and auto config.
+// Auto success pending is added later via AdvisoryE2ESeedAutoPending (after cancel mid-flight test).
+func (s *Server) AdvisoryE2EBootstrap(ctx context.Context, fake llm.Provider, model string) (token string, cancelPendingID int64, err error) {
 	if s == nil || s.m == nil || s.m.pg == nil {
-		return "", 0, 0, fmt.Errorf("server database unavailable")
+		return "", 0, fmt.Errorf("server database unavailable")
 	}
 	pg := s.m.pg
 	const profileID int64 = 42
 	if err := seedAdvisoryE2ESchema(pg); err != nil {
-		return "", 0, 0, err
+		return "", 0, err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte("e2e-advisory-pass"), bcrypt.DefaultCost)
 	if err != nil {
-		return "", 0, 0, err
+		return "", 0, err
 	}
 	if err := pg.SetSetting(authPassKey, string(hash)); err != nil {
-		return "", 0, 0, err
+		return "", 0, err
 	}
 	if err := pg.SetSetting("llm_judge_profile_id", "42"); err != nil {
-		return "", 0, 0, err
+		return "", 0, err
 	}
 	s.ctx = ctx
 	s.provCacheMu.Lock()
@@ -48,32 +50,37 @@ func (s *Server) AdvisoryE2EBootstrap(ctx context.Context, fake llm.Provider, mo
 	if err := pg.SaveAdvisoryAutoConfig(db.AdvisoryAutoConfig{
 		Enabled: true, ConsentAt: consent, GlobalSlots: 8, MaxRetries: 3, DailyBudget: 50,
 	}); err != nil {
-		return "", 0, 0, err
+		return "", 0, err
 	}
 	modelInput := json.RawMessage(`{"version":4,"tool_name":"Write","arguments":{"file_path":"e2e.txt","content":"fixture"}}`)
 	audit := &db.InterceptAudit{
 		InitialAction: "ask", Correlation: "exact", InputDigest: "e2e", UserMessage: "e2e",
 		ExecutionStatus: "not_started", CapturedAt: time.Now().UTC(), ModelInput: modelInput,
 	}
-	autoPendingID, err = pg.CreateInterceptPending(1, 0, "", "e2e", "Write", []byte(`{"file_path":"e2e-auto.txt","content":"auto"}`), "e2e auto",
-		audit)
-	if err != nil {
-		return "", 0, 0, err
-	}
 	cancelPendingID, err = pg.CreateInterceptPending(1, 0, "", "e2e", "Write", []byte(`{"file_path":"e2e-cancel.txt","content":"cancel"}`), "e2e cancel",
 		audit)
 	if err != nil {
-		return "", 0, 0, err
-	}
-	// Keep worker from finishing before Playwright asserts cancel UX; cancel test still POSTs idempotent cancel.
-	if err := pg.CancelApprovalAdvisoryAuto(ctx, cancelPendingID); err != nil {
-		return "", 0, 0, err
+		return "", 0, err
 	}
 	token, err = signJWT(s.jwtKey, 0)
 	if err != nil {
-		return "", 0, 0, err
+		return "", 0, err
 	}
-	return token, autoPendingID, cancelPendingID, nil
+	return token, cancelPendingID, nil
+}
+
+// AdvisoryE2ESeedAutoPending adds the success-path pending row (non-blocking fake).
+func (s *Server) AdvisoryE2ESeedAutoPending(ctx context.Context) (int64, error) {
+	if s == nil || s.m == nil || s.m.pg == nil {
+		return 0, fmt.Errorf("server database unavailable")
+	}
+	modelInput := json.RawMessage(`{"version":4,"tool_name":"Write","arguments":{"file_path":"e2e.txt","content":"fixture"}}`)
+	id, err := s.m.pg.CreateInterceptPending(1, 0, "", "e2e", "Write", []byte(`{"file_path":"e2e-auto.txt","content":"auto"}`), "e2e auto",
+		&db.InterceptAudit{
+			InitialAction: "ask", Correlation: "exact", InputDigest: "e2e", UserMessage: "e2e",
+			ExecutionStatus: "not_started", CapturedAt: time.Now().UTC(), ModelInput: modelInput,
+		})
+	return id, err
 }
 
 func seedAdvisoryE2ESchema(pg *db.DB) error {
@@ -89,9 +96,20 @@ func seedAdvisoryE2ESchema(pg *db.DB) error {
 	return err
 }
 
-// WriteAdvisoryE2EEnv writes env vars for the Playwright runner.
-func WriteAdvisoryE2EEnv(path, baseURL, token string, autoPendingID, cancelPendingID int64) error {
-	body := fmt.Sprintf("ADVISORY_E2E_BASE_URL=%s\nADVISORY_E2E_TOKEN=%s\nADVISORY_E2E_PENDING_ID=%d\nADVISORY_E2E_CANCEL_PENDING_ID=%d\n",
-		baseURL, token, autoPendingID, cancelPendingID)
+// WriteAdvisoryE2EEnv writes env vars for the Playwright runner (0600; never commit).
+func WriteAdvisoryE2EEnv(path, baseURL, token string, cancelPendingID int64) error {
+	body := fmt.Sprintf("ADVISORY_E2E_BASE_URL=%s\nADVISORY_E2E_TOKEN=%s\nADVISORY_E2E_CANCEL_PENDING_ID=%d\nADVISORY_E2E_PENDING_ID=0\n",
+		baseURL, token, cancelPendingID)
 	return os.WriteFile(path, []byte(body), 0600)
+}
+
+// AppendAdvisoryE2EAutoPendingID records the auto success row id after seeding.
+func AppendAdvisoryE2EAutoPendingID(path string, autoPendingID int64) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "ADVISORY_E2E_PENDING_ID=%d\n", autoPendingID)
+	return err
 }

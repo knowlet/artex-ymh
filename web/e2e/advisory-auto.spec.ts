@@ -8,13 +8,16 @@ function loadEnvFile(): { baseURL: string; token: string; pendingID: string; can
   const vars: Record<string, string> = {};
   for (const line of raw.split("\n")) {
     const i = line.indexOf("=");
-    if (i > 0) vars[line.slice(0, i)] = line.slice(i + 1);
+    if (i > 0) {
+      const key = line.slice(0, i);
+      vars[key] = line.slice(i + 1);
+    }
   }
   return {
     baseURL: vars.ADVISORY_E2E_BASE_URL ?? "http://127.0.0.1:9877",
     token: vars.ADVISORY_E2E_TOKEN ?? "",
     pendingID: vars.ADVISORY_E2E_PENDING_ID ?? "0",
-    cancelPendingID: vars.ADVISORY_E2E_CANCEL_PENDING_ID ?? vars.ADVISORY_E2E_PENDING_ID ?? "0",
+    cancelPendingID: vars.ADVISORY_E2E_CANCEL_PENDING_ID ?? "0",
   };
 }
 
@@ -40,32 +43,68 @@ async function openPendingRow(page: import("@playwright/test").Page, pendingID: 
   await pendingTable.locator("tbody tr").filter({ hasText: pendingID }).first().click();
 }
 
-test.describe("approval advisory auto (fake provider, disposable PG)", () => {
-  test("cancel stops auto label and allows manual retry affordance", async ({ page, context }) => {
-    const { token, cancelPendingID } = loadEnvFile();
-    test.skip(!token, "ADVISORY_E2E env missing");
+test.describe.configure({ mode: "serial" });
 
-    const api = loadEnvFile().baseURL;
-    await page.request.post(`${api}/api/intercept/pending/${cancelPendingID}/advisory/cancel`, {
-      headers: { Authorization: `Bearer ${token}` },
+test.describe("approval advisory auto (fake provider, disposable PG)", () => {
+  test("cancel while inference blocked: stop auto retry, discard finished model output", async ({ page, context }) => {
+    const { token, cancelPendingID, baseURL } = loadEnvFile();
+    test.skip(!token || cancelPendingID === "0", "ADVISORY_E2E env missing");
+
+    const auth = { Authorization: `Bearer ${token}` };
+    await expect
+      .poll(
+        async () => {
+          const r = await page.request.get(`${baseURL}/api/e2e/advisory/inference-entered`);
+          return r.status();
+        },
+        { timeout: 60_000 },
+      )
+      .toBe(200);
+
+    const before = await (await page.request.get(`${baseURL}/api/intercept/pending/${cancelPendingID}/advisory`, { headers: auth })).json();
+    expect(before.auto_cancelled).toBeFalsy();
+
+    const cancelRes = await page.request.post(`${baseURL}/api/intercept/pending/${cancelPendingID}/advisory/cancel`, {
+      headers: auth,
       data: "{}",
     });
+    expect(cancelRes.ok()).toBeTruthy();
+
+    const releaseRes = await page.request.post(`${baseURL}/api/e2e/advisory/release-inference`);
+    expect(releaseRes.ok()).toBeTruthy();
+
+    await expect
+      .poll(async () => {
+        const body = await (await page.request.get(`${baseURL}/api/intercept/pending/${cancelPendingID}/advisory`, { headers: auth })).json();
+        return body.auto_cancelled === true && body.current !== true;
+      })
+      .toBeTruthy();
+
+    const after = await (await page.request.get(`${baseURL}/api/intercept/pending/${cancelPendingID}/advisory`, { headers: auth })).json();
+    expect(after.approval_status).toBe("pending");
+    const state = after.assessment?.state;
+    expect(state === undefined || state === "failed" || state === "stale" || !after.current).toBeTruthy();
 
     await seedSession(page, context, token);
     await openPendingRow(page, cancelPendingID);
-
     const advisory = page.getByLabel("智慧審查建議");
     await advisory.scrollIntoViewIfNeeded();
-    await expect(advisory.getByText(/已停止自動重試/)).toBeVisible({ timeout: 30_000 });
-    await expect(advisory.getByRole("button", { name: /手動審查|手動重新審查|已保存審查/ })).toBeVisible();
+    await expect(advisory.getByText(/已停止自動重試/)).toBeVisible();
+    await expect(advisory.getByText(/不會中斷進行中的模型請求/)).toBeVisible();
+    await expect(advisory.getByRole("button", { name: /手動審查|手動重新審查/ })).toBeVisible();
   });
 
   test("queued → running → succeeded without manual review click", async ({ page, context }) => {
-    const { token, pendingID } = loadEnvFile();
-    test.skip(!token, "ADVISORY_E2E env missing — run scripts/e2e-advisory.sh");
+    const { token, baseURL } = loadEnvFile();
+    test.skip(!token, "ADVISORY_E2E env missing");
+
+    const auth = { Authorization: `Bearer ${token}` };
+    const seedRes = await page.request.post(`${baseURL}/api/e2e/advisory/seed-auto-pending`);
+    expect(seedRes.ok()).toBeTruthy();
+    const { pending_id: pendingID } = (await seedRes.json()) as { pending_id: number };
 
     await seedSession(page, context, token);
-    await openPendingRow(page, pendingID);
+    await openPendingRow(page, String(pendingID));
 
     const advisory = page.getByLabel("智慧審查建議");
     await advisory.scrollIntoViewIfNeeded();
@@ -75,10 +114,7 @@ test.describe("approval advisory auto (fake provider, disposable PG)", () => {
     await expect(advisory.getByText(/風險：/)).toBeVisible({ timeout: 90_000 });
     await expect(advisory.getByText(/並非授權/)).toBeVisible();
 
-    const api = loadEnvFile().baseURL;
-    const res = await page.request.get(`${api}/api/intercept/pending/${pendingID}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await page.request.get(`${baseURL}/api/intercept/pending/${pendingID}`, { headers: auth });
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
     expect(body.status).toBe("pending");

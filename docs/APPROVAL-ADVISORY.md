@@ -59,3 +59,9 @@ HTTP 200：已保存／重用結果（仍須檢查 state，200 不代表模型�
 - 本機瀏覽器 E2E（`scripts/e2e-advisory.sh`，Playwright + 拋棄式 PG + `advisoryFake`）：驗證審批列表、背景自動狀態文案與取消標籤；不跑真實 LLM。
 
 這些自動測試不等於真實 provider 行為、多 replica 壓力或正式部署已驗收；發布時應另外檢查實際 UI、反向代理逾時及既有審批計時設定。
+
+### 本機 E2E 與簽名金鑰 hygiene
+
+- Playwright harness 僅使用記憶體內測試用 JWT 材料（與 `auth_test.go` 同源常數）及 `t.TempDir()` 資料目錄；**不得**在 repo 內留下 `server/jwt.key`。
+- `scripts/check-advisory-commit-hygiene.sh` 與 `TestAdvisoryCommitHygieneForbiddenPaths` 阻擋重新追蹤 `jwt.key`／`web/out`。
+- **歷史暴露：** 若曾誤將執行時產生的 `jwt.key` 推上遠端，僅從最新 tree 刪除**不能**視為輪替完成；擁有者須依部署紀錄判斷是否需撤銷／重簽，本文件不記錄金鑰內容或指紋。
