@@ -358,7 +358,30 @@ ON CONFLICT DO NOTHING`, r.kind, r.pattern, r.note); err != nil {
 // declares `mcps: ScopeSentry`, which only takes effect once it's made visible and
 // that MCP is enabled/configured.
 var builtinSkillVisibility = map[string][]string{
-	"api-recon": {"auto", "pentest", "worker"},
+	"api-recon":                           {"auto", "pentest", "worker"},
+	"antifox-api-security-testing":        {"planner", "worker", "pentest"},
+	"antifox-business-logic-testing":      {"planner", "worker", "pentest"},
+	"antifox-cloud-security-audit":        {"planner", "worker", "pentest"},
+	"antifox-command-injection-testing":   {"planner", "worker", "pentest"},
+	"antifox-container-security-testing":  {"planner", "worker", "pentest"},
+	"antifox-csrf-testing":                {"planner", "worker", "pentest"},
+	"antifox-deserialization-testing":     {"planner", "worker", "pentest"},
+	"antifox-file-upload-testing":         {"planner", "worker", "pentest"},
+	"antifox-idor-testing":                {"planner", "worker", "pentest"},
+	"antifox-incident-response":           {"planner", "worker", "pentest"},
+	"antifox-ldap-injection-testing":      {"planner", "worker", "pentest"},
+	"antifox-mobile-app-security-testing": {"planner", "worker", "pentest"},
+	"antifox-network-penetration-testing": {"planner", "worker", "pentest"},
+	"antifox-report-generation":           {"reporter"},
+	"antifox-secure-code-review":          {"planner", "worker", "pentest"},
+	"antifox-security-automation":         {"planner", "worker", "pentest"},
+	"antifox-security-awareness-training": {"planner", "worker", "pentest"},
+	"antifox-sql-injection-testing":       {"planner", "worker", "pentest"},
+	"antifox-ssrf-testing":                {"planner", "worker", "pentest"},
+	"antifox-vulnerability-assessment":    {"planner", "worker", "pentest"},
+	"antifox-xpath-injection-testing":     {"planner", "worker", "pentest"},
+	"antifox-xss-testing":                 {"planner", "worker", "pentest"},
+	"antifox-xxe-testing":                 {"planner", "worker", "pentest"},
 }
 
 // seedBuiltinSkillVisibility binds the shipped built-in skills to their default

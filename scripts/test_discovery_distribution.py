@@ -6,6 +6,7 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -24,6 +25,7 @@ MAINTENANCE_FILES = (
     "scripts/update_vulnerability_intel.py",
     "scripts/update_nuclei_index.py",
     "scripts/build_intel_pack.py",
+    "scripts/sync_antifox.py",
 )
 
 
@@ -49,6 +51,12 @@ class DistributionTests(unittest.TestCase):
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("fixture:" + name + "\n", encoding="utf-8")
+        # Use the real reviewed bundle: packaging must preserve source hashes,
+        # notices and adapter paths, independently of the compiler test double.
+        shutil.copytree(ROOT / "providers/antifox", root / "providers/antifox")
+        for directory in (ROOT / "skills").glob("antifox-*"):
+            shutil.copytree(directory, root / "skills" / directory.name)
+        shutil.copy2(ROOT / "scripts/sync_antifox.py", root / "scripts/sync_antifox.py")
         return root
 
     def fake_go(self) -> Path:
@@ -101,6 +109,12 @@ chmod +x "$output"
                     names = archive.namelist()
                     self.assertFalse(any(name.startswith(prefix + "data/") for name in names))
                     self.assertFalse(any(name.endswith("tools.tar.gz") for name in names))
+                    extracted = self.directory / ("unpacked-" + goos)
+                    archive.extractall(extracted)
+                package = extracted / prefix[:-1]
+                verified = subprocess.run([sys.executable, str(package / "scripts/sync_antifox.py"), "--check"],
+                                          cwd=package, capture_output=True, text=True, timeout=15)
+                self.assertEqual(verified.returncode, 0, verified.stderr)
 
     @unittest.skipUnless(shutil.which("bash") and shutil.which("zip"), "bash and zip required")
     def test_missing_data_pack_fails_package_instead_of_silent_omission(self):
@@ -129,7 +143,7 @@ chmod +x "$output"
                         continue
                     parts = shlex.split(line)
                     sources, target = parts[1:-1], parts[-1]
-                    if not target.startswith(("/app/packaging/", "/app/scripts/")):
+                    if not target.startswith(("/app/packaging/", "/app/scripts/", "/app/providers/", "/app/skills/")):
                         continue
                     self.assertTrue(target.endswith("/"))
                     output = destination / target.lstrip("/")
@@ -150,6 +164,9 @@ chmod +x "$output"
                 self.assertEqual((destination / "app/packaging/discovery/NUCLEI-LICENSE.txt").read_bytes(),
                                  (ROOT / "packaging/discovery/NUCLEI-LICENSE.txt").read_bytes())
                 self.assertFalse((destination / "app/data").exists())
+                verified = subprocess.run([sys.executable, str(destination / "app/scripts/sync_antifox.py"), "--check"],
+                                          cwd=destination / "app", capture_output=True, text=True, timeout=15)
+                self.assertEqual(verified.returncode, 0, verified.stderr)
 
 
 if __name__ == "__main__":

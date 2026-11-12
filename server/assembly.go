@@ -10,6 +10,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/skillknowledge"
 	"github.com/Autumn-27/artex/skillprovider"
 	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/skill"
@@ -53,6 +54,25 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 				}
 				if len(reg.List()) == 0 {
 					reg = nil
+				}
+			}
+		}
+		// Search uses exactly the same library/visibility-filtered registry as Skill.
+		// It returns reference text without invoking reg.OnInvoke or unlocking MCPs.
+		// Raw augmentation must not expose tools an agent was never bound to.
+		// ToolResolve still applies the final bindings, overrides and disable flag.
+		knowledgeBindings := map[string]bool{}
+		if rows, err := pg.ListTools(); err == nil {
+			for _, row := range rows {
+				if row.System && row.Kind == "builtin" && row.Enabled && contains(row.Agents, a.Key) && (row.Key == "search_knowledge" || row.Key == "list_knowledge_categories") {
+					knowledgeBindings[row.Key] = true
+				}
+			}
+		}
+		if len(knowledgeBindings) > 0 {
+			for _, tool := range skillknowledge.Tools(reg) {
+				if knowledgeBindings[tool.Name()] {
+					extra = append(extra, tool)
 				}
 			}
 		}

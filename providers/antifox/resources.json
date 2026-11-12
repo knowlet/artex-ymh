@@ -1,0 +1,104 @@
+[
+  {
+    "source_path": "skills/report-generation/prompts/report-level.tmpl",
+    "destination": "skills/antifox-report-generation/references/upstream/prompts/report-level.tmpl",
+    "sha256": "a725d0bad58b59603361a9a5482a8993dc05a1a1489149a915787561a0cd38cb",
+    "bytes": 1292
+  },
+  {
+    "source_path": "skills/report-generation/prompts/vuln-narrative.tmpl",
+    "destination": "skills/antifox-report-generation/references/upstream/prompts/vuln-narrative.tmpl",
+    "sha256": "809bba75b06ebc9785e6ada4895255639187a1aaadece95a3e852742e9700638",
+    "bytes": 2320
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/en-US/checklist.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/en-US/checklist.json",
+    "sha256": "148be0f0d20c94d43109f48fdee896ca0cc231077d3f7d068f698d29ceba5652",
+    "bytes": 10675
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/en-US/methodology.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/en-US/methodology.json",
+    "sha256": "3b381229ab5aa95a5ca762405f742433c72b7e17fe2c18c344a553aac48b2b5b",
+    "bytes": 2062
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/en-US/personnel.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/en-US/personnel.json",
+    "sha256": "e7e885bd1ab5b387c2ce153ee0991641d9e84b3237f40fbbaa19943ce721c158",
+    "bytes": 239
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/en-US/standards.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/en-US/standards.json",
+    "sha256": "1e3629105f3fcc98d7402c584b2f43a2695b830943095a0890dc2ea0385070b8",
+    "bytes": 500
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/en-US/tools.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/en-US/tools.json",
+    "sha256": "94b4c9c6c6b9b4691ff5b216b9b09debeecb2b561e20d8f3332de2fdb01f3ef3",
+    "bytes": 1000
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/zh-CN/checklist.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/zh-CN/checklist.json",
+    "sha256": "be38b3feca4408eb0a3ed6d9b6a0c1352337284e9384519028ec168221aa8cd8",
+    "bytes": 8504
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/zh-CN/methodology.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/zh-CN/methodology.json",
+    "sha256": "0437b58db29e843ef34464c9359adabea8111cc3598a0259c104cb5eff7cd5e7",
+    "bytes": 1548
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/zh-CN/personnel.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/zh-CN/personnel.json",
+    "sha256": "fd452a349fccb2684ddf55debd26379558f8935cfdd7bc8e7bd5fa90c13b271f",
+    "bytes": 217
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/zh-CN/standards.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/zh-CN/standards.json",
+    "sha256": "885f01299e1cf5234e4900275c541510a740fd074a481a8ec18540dcd0fd11c2",
+    "bytes": 411
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/zh-CN/tools.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/zh-CN/tools.json",
+    "sha256": "0027337f1284cd14b2e20e463a39f471fd615dfe1d1390e78a795db585203359",
+    "bytes": 797
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/zh-TW/checklist.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/zh-TW/checklist.json",
+    "sha256": "b99182928010f6ac71147328625b08e352c0fbd137dde84f82ec7ea42073d254",
+    "bytes": 8937
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/zh-TW/methodology.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/zh-TW/methodology.json",
+    "sha256": "201c9d9bdda4c5963556fc1ed54e8df5d410beca50be4d8b75b574bfa6c9ea82",
+    "bytes": 1548
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/zh-TW/personnel.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/zh-TW/personnel.json",
+    "sha256": "6d5c7977c78ffe1cf08e160ff7ef038e9c66928a8d37c7d5363b4f6e9c112fb5",
+    "bytes": 217
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/zh-TW/standards.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/zh-TW/standards.json",
+    "sha256": "4550176e2da93f8cdbf4ed5c3f0960bcfc618c722504eef3d524f41d9e0fbb86",
+    "bytes": 411
+  },
+  {
+    "source_path": "skills/report-generation/skeleton/zh-TW/tools.json",
+    "destination": "skills/antifox-report-generation/references/upstream/skeleton/zh-TW/tools.json",
+    "sha256": "ed37aa93ce8488a5bc9840b84123f22fa468d89c26df79f1d17b1b14ceb1ae19",
+    "bytes": 827
+  }
+]
