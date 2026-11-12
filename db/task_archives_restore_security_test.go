@@ -114,7 +114,7 @@ func TestSecurityPGArchiveRestoreDropsSkippedAssetReferences(t *testing.T) {
 			if err := d.SetPaused(task.ID, true); err != nil {
 				t.Fatal(err)
 			}
-			const safeURL = "https://archive-safe.example.test/"
+			const safeURL = "https://archive-safe.example.test/path"
 			const unsafeURL = "javascript:alert(1)"
 			// Insert only the two services owned by this fixture. Upserting with
 			// TaskID would also associate derived host assets, obscuring the exact
