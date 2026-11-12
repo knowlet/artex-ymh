@@ -250,7 +250,7 @@ func (e *Engine) doHTTP(id int64, rawURL string) {
 		ContentLength: &bodyLen,
 		PageTitle:     title,
 	}); err != nil {
-		log.Printf("[enrich] HTTP 服务资产更新失败 id=%d url=%s: %v", id, rawURL, err)
+		log.Printf("[enrich] HTTP 服务资产更新失败 id=%d: %v", id, err)
 	}
 }
 

@@ -112,8 +112,10 @@
 - PR #17 原本先刪除 URL 的空白／控制字元才驗證，卻保留原值交給儲存解析器。新增案例在舊實作出現 17 個失敗子案例；現在驗證原值，拒絕 Unicode 空白與控制字元，保留合法 fragment、百分比編碼及既有去重語意。
 - 歸檔還原略過不安全 HTTP 資產時，舊 ID 原本仍出現在 anchors、task links、findings 與 exploration node payload，可能造成外鍵失敗或連到占用該 ID 的無關資產。現在使用明確的略過標記並刪除相關參照，保留 finding／node 內容與合法資產映射；驗證提前到既有 URL 查找之前，避免重新連結歷史不安全 URL。
 - 本機回歸先觀察到 6 個參照清理斷言失敗；修後 `TestSecurityArchiveRemapDropsSkippedAssetReferences` 與 `TestSecurityArchiveRejectsUnsafeURLBeforeLookup` 通過。完整 PostgreSQL 還原案例涵蓋舊 ID 不存在、已被占用及既有不安全 URL，並驗證正常資產的自然鍵映射。
+- 後續審查確認 `enrich` 的更新失敗日誌會輸出完整 URL，包含 userinfo、query 與 fragment 中的秘密。改為只記錄資產 ID 與錯誤；`TestSecurityHTTPProbeFailureDoesNotLogURLSecrets` 以受控 HTTP response 和已關閉的 SQL pool 重現原本洩漏，修後通過，不需網路或真實憑證。
 - 本機 URL 測試 2 個頂層／18 個子案例通過；前端 auth-refresh／safe-href 8 項通過。PostgreSQL、HTTP listener 受 sandbox 限制；全庫 vet/build 另受未快取的 `mvdan.cc/sh/v3@v3.14.1` 依賴下載限制，不能把本機結果稱為完整驗收。
 - CI 已明確納入 URL 測試，以及 3 個 URL／歸檔 PostgreSQL 必跑測試；未執行或 skip 仍使安全 gate 失敗。本次最終驗證須查看 PR #17 新 head 的 CI，不沿用舊 head 綠燈。
+- 中途提交 `9a4b588` 的 [安全 CI](https://github.com/knowlet/artex-ymh/actions/runs/43182927048) 已通過 131 項安全專項（0 skip）、14 項必跑 PG 回歸、race detector、全套 Go vet/test 與前端檢查；最後的日誌補修仍須由新 head 再驗證。
 
 ---
 
