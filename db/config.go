@@ -1040,7 +1040,9 @@ func (d *DB) SetAgentSkillVisibilityInLibrary(agentID int64, names []string, lib
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM agent_skill_visibility WHERE agent_id=$1 AND library_id=$2`, agentID, libraryID); err != nil {
+	// Retain disabled rows as explicit choices. Deleting them lets startup's
+	// insert-if-absent defaults silently re-enable shipped skills on the next boot.
+	if _, err := tx.Exec(`UPDATE agent_skill_visibility SET enabled=false WHERE agent_id=$1 AND library_id=$2`, agentID, libraryID); err != nil {
 		return err
 	}
 	for _, name := range names {
@@ -1064,7 +1066,11 @@ func (d *DB) ToggleSkillVisibilityInLibrary(agentID int64, skillName string, on 
 ON CONFLICT (agent_id,skill_name) DO UPDATE SET enabled=true,library_id=EXCLUDED.library_id`, agentID, skillName, libraryID)
 		return err
 	}
-	_, err := d.Exec(`DELETE FROM agent_skill_visibility WHERE agent_id=$1 AND skill_name=$2 AND library_id=$3`, agentID, skillName, libraryID)
+	// A revocation records a disabled row even before a default is seeded. It may
+	// only disable the current library; a same-name grant in another library stays.
+	_, err := d.Exec(`INSERT INTO agent_skill_visibility(agent_id,skill_name,library_id,enabled) VALUES ($1,$2,$3,false)
+ON CONFLICT (agent_id,skill_name) DO UPDATE SET enabled=false
+WHERE agent_skill_visibility.library_id=EXCLUDED.library_id`, agentID, skillName, libraryID)
 	return err
 }
 
