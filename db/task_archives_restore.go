@@ -437,6 +437,9 @@ func archiveRowString(row map[string]any, key string) string {
 	return v
 }
 
+// The returned map uses zero for deliberately skipped assets. Keeping this
+// distinct from an absent entry lets reference restoration discard their old
+// IDs even when those IDs now belong to unrelated live assets.
 func restoreArchiveAssets(tx *sql.Tx, taskID int64, raw json.RawMessage) (map[int64]int64, []string, error) {
 	rows, err := decodeArchiveRows(raw)
 	if err != nil {
@@ -448,6 +451,15 @@ func restoreArchiveAssets(tx *sql.Tx, taskID int64, raw json.RawMessage) (map[in
 		oldID, ok := jsonInt64(row["id"])
 		if !ok || oldID <= 0 {
 			return nil, nil, errors.New("archived asset has invalid id")
+		}
+		// Validate before natural-key reuse as well as insertion: legacy unsafe
+		// URLs already present in the live store must not regain task ownership.
+		if archiveRowString(row, "type") == "service" && strings.EqualFold(archiveRowString(row, "service_type"), "http") {
+			if err := endpoint.ValidateAssetURL(archiveRowString(row, "url")); err != nil {
+				mapping[oldID] = 0
+				warnings = append(warnings, fmt.Sprintf("资产 %d 因无效 HTTP URL 已跳过: %v", oldID, err))
+				continue
+			}
 		}
 		if companyID, ok := jsonInt64(row["company_id"]); ok && companyID > 0 && !rowExists(tx, "companies", companyID) {
 			row["company_id"] = nil
@@ -472,14 +484,6 @@ func restoreArchiveAssets(tx *sql.Tx, taskID int64, raw json.RawMessage) (map[in
 			warnings = append(warnings, fmt.Sprintf("资产 ID %d 已被占用，恢复为 %d", oldID, candidate))
 		}
 		row["task_ids"] = mergeJSONTaskID(row["task_ids"], taskID)
-		if archiveRowString(row, "type") == "service" && strings.EqualFold(archiveRowString(row, "service_type"), "http") {
-			if u := archiveRowString(row, "url"); u != "" {
-				if err := endpoint.ValidateAssetURL(u); err != nil {
-					warnings = append(warnings, fmt.Sprintf("资产 %d 因无效 HTTP URL 已跳过: %v", oldID, err))
-					continue
-				}
-			}
-		}
 		assetRaw, _ := json.Marshal(row)
 		res, err := tx.Exec(`INSERT INTO assets SELECT * FROM json_populate_record(NULL::assets,$1::json) ON CONFLICT DO NOTHING`, string(assetRaw))
 		if err != nil {
@@ -569,14 +573,19 @@ func remapArchiveAssetReferences(tables map[string]json.RawMessage, mapping map[
 		if err != nil {
 			return nil, err
 		}
+		kept := make([]map[string]any, 0, len(rows))
 		for _, row := range rows {
 			if old, ok := jsonInt64(row["asset_id"]); ok {
 				if replacement, exists := mapping[old]; exists {
+					if replacement == 0 {
+						continue
+					}
 					row["asset_id"] = replacement
 				}
 			}
+			kept = append(kept, row)
 		}
-		out[table], _ = json.Marshal(rows)
+		out[table], _ = json.Marshal(kept)
 	}
 	for _, table := range []string{"exploration_nodes", "findings"} {
 		rows, err := decodeArchiveRows(tables[table])
@@ -594,14 +603,19 @@ func remapArchiveAssetReferences(tables map[string]json.RawMessage, mapping map[
 				container = payload
 			}
 			if values, ok := container[key].([]any); ok {
-				for i, value := range values {
+				kept := make([]any, 0, len(values))
+				for _, value := range values {
 					if old, ok := jsonInt64(value); ok {
 						if replacement, exists := mapping[old]; exists {
-							values[i] = replacement
+							if replacement == 0 {
+								continue
+							}
+							value = replacement
 						}
 					}
+					kept = append(kept, value)
 				}
-				container[key] = values
+				container[key] = kept
 			}
 		}
 		out[table], _ = json.Marshal(rows)

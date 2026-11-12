@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"unicode"
 )
 
 var ErrCredentialDestination = errors.New("目标地址、提供商或代理已更改，请重新填写凭据")
@@ -75,24 +76,21 @@ func URL(raw string) (string, error) {
 // ValidateAssetURL checks that a service URL is safe to persist and later
 // render as a clickable http(s) link. It does not rewrite the URL string, so
 // storage keys and operator-entered spelling stay stable (fragments and paths
-// are preserved; only scheme/host sanity is enforced).
+// are preserved; scheme/host sanity is enforced without sanitizing a separate
+// copy that could differ from what the caller stores).
 func ValidateAssetURL(raw string) error {
-	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return errors.New("url is required")
 	}
-	// Mirror web safeHref: strip ASCII control/space before scheme detection.
-	var b strings.Builder
+	// Unlike rendering-time filtering, storage validation must accept or reject
+	// the original value. Removing whitespace here could make validation succeed
+	// while the persistence parser cannot extract the host, port, or scheme.
 	for _, r := range raw {
-		if r > ' ' {
-			b.WriteRune(r)
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return errors.New("资产 URL 不可包含空白或控制字符")
 		}
 	}
-	cleaned := b.String()
-	if cleaned == "" {
-		return errors.New("资产 URL 无效")
-	}
-	u, err := url.Parse(cleaned)
+	u, err := url.Parse(raw)
 	if err != nil || u == nil || u.Opaque != "" || u.Hostname() == "" {
 		return errors.New("资产 URL 无效")
 	}
