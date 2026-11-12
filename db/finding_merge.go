@@ -279,8 +279,14 @@ FOR UPDATE`, in.TaskID, FindingConfirmed, FindingPending, in.AssetIDs[0])
 // 流量快照,返回指向既有记录的 RecordedFinding(Merged=true)。
 func mergeFindingTx(tx *sql.Tx, cand *DBFinding, in RecordFindingInput, prepared []PreparedTrafficEvidence) (*RecordedFinding, error) {
 	severity, summary, evidence := mergeFindingFields(*cand, in, time.Now())
-	if _, err := tx.Exec(`UPDATE findings SET severity=$2, summary=$3, evidence=$4 WHERE id=$1`,
-		cand.ID, severity, summary, evidence); err != nil {
+	mergeSQL := `UPDATE findings SET severity=$2, summary=$3, evidence=$4`
+	mergeArgs := []any{cand.ID, severity, summary, evidence}
+	if len(in.Reproduction) > 2 {
+		mergeSQL += `, reproduction=$5`
+		mergeArgs = append(mergeArgs, string(in.Reproduction))
+	}
+	mergeSQL += ` WHERE id=$1`
+	if _, err := tx.Exec(mergeSQL, mergeArgs...); err != nil {
 		return nil, err
 	}
 	// 节点 payload 同步(与 setFindingCol 同款 jsonb_set),保持按任务 发现 Tab

@@ -469,6 +469,21 @@ export interface FindingAsset {
   label: string;
 }
 
+export interface ReproStep {
+  request?: string;
+  response?: string;
+  expected?: string;
+  proves?: string;
+  exchange_id?: string;
+}
+
+export interface FindingReproduction {
+  entry_point?: string;
+  prerequisites?: string[];
+  steps?: ReproStep[];
+  provenance?: string;
+}
+
 export interface Finding {
   traffic_count?: number;
   evidence_version?: number;
@@ -491,6 +506,7 @@ export interface Finding {
   inherited?: boolean;
   assets?: FindingAsset[];
   ts: string;
+  reproduction?: FindingReproduction | null;
 }
 
 // FindingsPage 是发现列表的服务端分页响应。

@@ -327,6 +327,7 @@ type FindingDTO struct {
 	Inherited       bool              `json:"inherited,omitempty"`
 	Assets          []FindingAssetDTO `json:"assets,omitempty"`
 	TS              string            `json:"ts"`
+	Reproduction    any               `json:"reproduction,omitempty"` // 结构化复现；仅详情接口填充
 }
 
 // FindingAssetDTO is one asset a finding is anchored to, pre-labelled for display.
