@@ -1073,6 +1073,15 @@ func (t *Traffic) BlobRange(hash string, offset, length int64) (data []byte, tot
 	return buf[:n], size, nil
 }
 
+// MetaByID loads one exchange's index metadata (no bodies).
+func (t *Traffic) MetaByID(id string) (ExchangeMeta, error) {
+	var m ExchangeMeta
+	err := t.db.QueryRow(`SELECT id,ts,host,method,url_template,url,status,content_type,resp_len,path
+FROM exchanges WHERE id=?`, id).Scan(
+		&m.ID, &m.TS, &m.Host, &m.Method, &m.URLTemplate, &m.URL, &m.Status, &m.ContentType, &m.RespLen, &m.Path)
+	return m, err
+}
+
 // ExchangeMeta is one row of the index (returned by Search).
 type ExchangeMeta struct {
 	ID          string `json:"id"`
