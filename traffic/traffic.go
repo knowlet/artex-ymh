@@ -561,12 +561,87 @@ func (t *Traffic) initIndex() error {
 	if _, err := conn.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_ex_repro ON exchanges(method, url_template, req_path, ts)`); err != nil {
 		return err
 	}
+	if err := t.backfillReqPath(ctx, conn); err != nil {
+		return err
+	}
 	if _, err := conn.ExecContext(ctx, ftsSchema); err != nil {
 		log.Printf("[traffic] 全文索引不可用，正文搜索将被禁用（元数据搜索不受影响）：%v", err)
 		return nil
 	}
 	t.fts = true
 	return nil
+}
+
+func (t *Traffic) backfillReqPath(ctx context.Context, conn *sql.Conn) error {
+	rows, err := conn.QueryContext(ctx, `SELECT id, url FROM exchanges WHERE req_path='' AND url!=''`)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such column") {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, raw string
+		if rows.Scan(&id, &raw) != nil {
+			continue
+		}
+		rp := urlPathFromRaw(raw)
+		if rp == "" {
+			continue
+		}
+		if _, err := conn.ExecContext(ctx, `UPDATE exchanges SET req_path=? WHERE id=?`, rp, id); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// initIndexReadOnly probes an already-migrated on-disk index. No DDL — safe on mode=ro.
+func (t *Traffic) initIndexReadOnly() error {
+	ctx := context.Background()
+	conn, err := t.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	var exchanges int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='exchanges'`).Scan(&exchanges); err != nil {
+		return err
+	}
+	if exchanges == 0 {
+		return fmt.Errorf("traffic: index missing exchanges table")
+	}
+	var mode int
+	if err := conn.QueryRowContext(ctx, `PRAGMA auto_vacuum`).Scan(&mode); err != nil {
+		return err
+	}
+	t.incrementalVacuum = mode == autoVacuumIncremental
+	var fts int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ex_fts'`).Scan(&fts); err != nil {
+		return err
+	}
+	t.fts = fts > 0
+	return nil
+}
+
+// migrateIndexFile applies schema migrations and req_path backfill writable, then closes.
+func migrateIndexFile(dir string) error {
+	index := filepath.Join(dir, "_index", "index.sqlite")
+	if _, err := os.Stat(index); err != nil {
+		return err
+	}
+	if strings.ContainsRune(index, '?') {
+		return fmt.Errorf("traffic: index path must not contain '?': %s", index)
+	}
+	dsn := "file:" + index + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	t := &Traffic{dir: dir, db: db, closed: make(chan struct{})}
+	return t.initIndex()
 }
 
 // hostOnly strips an optional :port, so passthrough keys match whether the host
@@ -709,20 +784,17 @@ func (t *Traffic) Close() error {
 
 // OpenIndexReadOnly opens an existing traffic index for queries only (no MITM listener).
 func OpenIndexReadOnly(dir string) (*Traffic, error) {
-	index := filepath.Join(dir, "_index", "index.sqlite")
-	if _, err := os.Stat(index); err != nil {
+	if err := migrateIndexFile(dir); err != nil {
 		return nil, err
 	}
-	if strings.ContainsRune(index, '?') {
-		return nil, fmt.Errorf("traffic: read-only index path must not contain '?': %s", index)
-	}
+	index := filepath.Join(dir, "_index", "index.sqlite")
 	dsn := "file:" + index + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&mode=ro"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
 	t := &Traffic{dir: dir, db: db, closed: make(chan struct{})}
-	if err := t.initIndex(); err != nil {
+	if err := t.initIndexReadOnly(); err != nil {
 		db.Close()
 		return nil, err
 	}
