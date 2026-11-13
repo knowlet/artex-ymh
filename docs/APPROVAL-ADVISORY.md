@@ -56,6 +56,7 @@ HTTP 200：已保存／重用結果（仍須檢查 state，200 不代表模型�
 - `db`：多連線單一租約、持久快取、人工決策、過期租約、舊回應、動作變更、原 audit 與舊紀錄缺失快照保留。
 - `server`：實際 HTTP 路由／JWT、GET 不呼叫、手動重試與快取、重複點擊、人工決策競態、模型格式／工具／逾時失敗、敏感錯誤不外洩、scope／背景界線、取消與容量。
 - `web/tests/approval-advisory.test.mjs`：結果與紀錄 ID／狀態一致性、已完成／失效建議、租約有界輪詢。另執行 TypeScript 型別檢查與正式靜態建置。
+- `cd web && npm run test:e2e:config`：驗證兩套 Playwright 測試探索互斥，不啟動瀏覽器、後端或模型。`npm run test:e2e` 保留 reproduction harness；`npm run e2e:advisory` 使用獨立 `playwright.advisory.config.ts`，需先啟動 advisory harness。
 - 本機瀏覽器 E2E（`scripts/e2e-advisory.sh`，Playwright + 拋棄式 PG + `advisoryFake`）：驗證審批列表、背景自動狀態文案與取消標籤；不跑真實 LLM。
 
 這些自動測試不等於真實 provider 行為、多 replica 壓力或正式部署已驗收；發布時應另外檢查實際 UI、反向代理逾時及既有審批計時設定。

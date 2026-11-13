@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/Autumn-27/artex/db"
 )
@@ -20,3 +21,13 @@ func (t *ToolSet) SetFindingRecorder(r FindingRecorder)   { t.findingRecorder = 
 func (w *Worker) SetFindingRecorder(r FindingRecorder)    { w.findingRecorder = r }
 func (p *Planner) SetFindingRecorder(r FindingRecorder)   { p.findingRecorder = r }
 func (m *MainAgent) SetFindingRecorder(r FindingRecorder) { m.findingRecorder = r }
+
+func (w *Worker) SetTrafficResolver(fn func(int64, json.RawMessage) json.RawMessage) {
+	w.trafficResolver = fn
+}
+func (p *Planner) SetTrafficResolver(fn func(int64, json.RawMessage) json.RawMessage) {
+	p.trafficResolver = fn
+}
+func (m *MainAgent) SetTrafficResolver(fn func(int64, json.RawMessage) json.RawMessage) {
+	m.trafficResolver = fn
+}

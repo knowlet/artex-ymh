@@ -46,4 +46,4 @@ for _ in $(seq 1 90); do
 done
 
 ADVISORY_E2E_ENV_FILE="$ADVISORY_E2E_ENV_FILE" ADVISORY_E2E_WEB_URL="$ADVISORY_E2E_WEB_URL" \
-  npx playwright test e2e/advisory-auto.spec.ts --reporter=list
+  npx playwright test -c playwright.advisory.config.ts --reporter=list

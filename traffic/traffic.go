@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS exchanges (
   content_type TEXT,
   req_len      INTEGER,
   resp_len     INTEGER,
-  path         TEXT
+  path         TEXT,
+  req_path     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_ex_host ON exchanges(host);
 CREATE INDEX IF NOT EXISTS idx_ex_tmpl ON exchanges(host, url_template);
@@ -108,6 +109,8 @@ const (
 	maxBlobRead = 8 * 1024
 	// autoVacuumIncremental is SQLite's numeric value for auto_vacuum=incremental.
 	autoVacuumIncremental = 2
+	// indexUserVersionReqPath: req_path column present and url→req_path backfill done.
+	indexUserVersionReqPath = 1
 	// reclaimChunkPages bounds how much index space one locked step returns to the
 	// filesystem (pages are 4KiB, so ~32MB). Reclamation holds the write lock, and
 	// record() runs before go-mitmproxy replies to the client, so an unbounded
@@ -553,12 +556,136 @@ func (t *Traffic) initIndex() error {
 	if _, err := conn.ExecContext(ctx, indexSchema); err != nil {
 		return err
 	}
+	if _, err := conn.ExecContext(ctx, `ALTER TABLE exchanges ADD COLUMN req_path TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_ex_repro ON exchanges(method, url_template, req_path, ts)`); err != nil {
+		return err
+	}
+	if err := t.backfillReqPath(ctx, conn); err != nil {
+		return err
+	}
 	if _, err := conn.ExecContext(ctx, ftsSchema); err != nil {
 		log.Printf("[traffic] 全文索引不可用，正文搜索将被禁用（元数据搜索不受影响）：%v", err)
 		return nil
 	}
 	t.fts = true
 	return nil
+}
+
+func (t *Traffic) backfillReqPath(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+
+	var ver int
+	if err := conn.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&ver); err != nil {
+		return err
+	}
+	if ver >= indexUserVersionReqPath {
+		if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+			return err
+		}
+		committed = true
+		return nil
+	}
+
+	rows, err := conn.QueryContext(ctx, `SELECT id, url FROM exchanges WHERE req_path='' AND url!=''`)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such column") {
+			return nil
+		}
+		return err
+	}
+	type backfillRow struct {
+		id   string
+		path string
+	}
+	var todo []backfillRow
+	for rows.Next() {
+		var id, raw string
+		if rows.Scan(&id, &raw) != nil {
+			continue
+		}
+		rp := urlPathFromRaw(raw)
+		if rp == "" {
+			continue
+		}
+		todo = append(todo, backfillRow{id: id, path: rp})
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range todo {
+		if _, err := conn.ExecContext(ctx, `UPDATE exchanges SET req_path=? WHERE id=?`, item.path, item.id); err != nil {
+			return err
+		}
+	}
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, indexUserVersionReqPath)); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// initIndexReadOnly probes an already-migrated on-disk index. No DDL — safe on mode=ro.
+func (t *Traffic) initIndexReadOnly() error {
+	ctx := context.Background()
+	conn, err := t.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	var exchanges int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='exchanges'`).Scan(&exchanges); err != nil {
+		return err
+	}
+	if exchanges == 0 {
+		return fmt.Errorf("traffic: index missing exchanges table")
+	}
+	var mode int
+	if err := conn.QueryRowContext(ctx, `PRAGMA auto_vacuum`).Scan(&mode); err != nil {
+		return err
+	}
+	t.incrementalVacuum = mode == autoVacuumIncremental
+	var fts int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ex_fts'`).Scan(&fts); err != nil {
+		return err
+	}
+	t.fts = fts > 0
+	return nil
+}
+
+// migrateIndexFile applies schema migrations and req_path backfill writable, then closes.
+func migrateIndexFile(dir string) error {
+	index := filepath.Join(dir, "_index", "index.sqlite")
+	if _, err := os.Stat(index); err != nil {
+		return err
+	}
+	if strings.ContainsRune(index, '?') {
+		return fmt.Errorf("traffic: index path must not contain '?': %s", index)
+	}
+	dsn := "file:" + index + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	t := &Traffic{dir: dir, db: db, closed: make(chan struct{})}
+	return t.initIndex()
 }
 
 // hostOnly strips an optional :port, so passthrough keys match whether the host
@@ -689,11 +816,33 @@ func (t *Traffic) Close() error {
 		t.closeOnce.Do(func() { close(t.closed) })
 	}
 	t.reaping.Wait()
-	err := t.proxy.Close()
+	var err error
+	if t.proxy != nil {
+		err = t.proxy.Close()
+	}
 	if derr := t.db.Close(); err == nil {
 		err = derr
 	}
 	return err
+}
+
+// OpenIndexReadOnly opens an existing traffic index for queries only (no MITM listener).
+func OpenIndexReadOnly(dir string) (*Traffic, error) {
+	if err := migrateIndexFile(dir); err != nil {
+		return nil, err
+	}
+	index := filepath.Join(dir, "_index", "index.sqlite")
+	dsn := "file:" + index + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&mode=ro"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	t := &Traffic{dir: dir, db: db, closed: make(chan struct{})}
+	if err := t.initIndexReadOnly(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return t, nil
 }
 
 // stopping reports whether Close has been called. A nil channel (the zero value)
@@ -788,10 +937,14 @@ func (t *Traffic) record(f *mproxy.Flow) {
 
 	// path stays empty for db-resident exchanges; a non-empty path marks a legacy
 	// row whose bodies still live in the old on-disk tree (see Get).
-	res, err := tx.Exec(`INSERT OR REPLACE INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path)
-VALUES(?,?,?,?,?,?,?,?,?,?,'')`,
+	reqPath := f.Request.URL.EscapedPath()
+	if reqPath == "" {
+		reqPath = "/"
+	}
+	res, err := tx.Exec(`INSERT OR REPLACE INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path,req_path)
+VALUES(?,?,?,?,?,?,?,?,?,?,'',?)`,
 		id, now.Unix(), host, method, tmpl, url, f.Response.StatusCode, ct,
-		len(f.Request.Body), len(f.Response.Body))
+		len(f.Request.Body), len(f.Response.Body), reqPath)
 	if err != nil {
 		log.Printf("[traffic] 记录 %s 失败（写索引）：%v", url, err)
 		return
@@ -1071,6 +1224,15 @@ func (t *Traffic) BlobRange(hash string, offset, length int64) (data []byte, tot
 		return nil, size, err
 	}
 	return buf[:n], size, nil
+}
+
+// MetaByID loads one exchange's index metadata (no bodies).
+func (t *Traffic) MetaByID(id string) (ExchangeMeta, error) {
+	var m ExchangeMeta
+	err := t.db.QueryRow(`SELECT id,ts,host,method,url_template,url,status,content_type,resp_len,path
+FROM exchanges WHERE id=?`, id).Scan(
+		&m.ID, &m.TS, &m.Host, &m.Method, &m.URLTemplate, &m.URL, &m.Status, &m.ContentType, &m.RespLen, &m.Path)
+	return m, err
 }
 
 // ExchangeMeta is one row of the index (returned by Search).

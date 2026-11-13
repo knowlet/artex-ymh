@@ -9,6 +9,7 @@ on:
       - 'server/**'
       - 'web/**'
       - 'docs/APPROVAL-ADVISORY.md'
+      - 'scripts/e2e-advisory.sh'
       - '.github/workflows/approval-advisory.yml'
   workflow_dispatch:
 
@@ -133,6 +134,7 @@ jobs:
         run: |
           set -euo pipefail
           npm ci --ignore-scripts
+          npm run test:e2e:config
           node --experimental-strip-types --test tests/approval-advisory.test.mjs
           npx --no-install tsc --noEmit
           npm run build:static
