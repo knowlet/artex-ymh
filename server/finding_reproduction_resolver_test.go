@@ -24,8 +24,8 @@ func TestLinkReproductionStepsPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { tr.Close() })
-	_, err = tr.DB().Exec(`INSERT INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path)
-VALUES ('b1',120,'h','GET','/b','http://h/b',200,'text/plain',0,0,'')`)
+	_, err = tr.DB().Exec(`INSERT INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path,req_path)
+VALUES ('b1',120,'h','GET','/b','http://h/b',200,'text/plain',0,0,'','/b')`)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS exchanges (
   content_type TEXT,
   req_len      INTEGER,
   resp_len     INTEGER,
-  path         TEXT
+  path         TEXT,
+  req_path     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_ex_host ON exchanges(host);
 CREATE INDEX IF NOT EXISTS idx_ex_tmpl ON exchanges(host, url_template);
@@ -553,6 +554,13 @@ func (t *Traffic) initIndex() error {
 	if _, err := conn.ExecContext(ctx, indexSchema); err != nil {
 		return err
 	}
+	if _, err := conn.ExecContext(ctx, `ALTER TABLE exchanges ADD COLUMN req_path TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_ex_repro ON exchanges(method, url_template, req_path, ts)`); err != nil {
+		return err
+	}
 	if _, err := conn.ExecContext(ctx, ftsSchema); err != nil {
 		log.Printf("[traffic] 全文索引不可用，正文搜索将被禁用（元数据搜索不受影响）：%v", err)
 		return nil
@@ -705,10 +713,10 @@ func OpenIndexReadOnly(dir string) (*Traffic, error) {
 	if _, err := os.Stat(index); err != nil {
 		return nil, err
 	}
-	dsn := index
-	if !strings.ContainsRune(index, '?') {
-		dsn = "file:" + index + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&mode=ro"
+	if strings.ContainsRune(index, '?') {
+		return nil, fmt.Errorf("traffic: read-only index path must not contain '?': %s", index)
 	}
+	dsn := "file:" + index + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&mode=ro"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -717,11 +725,6 @@ func OpenIndexReadOnly(dir string) (*Traffic, error) {
 	if err := t.initIndex(); err != nil {
 		db.Close()
 		return nil, err
-	}
-	if _, err := db.Exec(ftsSchema); err != nil {
-		log.Printf("[traffic] 只读索引全文搜索不可用: %v", err)
-	} else {
-		t.fts = true
 	}
 	return t, nil
 }
@@ -818,10 +821,14 @@ func (t *Traffic) record(f *mproxy.Flow) {
 
 	// path stays empty for db-resident exchanges; a non-empty path marks a legacy
 	// row whose bodies still live in the old on-disk tree (see Get).
-	res, err := tx.Exec(`INSERT OR REPLACE INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path)
-VALUES(?,?,?,?,?,?,?,?,?,?,'')`,
+	reqPath := f.Request.URL.EscapedPath()
+	if reqPath == "" {
+		reqPath = "/"
+	}
+	res, err := tx.Exec(`INSERT OR REPLACE INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path,req_path)
+VALUES(?,?,?,?,?,?,?,?,?,?,'',?)`,
 		id, now.Unix(), host, method, tmpl, url, f.Response.StatusCode, ct,
-		len(f.Request.Body), len(f.Response.Body))
+		len(f.Request.Body), len(f.Response.Body), reqPath)
 	if err != nil {
 		log.Printf("[traffic] 记录 %s 失败（写索引）：%v", url, err)
 		return

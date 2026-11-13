@@ -70,17 +70,13 @@ type reproCand struct {
 // the bare endpoint matched, or the status doesn't single one out — never guessing
 // among equals (a wrong evidence link is worse than none).
 func (t *Traffic) pickBest(where string, args []any, wantStatus int, narrowed bool, concretePath string) (string, bool) {
-	cands := t.queryCandidates(where, args, 50, "DESC")
-	cands = t.filterCandidatesLiteralPath(cands, concretePath)
+	cands := t.queryCandidates(where, args, 50, "DESC", concretePath)
 	cands = filterByExpectedStatus(cands, wantStatus)
 	switch {
 	case len(cands) == 0:
 		return "", false
 	case len(cands) == 1:
-		if t.exchangeMatchesConcretePath(cands[0].id, concretePath) {
-			return cands[0].id, true
-		}
-		return "", false
+		return cands[0].id, true
 	case !narrowed:
 		return "", false // only the endpoint matched, still many → too ambiguous
 	}
@@ -96,11 +92,11 @@ func (t *Traffic) pickBest(where string, args []any, wantStatus int, narrowed bo
 		return hit, n == 1
 	}
 	if wantStatus > 0 {
-		if id, ok := uniq(func(s int) bool { return s == wantStatus }); ok && t.exchangeMatchesConcretePath(id, concretePath) {
+		if id, ok := uniq(func(s int) bool { return s == wantStatus }); ok {
 			return id, true
 		}
 	}
-	if id, ok := uniq(func(s int) bool { return s >= 200 && s < 300 }); ok && t.exchangeMatchesConcretePath(id, concretePath) {
+	if id, ok := uniq(func(s int) bool { return s >= 200 && s < 300 }); ok {
 		return id, true
 	}
 	return "", false // still ambiguous → abstain
@@ -110,17 +106,13 @@ func (t *Traffic) pickBest(where string, args []any, wantStatus int, narrowed bo
 // match (multi-step ordered resolution) and requires content narrowing before
 // committing when multiple rows remain.
 func (t *Traffic) pickEarliestDisambiguated(where string, args []any, wantStatus int, narrowed bool, concretePath string) (string, int64, bool) {
-	cands := t.queryCandidates(where, args, 50, "ASC")
-	cands = t.filterCandidatesLiteralPath(cands, concretePath)
+	cands := t.queryCandidates(where, args, 50, "ASC", concretePath)
 	cands = filterByExpectedStatus(cands, wantStatus)
 	switch {
 	case len(cands) == 0:
 		return "", 0, false
 	case len(cands) == 1:
-		if t.exchangeMatchesConcretePath(cands[0].id, concretePath) {
-			return cands[0].id, cands[0].ts, true
-		}
-		return "", 0, false
+		return cands[0].id, cands[0].ts, true
 	case !narrowed:
 		return "", 0, false
 	}
@@ -135,11 +127,11 @@ func (t *Traffic) pickEarliestDisambiguated(where string, args []any, wantStatus
 		return hit, n == 1
 	}
 	if wantStatus > 0 {
-		if c, ok := uniq(func(s int) bool { return s == wantStatus }); ok && t.exchangeMatchesConcretePath(c.id, concretePath) {
+		if c, ok := uniq(func(s int) bool { return s == wantStatus }); ok {
 			return c.id, c.ts, true
 		}
 	}
-	if c, ok := uniq(func(s int) bool { return s >= 200 && s < 300 }); ok && t.exchangeMatchesConcretePath(c.id, concretePath) {
+	if c, ok := uniq(func(s int) bool { return s >= 200 && s < 300 }); ok {
 		return c.id, c.ts, true
 	}
 	return "", 0, false
@@ -218,22 +210,33 @@ func (t *Traffic) queryIDs(where string, args []any) []string {
 	return ids
 }
 
-func (t *Traffic) queryCandidates(where string, args []any, limit int, tsOrder string) []reproCand {
+func (t *Traffic) queryCandidates(where string, args []any, limit int, tsOrder string, literalPath string) []reproCand {
 	if tsOrder != "ASC" && tsOrder != "DESC" {
 		tsOrder = "DESC"
 	}
-	rows, err := t.db.Query(`SELECT id, ts, status FROM exchanges WHERE `+where+
-		` ORDER BY ts `+tsOrder+`, id `+tsOrder+` LIMIT ?`, append(append([]any{}, args...), limit)...)
+	qargs := append([]any{}, args...)
+	if want := concreteReqPathFromParts(literalPath); want != "" {
+		where += ` AND req_path=?`
+		qargs = append(qargs, want)
+	}
+	rows, err := t.db.Query(`SELECT id, ts, status, url FROM exchanges WHERE `+where+
+		` ORDER BY ts `+tsOrder+`, id `+tsOrder+` LIMIT ?`, append(qargs, limit)...)
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
+	want := concreteReqPathFromParts(literalPath)
 	var cands []reproCand
 	for rows.Next() {
 		var c reproCand
-		if rows.Scan(&c.id, &c.ts, &c.status) == nil {
-			cands = append(cands, c)
+		var rawURL string
+		if rows.Scan(&c.id, &c.ts, &c.status, &rawURL) != nil {
+			continue
 		}
+		if want != "" && !urlPathMatches(rawURL, want) {
+			continue
+		}
+		cands = append(cands, c)
 	}
 	return cands
 }
@@ -388,34 +391,20 @@ func concreteReqPathFromParts(path string) string {
 	return p
 }
 
-func (t *Traffic) filterCandidatesLiteralPath(cands []reproCand, concretePath string) []reproCand {
-	if concretePath == "" {
-		return cands
+func urlPathFromRaw(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
 	}
-	out := cands[:0]
-	for _, c := range cands {
-		if t.exchangeMatchesConcretePath(c.id, concretePath) {
-			out = append(out, c)
-		}
+	p := u.EscapedPath()
+	if p == "" {
+		p = "/"
 	}
-	return out
+	return normalizeReqPath(p)
 }
 
-func (t *Traffic) exchangeMatchesConcretePath(id, concretePath string) bool {
-	want := concreteReqPathFromParts(concretePath)
-	var exURL string
-	if err := t.db.QueryRow(`SELECT url FROM exchanges WHERE id=?`, id).Scan(&exURL); err != nil {
-		return false
-	}
-	u, err := url.Parse(exURL)
-	if err != nil {
-		return false
-	}
-	got := u.EscapedPath()
-	if got == "" {
-		got = "/"
-	}
-	return normalizeReqPath(got) == want
+func urlPathMatches(rawURL, wantPath string) bool {
+	return urlPathFromRaw(rawURL) == concreteReqPathFromParts(wantPath)
 }
 
 // Reproduction-step request parsing: a step's "request" is either a verbatim HTTP

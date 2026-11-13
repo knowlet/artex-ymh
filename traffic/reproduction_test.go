@@ -2,6 +2,7 @@ package traffic
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -21,9 +22,10 @@ func insertReproExchange(t *testing.T, tr *Traffic, id string, ts int64, host, m
 		}
 		tmpl = db.TemplatePath(p)
 	}
-	if _, err := tr.db.Exec(`INSERT OR REPLACE INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path)
-VALUES(?,?,?,?,?,?,?,?,?,?,'')`,
-		id, ts, host, method, tmpl, rawURL, status, "text/html", len(reqB), len(respB)); err != nil {
+	reqPath := urlPathFromRaw(rawURL)
+	if _, err := tr.db.Exec(`INSERT OR REPLACE INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path,req_path)
+VALUES(?,?,?,?,?,?,?,?,?,?,'',?)`,
+		id, ts, host, method, tmpl, rawURL, status, "text/html", len(reqB), len(respB), reqPath); err != nil {
 		t.Fatal(err)
 	}
 	var rowid int64
@@ -99,6 +101,19 @@ func TestResolveStepHostMismatch(t *testing.T) {
 	step := "GET /api HTTP/1.1\nHost: good.example\n\n"
 	if id, ok := tr.ResolveStepExchange(step, ""); ok {
 		t.Fatalf("want abstain on host mismatch, got %q", id)
+	}
+}
+
+func TestResolveStepLiteralPathBeyondLimit(t *testing.T) {
+	tr, _ := openTraffic(t)
+	insertReproExchange(t, tr, "u1", 1, "h", "GET", "http://h/users/1", "", "one", 200)
+	for i := 2; i <= 56; i++ {
+		id := "u" + strconv.Itoa(i)
+		insertReproExchange(t, tr, id, int64(100+i), "h", "GET", "http://h/users/"+strconv.Itoa(i), "", "x", 200)
+	}
+	step := "GET /users/1 HTTP/1.1\nHost: h\n\n"
+	if got, ok := tr.ResolveStepExchange(step, "one"); !ok || got != "u1" {
+		t.Fatalf("want u1 beyond 50 template matches, got %q/%v", got, ok)
 	}
 }
 
