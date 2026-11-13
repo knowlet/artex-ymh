@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/Autumn-27/artex/agent"
@@ -78,6 +79,7 @@ func (s *Server) resolveFindingTraffic(taskID int64, repro json.RawMessage) json
 	if json.Unmarshal(repro, &rp) != nil || len(rp.Steps) == 0 {
 		return repro
 	}
+	stripAgentExchangeIDs(&rp)
 	since, ok := s.taskReproWindow(taskID)
 	if !ok {
 		return repro
@@ -88,6 +90,30 @@ func (s *Server) resolveFindingTraffic(taskID int64, repro json.RawMessage) json
 		return repro
 	}
 	return out
+}
+
+func stripAgentExchangeIDs(rp *report.Reproduction) {
+	if rp == nil {
+		return
+	}
+	for i := range rp.Steps {
+		rp.Steps[i].ExchangeID = ""
+	}
+}
+
+func stepExchangeConfirmed(trStore *traffic.Traffic, st report.ReproStep) bool {
+	id := strings.TrimSpace(st.ExchangeID)
+	if id == "" || trStore == nil {
+		return false
+	}
+	if _, ok := trStore.ExchangeTS(id); !ok {
+		return false
+	}
+	if strings.TrimSpace(st.Request) == "" {
+		return true
+	}
+	got, ok := trStore.ResolveStepExchange(st.Request, st.Response)
+	return ok && got == id
 }
 
 func reproStepRefs(rp report.Reproduction) []traffic.StepRef {
@@ -108,14 +134,7 @@ func (s *Server) reproductionForFinding(findingID int64, raw json.RawMessage, ta
 		_ = json.Unmarshal(raw, &anyVal)
 		return anyVal
 	}
-	needResolve := false
-	for _, st := range rp.Steps {
-		if st.ExchangeID == "" {
-			needResolve = true
-			break
-		}
-	}
-	if needResolve && s.m != nil && taskID != nil && *taskID > 0 {
+	if s.m != nil && taskID != nil && *taskID > 0 {
 		trStore := s.m.TrafficStoreExistingForTask(*taskID)
 		since, ok := s.taskReproWindow(*taskID)
 		if trStore != nil && ok {
@@ -129,10 +148,15 @@ func linkReproductionSteps(trStore *traffic.Traffic, sinceUnix, untilUnix int64,
 	if trStore == nil || rp == nil {
 		return
 	}
+	for i := range rp.Steps {
+		if rp.Steps[i].ExchangeID != "" && !stepExchangeConfirmed(trStore, rp.Steps[i]) {
+			rp.Steps[i].ExchangeID = ""
+		}
+	}
 	refs := reproStepRefs(*rp)
 	ids := trStore.ResolveSteps(sinceUnix, untilUnix, refs)
 	for i, id := range ids {
-		if id != "" && rp.Steps[i].ExchangeID == "" {
+		if id != "" {
 			rp.Steps[i].ExchangeID = id
 		}
 	}

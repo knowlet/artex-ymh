@@ -2218,7 +2218,6 @@ func (s *Server) getFinding(w http.ResponseWriter, r *http.Request) {
 	}
 	assets := s.resolveAssetIDs(f.AssetIDs)
 	dto := findingFromDB(f, assets)
-	dto.Reproduction = s.reproductionForFinding(f.ID, f.Reproduction, f.TaskID)
 	if contextTaskID := strings.TrimSpace(r.URL.Query().Get("context_task")); contextTaskID != "" {
 		contextTask := s.m.ResolveTask(contextTaskID)
 		if contextTask == nil {
@@ -2233,6 +2232,7 @@ func (s *Server) getFinding(w http.ResponseWriter, r *http.Request) {
 		dto.SourceTaskID = sourceTaskID
 		dto.Inherited = inherited
 	}
+	dto.Reproduction = s.reproductionForFinding(f.ID, f.Reproduction, f.TaskID)
 	writeJSON(w, 200, dto)
 }
 
@@ -2487,7 +2487,9 @@ func (s *Server) patchFinding(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "finding not found")
 		return
 	}
-	writeJSON(w, 200, findingFromDB(f, s.resolveAssetIDs(f.AssetIDs)))
+	dto := findingFromDB(f, s.resolveAssetIDs(f.AssetIDs))
+	dto.Reproduction = s.reproductionForFinding(f.ID, f.Reproduction, f.TaskID)
+	writeJSON(w, 200, dto)
 }
 
 // deleteFinding removes a finding (findings row + originating exploration node).

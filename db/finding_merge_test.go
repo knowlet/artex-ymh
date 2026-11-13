@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +84,20 @@ func TestMaxSeverity(t *testing.T) {
 		if got := MaxSeverity(c.a, c.b); got != c.want {
 			t.Errorf("MaxSeverity(%q,%q) = %q, want %q", c.a, c.b, got, c.want)
 		}
+	}
+}
+
+func TestMergeArchivesPriorReproduction(t *testing.T) {
+	now := time.Now()
+	cand := DBFinding{Evidence: "base", Reproduction: json.RawMessage(`{"entry_point":"GET /old"}`)}
+	in := RecordFindingInput{Reproduction: json.RawMessage(`{"entry_point":"GET /new"}`), IntentID: 1, Worker: "w"}
+	_, _, evidence := mergeFindingFields(cand, in, now)
+	if reproductionUsable(in.Reproduction) && reproductionUsable(cand.Reproduction) &&
+		string(cand.Reproduction) != string(in.Reproduction) {
+		evidence = appendMergeSegment(evidence, "原结构化复现", string(cand.Reproduction), now, in.IntentID, in.Worker, "")
+	}
+	if !strings.Contains(evidence, "[原结构化复现]") || !strings.Contains(evidence, "/old") {
+		t.Fatalf("prior reproduction not archived:\n%s", evidence)
 	}
 }
 

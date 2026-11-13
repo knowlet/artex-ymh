@@ -24,10 +24,18 @@ func TestLinkReproductionStepsPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { tr.Close() })
-	_, err = tr.DB().Exec(`INSERT INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path,req_path)
-VALUES ('b1',120,'h','GET','/b','http://h/b',200,'text/plain',0,0,'','/b')`)
-	if err != nil {
-		t.Fatal(err)
+	for _, row := range []struct {
+		id, path string
+		ts     int64
+	}{
+		{"keep", "/a", 110},
+		{"b1", "/b", 120},
+	} {
+		_, err = tr.DB().Exec(`INSERT INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path,req_path)
+VALUES (?,?,'h','GET',?,?,200,'text/plain',0,0,'',?)`, row.id, row.ts, row.path, "http://h"+row.path, row.path)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	rp := report.Reproduction{Steps: []report.ReproStep{
 		{Request: "GET /a HTTP/1.1\nHost: h\n\n", ExchangeID: "keep"},
@@ -41,4 +49,24 @@ VALUES ('b1',120,'h','GET','/b','http://h/b',200,'text/plain',0,0,'','/b')`)
 		t.Fatalf("step1 linked: want b1, got %q", rp.Steps[1].ExchangeID)
 	}
 	_ = time.Now()
+}
+
+func TestLinkReproductionStepsClearsStaleExchangeID(t *testing.T) {
+	tr, err := traffic.Open(t.TempDir(), "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tr.Close() })
+	_, err = tr.DB().Exec(`INSERT INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path,req_path)
+VALUES ('b1',120,'h','GET','/b','http://h/b',200,'text/plain',0,0,'','/b')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp := report.Reproduction{Steps: []report.ReproStep{
+		{Request: "GET /b HTTP/1.1\nHost: h\n\n", ExchangeID: "stale-agent-id"},
+	}}
+	linkReproductionSteps(tr, 100, 200, &rp)
+	if rp.Steps[0].ExchangeID != "b1" {
+		t.Fatalf("stale id replaced: want b1, got %q", rp.Steps[0].ExchangeID)
+	}
 }

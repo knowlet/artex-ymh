@@ -659,15 +659,6 @@ func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 	return f, nil
 }
 
-// SetFindingReproduction stores the agent-captured structured reproduction recipe.
-func (d *DB) SetFindingReproduction(findingID int64, repro json.RawMessage) error {
-	if findingID <= 0 || len(repro) < 3 {
-		return nil
-	}
-	_, err := d.Exec(`UPDATE findings SET reproduction=$1 WHERE id=$2`, string(repro), findingID)
-	return err
-}
-
 // DeleteFinding removes a finding entirely: the standalone findings row and its
 // originating exploration node (kind='finding'), so it disappears from the findings
 // list, the per-task 发现 Tab, and the exploration graph alike. Deleting the node

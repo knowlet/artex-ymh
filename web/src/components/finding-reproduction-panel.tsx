@@ -51,7 +51,8 @@ export function FindingReproductionPanel({
 }) {
   if (!repro) return null;
   const hasSteps = (repro.steps?.length ?? 0) > 0;
-  if (!hasSteps && !repro.entry_point && !(repro.prerequisites?.length ?? 0)) {
+  const hasProvenance = Boolean(repro.provenance?.trim());
+  if (!hasSteps && !repro.entry_point && !(repro.prerequisites?.length ?? 0) && !hasProvenance) {
     return null;
   }
   return (

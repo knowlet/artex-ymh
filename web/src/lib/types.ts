@@ -479,8 +479,8 @@ export interface ReproStep {
 
 export interface FindingReproduction {
   entry_point?: string;
-  prerequisites?: string[];
-  steps?: ReproStep[];
+  prerequisites?: string[] | null;
+  steps?: ReproStep[] | null;
   provenance?: string;
 }
 

@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -254,7 +255,7 @@ func findMergeCandidateTx(tx *sql.Tx, in RecordFindingInput) (*DBFinding, error)
 		return nil, nil
 	}
 	want := NormalizeVulnClass(in.VulnClass)
-	rows, err := tx.Query(`SELECT id, node_id, vulnclass, severity, summary, evidence
+	rows, err := tx.Query(`SELECT id, node_id, vulnclass, severity, summary, evidence, COALESCE(reproduction::text, '')
 FROM findings
 WHERE task_id=$1 AND status IN ($2, $3) AND node_id IS NOT NULL
   AND asset_ids->0 = to_jsonb($4::bigint)
@@ -266,8 +267,12 @@ FOR UPDATE`, in.TaskID, FindingConfirmed, FindingPending, in.AssetIDs[0])
 	defer rows.Close()
 	for rows.Next() {
 		var f DBFinding
-		if err := rows.Scan(&f.ID, &f.NodeID, &f.VulnClass, &f.Severity, &f.Summary, &f.Evidence); err != nil {
+		var repro string
+		if err := rows.Scan(&f.ID, &f.NodeID, &f.VulnClass, &f.Severity, &f.Summary, &f.Evidence, &repro); err != nil {
 			return nil, err
+		}
+		if repro != "" {
+			f.Reproduction = json.RawMessage(repro)
 		}
 		if NormalizeVulnClass(f.VulnClass) == want {
 			return &f, rows.Err()
@@ -279,7 +284,12 @@ FOR UPDATE`, in.TaskID, FindingConfirmed, FindingPending, in.AssetIDs[0])
 // mergeFindingTx 执行合并:更新既有 finding 行与节点 payload,追加血缘边与
 // 流量快照,返回指向既有记录的 RecordedFinding(Merged=true)。
 func mergeFindingTx(tx *sql.Tx, cand *DBFinding, in RecordFindingInput, prepared []PreparedTrafficEvidence) (*RecordedFinding, error) {
-	severity, summary, evidence := mergeFindingFields(*cand, in, time.Now())
+	now := time.Now()
+	severity, summary, evidence := mergeFindingFields(*cand, in, now)
+	if reproductionUsable(in.Reproduction) && reproductionUsable(cand.Reproduction) &&
+		string(cand.Reproduction) != string(in.Reproduction) {
+		evidence = appendMergeSegment(evidence, "原结构化复现", string(cand.Reproduction), now, in.IntentID, in.Worker, "")
+	}
 	mergeSQL := `UPDATE findings SET severity=$2, summary=$3, evidence=$4`
 	mergeArgs := []any{cand.ID, severity, summary, evidence}
 	reproArg := 0
