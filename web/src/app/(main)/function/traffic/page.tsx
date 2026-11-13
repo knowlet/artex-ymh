@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useSearchParams } from "next/navigation";
 
 import {
   ArrowDownWideNarrowIcon,
@@ -111,7 +112,17 @@ const SORT_STORAGE_KEY = "traffic-sort";
 // which the backend reads as either an exact code or an "Nxx" class band.
 const STATUS_BUCKETS = ["2xx", "3xx", "4xx", "5xx"];
 
-export default function TrafficPage() {
+function TrafficPageInner() {
+  const searchParams = useSearchParams();
+  const deepLinkId = searchParams.get("id")?.trim() ?? "";
+  const deepTaskId = React.useMemo(() => {
+    const raw = searchParams.get("task_id")?.trim();
+    if (!raw) {
+      return undefined;
+    }
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  }, [searchParams]);
   const [selectedFlows, setSelectedFlows] = React.useState<Set<string>>(() => new Set());
   const [linking, setLinking] = React.useState(false);
   const [page, setPage] = React.useState(0);
@@ -332,6 +343,46 @@ export default function TrafficPage() {
     );
 
   const exchanges = React.useMemo(() => traffic?.exchanges ?? [], [traffic]);
+
+  // Deep-link from finding reproduction steps: ?id=<exchange_id> opens the detail sheet.
+  React.useEffect(() => {
+    if (!deepLinkId) {
+      return;
+    }
+    const inPage = exchanges.find((e) => e.id === deepLinkId);
+    if (inPage) {
+      setSelected(inPage);
+      return;
+    }
+    let alive = true;
+    api
+      .trafficExchange(deepLinkId, deepTaskId)
+      .then((d) => {
+        if (!alive || !d.id) {
+          toast.error("无法加载该流量记录（可能已归档或位于其他任务索引）");
+          return;
+        }
+        setSelected({
+          id: d.id,
+          ts: d.ts ?? "",
+          host: d.host ?? "",
+          method: d.method ?? "GET",
+          url: d.url ?? "",
+          status: d.status ?? 0,
+          content_type: d.content_type ?? "",
+          resp_len: d.resp_len ?? 0,
+        });
+      })
+      .catch((e) => {
+        if (alive) {
+          toast.error(`无法打开流量记录：${(e as Error).message}`);
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [deepLinkId, deepTaskId]);
+
   const total = traffic?.total ?? exchanges.length;
   const pageCount = Math.max(1, Math.ceil(total / size));
   const rangeStart = total === 0 ? 0 : page * size + 1;
@@ -826,5 +877,14 @@ export default function TrafficPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+// useSearchParams must sit under a Suspense boundary for static export.
+export default function TrafficPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <TrafficPageInner />
+    </React.Suspense>
   );
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/Autumn-27/artex/db"
@@ -20,6 +21,7 @@ import (
 // autonomous intent-generation loop (that is the planner's job).
 type MainAgent struct {
 	findingRecorder FindingRecorder
+	trafficResolver func(taskID int64, repro json.RawMessage) json.RawMessage
 	prov            llm.Provider
 	model           string
 	tx              *transcript.Store                      // raw LLM conversation persistence (nil = off)
@@ -123,6 +125,7 @@ func mainAgentSystem(goal, dataDir, workDir string) string {
 func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.AssetStore, ts *db.ExplorationStore, goal, message string, emit func(db.Activity), notify, resume func(), notifyGoal func([]string)) (string, error) {
 	tsx := NewToolSet(ts, "human")
 	tsx.SetFindingRecorder(m.findingRecorder)
+	tsx.SetTrafficResolver(m.trafficResolver)
 	if as != nil {
 		tsx.SetAssetStore(as, as.Companies())
 	}

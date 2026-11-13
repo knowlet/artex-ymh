@@ -2232,6 +2232,7 @@ func (s *Server) getFinding(w http.ResponseWriter, r *http.Request) {
 		dto.SourceTaskID = sourceTaskID
 		dto.Inherited = inherited
 	}
+	dto.Reproduction = s.reproductionForFinding(f.ID, f.Reproduction, f.TaskID)
 	writeJSON(w, 200, dto)
 }
 
@@ -2486,7 +2487,9 @@ func (s *Server) patchFinding(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "finding not found")
 		return
 	}
-	writeJSON(w, 200, findingFromDB(f, s.resolveAssetIDs(f.AssetIDs)))
+	dto := findingFromDB(f, s.resolveAssetIDs(f.AssetIDs))
+	dto.Reproduction = s.reproductionForFinding(f.ID, f.Reproduction, f.TaskID)
+	writeJSON(w, 200, dto)
 }
 
 // deleteFinding removes a finding (findings row + originating exploration node).
@@ -3263,14 +3266,20 @@ func (s *Server) deleteAllTraffic(w http.ResponseWriter, r *http.Request) {
 // getTrafficExchange returns the full raw request/response of one exchange,
 // read on demand from the traffic tree (bodies are not in the paged list).
 func (s *Server) getTrafficExchange(w http.ResponseWriter, r *http.Request) {
-	tr := s.m.Traffic()
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, 400, "missing id")
+		return
+	}
+	taskID := int64(atoiDefault(r.URL.Query().Get("task_id"), 0))
+	tr := s.trafficStoreForExchange(taskID)
 	if tr == nil {
 		writeErr(w, 404, "traffic disabled")
 		return
 	}
-	id := r.URL.Query().Get("id")
-	if id == "" {
-		writeErr(w, 400, "missing id")
+	meta, err := tr.MetaByID(id)
+	if err != nil {
+		writeErr(w, 404, err.Error())
 		return
 	}
 	req, resp, err := tr.Get(id)
@@ -3278,7 +3287,17 @@ func (s *Server) getTrafficExchange(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"req": req, "resp": resp})
+	writeJSON(w, 200, trafficExchangeDetail(meta, req, resp))
+}
+
+func (s *Server) trafficStoreForExchange(taskID int64) *traffic.Traffic {
+	if s.m == nil {
+		return nil
+	}
+	if taskID > 0 {
+		return s.m.TrafficStoreExistingForTask(taskID)
+	}
+	return s.m.Traffic()
 }
 
 // getTrafficBlob streams one oversized body by its sha256. Bodies past the inline

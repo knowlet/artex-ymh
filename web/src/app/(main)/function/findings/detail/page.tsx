@@ -9,6 +9,7 @@ import { ArrowLeftIcon, ArrowUpRightIcon, ShieldAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { CopyButton } from "@/components/copy-button";
+import { FindingReproductionPanel } from "@/components/finding-reproduction-panel";
 import { FindingRetestPanel } from "@/components/finding-retest-panel";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
 import { Markdown } from "@/components/markdown";
@@ -42,6 +43,17 @@ const FINDING_STATUSES: FindingStatus[] = [
 
 function fmtTime(ts: string) {
   return new Date(ts).toLocaleString("zh-CN");
+}
+
+/** PATCH includes report when non-empty but omits reproduction; merge to keep fields the PATCH does not return. */
+function mergeFindingAfterPatch(prev: Finding, patch: Finding): Finding {
+  return {
+    ...prev,
+    ...patch,
+    reproduction: patch.reproduction ?? prev.reproduction,
+    report: patch.report ?? prev.report,
+    assets: patch.assets ?? prev.assets,
+  };
 }
 
 // FieldRow is one label/value line in the right-hand status panel.
@@ -84,7 +96,7 @@ function FindingDetailInner() {
       setFinding({ ...finding, severity: next });
       try {
         const updated = await api.setFindingSeverity(id, next);
-        setFinding(updated);
+        setFinding(mergeFindingAfterPatch(finding, updated));
         toast.success(`严重等级已改为「${statusMeta("severity", next).label}」`);
       } catch (e) {
         setFinding((cur) => (cur ? { ...cur, severity: prev } : cur));
@@ -101,7 +113,7 @@ function FindingDetailInner() {
       setFinding({ ...finding, status: next });
       try {
         const updated = await api.setFindingStatus(id, next);
-        setFinding(updated);
+        setFinding(mergeFindingAfterPatch(finding, updated));
         toast.success(`处理状态已改为「${statusMeta("finding", next).label}」`);
       } catch (e) {
         setFinding((cur) => (cur ? { ...cur, status: prev } : cur));
@@ -173,6 +185,7 @@ function FindingDetailInner() {
                 </CardContent>
               </Card>
               <FindingRetestPanel key={id} findingId={id} readOnly={finding.inherited} onCompleted={load} />
+              <FindingReproductionPanel repro={finding.reproduction} taskId={finding.task_id} />
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm">证据 / PoC</CardTitle>

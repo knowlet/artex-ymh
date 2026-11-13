@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/traffic"
@@ -39,6 +40,13 @@ type taskProxyInst struct {
 	upstream string // 当前上游原文(""/globalProxy/socks5://...),变化检测用
 }
 
+const taskReadOnlyCacheMax = 32
+
+type taskReadOnlyEntry struct {
+	tr      *traffic.Traffic
+	lastUse time.Time
+}
+
 // taskProxyManager 按 taskID 懒建并管理任务级 MITM 实例。零值不可用,经
 // newTaskProxyManager 构造;全部方法并发安全。
 type taskProxyManager struct {
@@ -49,12 +57,13 @@ type taskProxyManager struct {
 	portMax     int
 	mu          sync.Mutex
 	proxies     map[int64]*taskProxyInst
+	readOnly    map[int64]*taskReadOnlyEntry
 }
 
 func newTaskProxyManager(dir string, store tunnelLister, globalProxy func() string, portMin, portMax int) *taskProxyManager {
 	return &taskProxyManager{
 		dir: filepath.Join(dir, "traffic-tasks"), store: store, globalProxy: globalProxy,
-		portMin: portMin, portMax: portMax, proxies: map[int64]*taskProxyInst{},
+		portMin: portMin, portMax: portMax, proxies: map[int64]*taskProxyInst{}, readOnly: map[int64]*taskReadOnlyEntry{},
 	}
 }
 
@@ -100,6 +109,84 @@ func (m *taskProxyManager) resolveUpstream(ctx context.Context, taskID int64) (s
 		gp = m.globalProxy()
 	}
 	return pickUpstream(recs, gp), nil
+}
+
+// StoreForTask returns the per-task traffic index, building the MITM instance when
+// needed (worker / record-time resolution). Nil when instance creation fails.
+func (m *taskProxyManager) StoreForTask(ctx context.Context, taskID int64) *traffic.Traffic {
+	if taskID <= 0 {
+		return nil
+	}
+	m.ForTask(ctx, taskID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inst := m.proxies[taskID]; inst != nil {
+		return inst.tr
+	}
+	return nil
+}
+
+// ExistingStoreForTask returns a task traffic index without starting MITM: an active
+// in-memory instance when present, otherwise a read-only open of the on-disk index.
+func (m *taskProxyManager) ExistingStoreForTask(taskID int64) *traffic.Traffic {
+	if taskID <= 0 {
+		return nil
+	}
+	m.mu.Lock()
+	if tr := m.cachedStoreLocked(taskID); tr != nil {
+		m.mu.Unlock()
+		return tr
+	}
+	dir := filepath.Join(m.dir, strconv.FormatInt(taskID, 10))
+	m.mu.Unlock()
+
+	tr, err := traffic.OpenIndexReadOnly(dir)
+	if err != nil {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inst := m.proxies[taskID]; inst != nil {
+		_ = tr.Close()
+		return inst.tr
+	}
+	if e := m.readOnly[taskID]; e != nil {
+		_ = tr.Close()
+		e.lastUse = time.Now()
+		return e.tr
+	}
+	m.evictReadOnlyLocked()
+	m.readOnly[taskID] = &taskReadOnlyEntry{tr: tr, lastUse: time.Now()}
+	return tr
+}
+
+func (m *taskProxyManager) cachedStoreLocked(taskID int64) *traffic.Traffic {
+	if inst := m.proxies[taskID]; inst != nil {
+		return inst.tr
+	}
+	if e := m.readOnly[taskID]; e != nil {
+		e.lastUse = time.Now()
+		return e.tr
+	}
+	return nil
+}
+
+func (m *taskProxyManager) evictReadOnlyLocked() {
+	if len(m.readOnly) < taskReadOnlyCacheMax {
+		return
+	}
+	var oldestID int64
+	var oldest time.Time
+	for id, e := range m.readOnly {
+		if oldestID == 0 || e.lastUse.Before(oldest) {
+			oldestID, oldest = id, e.lastUse
+		}
+	}
+	if e := m.readOnly[oldestID]; e != nil {
+		delete(m.readOnly, oldestID)
+		_ = e.tr.Close()
+	}
 }
 
 // ForTask 返回任务 worker 应使用的代理地址与 CA:首次调用懒建该任务的 MITM
@@ -210,7 +297,12 @@ func (m *taskProxyManager) CloseTask(taskID int64) {
 	m.mu.Lock()
 	inst := m.proxies[taskID]
 	delete(m.proxies, taskID)
+	ro := m.readOnly[taskID]
+	delete(m.readOnly, taskID)
 	m.mu.Unlock()
+	if ro != nil {
+		_ = ro.tr.Close()
+	}
 	if inst == nil {
 		return
 	}
@@ -225,7 +317,14 @@ func (m *taskProxyManager) Close() {
 	m.mu.Lock()
 	insts := m.proxies
 	m.proxies = map[int64]*taskProxyInst{}
+	ros := m.readOnly
+	m.readOnly = map[int64]*taskReadOnlyEntry{}
 	m.mu.Unlock()
+	for _, e := range ros {
+		if e != nil {
+			_ = e.tr.Close()
+		}
+	}
 	for id, inst := range insts {
 		unregisterManagedPort(inst.port)
 		if err := inst.tr.Close(); err != nil {
