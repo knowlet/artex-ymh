@@ -6,6 +6,17 @@ import (
 	"testing"
 )
 
+func TestReproductionMarkdownBacktickFence(t *testing.T) {
+	raw := json.RawMessage(`{"steps":[{"request":"GET /x HTTP/1.1\n\n` + "```" + `oops","response":"ok"}]}`)
+	out := ReproductionMarkdown(raw)
+	if !strings.Contains(out, "````http\n") {
+		t.Fatalf("expected 4+ backtick fence for request, got:\n%s", out)
+	}
+	if !strings.Contains(out, "oops") {
+		t.Fatalf("body not preserved in output:\n%s", out)
+	}
+}
+
 func TestReproductionMarkdown(t *testing.T) {
 	raw := json.RawMessage(`{
 		"entry_point": "POST /login",

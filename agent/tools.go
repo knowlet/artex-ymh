@@ -1323,7 +1323,7 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			return actool.Errorf(err.Error()), nil
 		}
 		repro := a.Reproduction
-		if len(repro) > 2 && t.resolveTraffic != nil && t.taskID > 0 {
+		if len(repro) > 2 && findingTrafficBindingEnabled() && t.resolveTraffic != nil && t.taskID > 0 {
 			if r := t.resolveTraffic(t.taskID, repro); len(r) > 2 {
 				repro = r
 			}

@@ -106,6 +106,21 @@ func (m *taskProxyManager) resolveUpstream(ctx context.Context, taskID int64) (s
 // 实例(独立 CA 目录防首建竞争、端口池分配并登记端口审计台账),之后每次调用
 // 顺手重算上游(事件间隙的兜底,与 OnStateChange 的 Refresh 互补)。建实例失败
 // 只记日志并返回 "","" —— 调用方回落全局代理,绝不让录制子系统拖垮 worker。
+// StoreForTask returns the per-task traffic index, building the MITM instance when
+// needed. Nil when task proxy is disabled or instance creation fails.
+func (m *taskProxyManager) StoreForTask(ctx context.Context, taskID int64) *traffic.Traffic {
+	if taskID <= 0 {
+		return nil
+	}
+	m.ForTask(ctx, taskID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inst := m.proxies[taskID]; inst != nil {
+		return inst.tr
+	}
+	return nil
+}
+
 func (m *taskProxyManager) ForTask(ctx context.Context, taskID int64) (addr, caCert string) {
 	if taskID <= 0 {
 		return "", ""

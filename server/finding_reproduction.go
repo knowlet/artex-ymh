@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"time"
@@ -41,12 +42,27 @@ func (s *Server) seedFindingReproductionTools() {
 	_ = s.m.pg.SetSetting(flag, "true")
 }
 
+func (s *Server) taskReproWindow(taskID int64) (since time.Time, ok bool) {
+	if s.m == nil || taskID <= 0 {
+		return time.Time{}, false
+	}
+	tk, err := s.m.pg.GetTask(taskID)
+	if err != nil || tk == nil {
+		return time.Time{}, false
+	}
+	since = tk.CreatedAt
+	if tk.FirstRunAt != nil {
+		since = *tk.FirstRunAt
+	}
+	return since, true
+}
+
 // resolveFindingTraffic matches reproduction steps to recorded exchanges in the task window.
 func (s *Server) resolveFindingTraffic(taskID int64, repro json.RawMessage) json.RawMessage {
 	if s.m == nil || taskID <= 0 {
 		return repro
 	}
-	trStore := s.m.Traffic()
+	trStore := s.m.TrafficStoreForTask(context.Background(), taskID)
 	if trStore == nil {
 		return repro
 	}
@@ -54,18 +70,11 @@ func (s *Server) resolveFindingTraffic(taskID int64, repro json.RawMessage) json
 	if json.Unmarshal(repro, &rp) != nil || len(rp.Steps) == 0 {
 		return repro
 	}
-	since := time.Now().Add(-24 * time.Hour)
-	if tk, err := s.m.pg.GetTask(taskID); err == nil && tk != nil {
-		if tk.FirstRunAt != nil {
-			since = *tk.FirstRunAt
-		} else {
-			since = tk.CreatedAt
-		}
+	since, ok := s.taskReproWindow(taskID)
+	if !ok {
+		return repro
 	}
-	refs := make([]traffic.StepRef, len(rp.Steps))
-	for i, st := range rp.Steps {
-		refs[i] = traffic.StepRef{Request: st.Request, Response: st.Response}
-	}
+	refs := reproStepRefs(rp)
 	ids := trStore.ResolveSteps(since.Unix(), time.Now().Unix(), refs)
 	for i, id := range ids {
 		if id != "" {
@@ -79,6 +88,14 @@ func (s *Server) resolveFindingTraffic(taskID int64, repro json.RawMessage) json
 	return out
 }
 
+func reproStepRefs(rp report.Reproduction) []traffic.StepRef {
+	refs := make([]traffic.StepRef, len(rp.Steps))
+	for i, st := range rp.Steps {
+		refs[i] = traffic.StepRef{Request: st.Request, Response: st.Response, ExchangeID: st.ExchangeID}
+	}
+	return refs
+}
+
 func (s *Server) reproductionForFinding(findingID int64, raw json.RawMessage, taskID *int64) any {
 	if len(raw) < 3 {
 		return nil
@@ -89,34 +106,23 @@ func (s *Server) reproductionForFinding(findingID int64, raw json.RawMessage, ta
 		_ = json.Unmarshal(raw, &anyVal)
 		return anyVal
 	}
-	hasResolved := false
+	needResolve := false
 	for _, st := range rp.Steps {
-		if st.ExchangeID != "" {
-			hasResolved = true
+		if st.ExchangeID == "" {
+			needResolve = true
 			break
 		}
 	}
-	if !hasResolved && s.m != nil && s.m.Traffic() != nil && taskID != nil && *taskID > 0 {
-		f, _ := s.m.pg.GetFinding(findingID)
-		since := time.Now().Add(-24 * time.Hour)
-		if f != nil {
-			since = f.CreatedAt
-		}
-		if tk, err := s.m.pg.GetTask(*taskID); err == nil && tk != nil {
-			if tk.FirstRunAt != nil {
-				since = *tk.FirstRunAt
-			} else if !tk.CreatedAt.IsZero() {
-				since = tk.CreatedAt
-			}
-		}
-		refs := make([]traffic.StepRef, len(rp.Steps))
-		for i, st := range rp.Steps {
-			refs[i] = traffic.StepRef{Request: st.Request, Response: st.Response}
-		}
-		ids := s.m.Traffic().ResolveSteps(since.Unix(), time.Now().Unix(), refs)
-		for i, id := range ids {
-			if id != "" {
-				rp.Steps[i].ExchangeID = id
+	if needResolve && s.m != nil && taskID != nil && *taskID > 0 {
+		trStore := s.m.TrafficStoreForTask(context.Background(), *taskID)
+		since, ok := s.taskReproWindow(*taskID)
+		if trStore != nil && ok {
+			refs := reproStepRefs(rp)
+			ids := trStore.ResolveSteps(since.Unix(), time.Now().Unix(), refs)
+			for i, id := range ids {
+				if id != "" && rp.Steps[i].ExchangeID == "" {
+					rp.Steps[i].ExchangeID = id
+				}
 			}
 		}
 	}

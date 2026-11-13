@@ -964,6 +964,20 @@ func (m *Manager) Assets() *pgdb.AssetStore  { return m.assets }
 func (m *Manager) PG() *pgdb.DB              { return m.pg }
 func (m *Manager) Traffic() *traffic.Traffic { return m.traffic }
 
+// TrafficStoreForTask returns the traffic index that holds exchanges for a task's
+// worker MITM (per-task instance when enabled, otherwise the global recorder).
+func (m *Manager) TrafficStoreForTask(ctx context.Context, taskID int64) *traffic.Traffic {
+	if taskID <= 0 {
+		return nil
+	}
+	if m.taskProxy != nil {
+		if tr := m.taskProxy.StoreForTask(ctx, taskID); tr != nil {
+			return tr
+		}
+	}
+	return m.traffic
+}
+
 // ProxyAddr returns the egress proxy address agents route target traffic through:
 //   - capture ON  → the recording MITM proxy (which itself exits via the global
 //     proxy when one is set); agents also get its CA (see ProxyCACert).

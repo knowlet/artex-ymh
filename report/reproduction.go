@@ -61,14 +61,14 @@ func ReproductionMarkdown(raw json.RawMessage) string {
 			}
 			b.WriteString("\n")
 			if req := strings.TrimSpace(st.Request); req != "" {
-				b.WriteString("**请求：**\n\n```http\n")
-				b.WriteString(req)
-				b.WriteString("\n```\n\n")
+				b.WriteString("**请求：**\n\n")
+				b.WriteString(mdFencedHTTP(req))
+				b.WriteString("\n\n")
 			}
 			if resp := strings.TrimSpace(st.Response); resp != "" {
-				b.WriteString("**响应：**\n\n```http\n")
-				b.WriteString(resp)
-				b.WriteString("\n```\n\n")
+				b.WriteString("**响应：**\n\n")
+				b.WriteString(mdFencedHTTP(resp))
+				b.WriteString("\n\n")
 			}
 		}
 	}
@@ -76,6 +76,17 @@ func ReproductionMarkdown(raw json.RawMessage) string {
 		fmt.Fprintf(&b, "**来源：** %s\n\n", s)
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// mdFencedHTTP wraps HTTP text in a fenced code block whose delimiter cannot appear
+// inside the payload (lengthen backtick run until unique).
+func mdFencedHTTP(text string) string {
+	n := 3
+	for strings.Contains(text, strings.Repeat("`", n)) {
+		n++
+	}
+	fence := strings.Repeat("`", n)
+	return fence + "http\n" + text + "\n" + fence
 }
 
 func nonEmptyStrings(in []string) []string {

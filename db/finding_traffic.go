@@ -378,7 +378,7 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 		return mergeFindingTx(tx, cand, in, prepared)
 	}
 	nodePayload := map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}}
-	if len(in.Reproduction) > 2 {
+	if reproductionUsable(in.Reproduction) {
 		nodePayload["reproduction"] = json.RawMessage(in.Reproduction)
 	}
 	payload, _ := json.Marshal(nodePayload)
@@ -403,7 +403,7 @@ VALUES($1,'finding',$2,9,'confirmed',$3) RETURNING id`, in.ExplorationID, string
 	}
 	raw, _ := json.Marshal(assets)
 	var repro any
-	if len(in.Reproduction) > 2 {
+	if reproductionUsable(in.Reproduction) {
 		repro = string(in.Reproduction)
 	}
 	if err := tx.QueryRow(`INSERT INTO findings(task_id,node_id,vulnclass,name,severity,summary,evidence,worker,asset_ids,reproduction)

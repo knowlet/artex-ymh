@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -281,8 +282,10 @@ func mergeFindingTx(tx *sql.Tx, cand *DBFinding, in RecordFindingInput, prepared
 	severity, summary, evidence := mergeFindingFields(*cand, in, time.Now())
 	mergeSQL := `UPDATE findings SET severity=$2, summary=$3, evidence=$4`
 	mergeArgs := []any{cand.ID, severity, summary, evidence}
-	if len(in.Reproduction) > 2 {
-		mergeSQL += `, reproduction=$5`
+	reproArg := 0
+	if reproductionUsable(in.Reproduction) {
+		reproArg = len(mergeArgs) + 1
+		mergeSQL += `, reproduction=$` + strconv.Itoa(reproArg)
 		mergeArgs = append(mergeArgs, string(in.Reproduction))
 	}
 	mergeSQL += ` WHERE id=$1`
@@ -291,10 +294,21 @@ func mergeFindingTx(tx *sql.Tx, cand *DBFinding, in RecordFindingInput, prepared
 	}
 	// 节点 payload 同步(与 setFindingCol 同款 jsonb_set),保持按任务 发现 Tab
 	// (读节点 payload)与 findings 表一致。
-	if _, err := tx.Exec(`UPDATE exploration_nodes
+	nodeArgs := []any{*cand.NodeID, severity, summary, evidence}
+	var nodeSQL string
+	if reproArg > 0 {
+		nodeSQL = `UPDATE exploration_nodes
+SET payload = jsonb_set(jsonb_set(jsonb_set(jsonb_set(payload, '{severity}', to_jsonb($2::text)),
+	'{summary}', to_jsonb($3::text)), '{evidence,poc}', to_jsonb($4::text)), '{reproduction}', $5::jsonb)
+WHERE id=$1 AND kind='finding'`
+		nodeArgs = append(nodeArgs, string(in.Reproduction))
+	} else {
+		nodeSQL = `UPDATE exploration_nodes
 SET payload = jsonb_set(jsonb_set(jsonb_set(payload, '{severity}', to_jsonb($2::text)),
 	'{summary}', to_jsonb($3::text)), '{evidence,poc}', to_jsonb($4::text))
-WHERE id=$1 AND kind='finding'`, *cand.NodeID, severity, summary, evidence); err != nil {
+WHERE id=$1 AND kind='finding'`
+	}
+	if _, err := tx.Exec(nodeSQL, nodeArgs...); err != nil {
 		return nil, err
 	}
 	// 血缘:新 intent 的 yields 边指向既有节点(保留"同一入口被反复加深"的历史)。

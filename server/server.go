@@ -3279,7 +3279,21 @@ func (s *Server) getTrafficExchange(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"req": req, "resp": resp})
+	out := map[string]any{"req": req, "resp": resp}
+	if meta, err := tr.MetaByID(id); err == nil {
+		if dtos := trafficDTOs([]traffic.ExchangeMeta{meta}); len(dtos) == 1 {
+			d := dtos[0]
+			out["id"] = d.ID
+			out["ts"] = d.TS
+			out["host"] = d.Host
+			out["method"] = d.Method
+			out["url"] = d.URL
+			out["status"] = d.Status
+			out["content_type"] = d.ContentType
+			out["resp_len"] = d.RespLen
+		}
+	}
+	writeJSON(w, 200, out)
 }
 
 // getTrafficBlob streams one oversized body by its sha256. Bodies past the inline
