@@ -89,15 +89,22 @@ func TestMaxSeverity(t *testing.T) {
 
 func TestMergeArchivesPriorReproduction(t *testing.T) {
 	now := time.Now()
-	cand := DBFinding{Evidence: "base", Reproduction: json.RawMessage(`{"entry_point":"GET /old"}`)}
-	in := RecordFindingInput{Reproduction: json.RawMessage(`{"entry_point":"GET /new"}`), IntentID: 1, Worker: "w"}
-	_, _, evidence := mergeFindingFields(cand, in, now)
-	if reproductionUsable(in.Reproduction) && reproductionUsable(cand.Reproduction) &&
-		string(cand.Reproduction) != string(in.Reproduction) {
-		evidence = appendMergeSegment(evidence, "原结构化复现", string(cand.Reproduction), now, in.IntentID, in.Worker, "")
+	old := json.RawMessage(`{"entry_point":"GET /old"}`)
+	incoming := json.RawMessage(`{"entry_point":"GET /new"}`)
+	_, _, evidence := mergeFindingFields(DBFinding{Evidence: "base", Reproduction: old}, RecordFindingInput{Reproduction: incoming}, now)
+	evidence, apply := mergeReproductionEvidence(old, incoming, evidence, now, 1, "w")
+	if !apply {
+		t.Fatal("incoming reproduction should replace stored recipe")
 	}
 	if !strings.Contains(evidence, "[原结构化复现]") || !strings.Contains(evidence, "/old") {
 		t.Fatalf("prior reproduction not archived:\n%s", evidence)
+	}
+	evidence, apply = mergeReproductionEvidence(old, nil, "base", now, 0, "")
+	if apply {
+		t.Fatal("empty incoming must keep existing reproduction")
+	}
+	if evidence != "base" {
+		t.Fatalf("evidence unchanged when incoming empty: %q", evidence)
 	}
 }
 

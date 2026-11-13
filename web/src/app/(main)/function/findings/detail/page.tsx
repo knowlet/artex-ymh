@@ -45,7 +45,7 @@ function fmtTime(ts: string) {
   return new Date(ts).toLocaleString("zh-CN");
 }
 
-/** PATCH responses omit reproduction/report; merge instead of replacing wholesale. */
+/** PATCH includes report when non-empty but omits reproduction; merge to keep fields the PATCH does not return. */
 function mergeFindingAfterPatch(prev: Finding, patch: Finding): Finding {
   return {
     ...prev,

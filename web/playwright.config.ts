@@ -1,7 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:8787";
-const useExternalBase = process.env.PLAYWRIGHT_BASE_URL != null && process.env.PLAYWRIGHT_BASE_URL !== "";
+const externalBase = process.env.PLAYWRIGHT_BASE_URL?.trim() ?? "";
+const useExternalBase = externalBase !== "";
+const baseURL = useExternalBase ? externalBase : "http://127.0.0.1:8787";
+const healthURL = useExternalBase
+  ? `${baseURL.replace(/\/$/, "")}/api/health`
+  : "http://127.0.0.1:8787/api/health";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -21,7 +25,7 @@ export default defineConfig({
     ? undefined
     : {
         command: "bash e2e/bin/start-backend.sh",
-        url: `${baseURL.replace(/\/$/, "")}/api/health`,
+        url: healthURL,
         reuseExistingServer: false,
         timeout: 600_000,
         cwd: __dirname,

@@ -242,6 +242,19 @@ func mergeFindingFields(old DBFinding, in RecordFindingInput, now time.Time) (se
 	return
 }
 
+// mergeReproductionEvidence archives a replaced reproduction recipe into evidence and
+// reports whether the incoming recipe should overwrite the stored column (false when
+// incoming is empty/unusable — keep the existing recipe).
+func mergeReproductionEvidence(existing, incoming json.RawMessage, evidence string, now time.Time, intentID int64, worker string) (string, bool) {
+	if !reproductionUsable(incoming) {
+		return evidence, false
+	}
+	if reproductionUsable(existing) && string(existing) != string(incoming) {
+		evidence = appendMergeSegment(evidence, "原结构化复现", string(existing), now, intentID, worker, "")
+	}
+	return evidence, true
+}
+
 // findMergeCandidateTx 在事务内(调用方须已持任务级证据锁)查可合并的既有
 // finding:同 task、status IN ('confirmed','pending')(终态排除,依据见文件头
 // 注释)、归一化 vulnclass 相同、主资产对等(候选 asset_ids->0 = 输入 AssetIDs
@@ -286,14 +299,12 @@ FOR UPDATE`, in.TaskID, FindingConfirmed, FindingPending, in.AssetIDs[0])
 func mergeFindingTx(tx *sql.Tx, cand *DBFinding, in RecordFindingInput, prepared []PreparedTrafficEvidence) (*RecordedFinding, error) {
 	now := time.Now()
 	severity, summary, evidence := mergeFindingFields(*cand, in, now)
-	if reproductionUsable(in.Reproduction) && reproductionUsable(cand.Reproduction) &&
-		string(cand.Reproduction) != string(in.Reproduction) {
-		evidence = appendMergeSegment(evidence, "原结构化复现", string(cand.Reproduction), now, in.IntentID, in.Worker, "")
-	}
+	var applyRepro bool
+	evidence, applyRepro = mergeReproductionEvidence(cand.Reproduction, in.Reproduction, evidence, now, in.IntentID, in.Worker)
 	mergeSQL := `UPDATE findings SET severity=$2, summary=$3, evidence=$4`
 	mergeArgs := []any{cand.ID, severity, summary, evidence}
 	reproArg := 0
-	if reproductionUsable(in.Reproduction) {
+	if applyRepro {
 		reproArg = len(mergeArgs) + 1
 		mergeSQL += `, reproduction=$` + strconv.Itoa(reproArg)
 		mergeArgs = append(mergeArgs, string(in.Reproduction))
