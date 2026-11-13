@@ -3,12 +3,11 @@ import { defineConfig, devices } from "@playwright/test";
 const externalBase = process.env.PLAYWRIGHT_BASE_URL?.trim() ?? "";
 const useExternalBase = externalBase !== "";
 const baseURL = useExternalBase ? externalBase : "http://127.0.0.1:8787";
-const healthURL = useExternalBase
-  ? `${baseURL.replace(/\/$/, "")}/api/health`
-  : "http://127.0.0.1:8787/api/health";
+const healthURL = useExternalBase ? `${baseURL.replace(/\/$/, "")}/api/health` : "http://127.0.0.1:8787/api/health";
 
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: "**/advisory-auto.spec.ts",
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,

@@ -62,6 +62,7 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
+import { getAdvisoryAutoConfig, setAdvisoryAutoConfig, type AdvisoryAutoConfig } from "@/lib/approval-advisory-auto";
 import type {
   AutoAllowState,
   InterceptAction,
@@ -206,6 +207,91 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 // ---- LLM fallback judge card ----
 
 const FOLLOW_ACTIVE = "0"; // profile_id 0 = 跟随激活/默认配置
+
+function AdvisoryAutoCard() {
+  const [cfg, setCfg] = React.useState<AdvisoryAutoConfig>({
+    enabled: false,
+    global_slots: 8,
+    max_retries: 3,
+    daily_budget: 200,
+    daily_used: 0,
+    ready: false,
+    consent_given: false,
+  });
+  const [consent, setConsent] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+  const [saving, setSaving] = React.useState(false);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const next = await getAdvisoryAutoConfig();
+      setCfg(next);
+      setConsent(next.consent_given);
+    } catch (e) {
+      toast.error("載入背景審查設定失敗: " + (e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function save() {
+    if (cfg.enabled && !consent) {
+      toast.error("啟用前請勾選資料外送同意");
+      return;
+    }
+    setSaving(true);
+    try {
+      const next = await setAdvisoryAutoConfig({
+        ...cfg,
+        consent_at: consent ? new Date().toISOString() : cfg.consent_at || "",
+      });
+      setCfg(next);
+      toast.success("背景智慧審查設定已保存");
+    } catch (e) {
+      toast.error("保存失敗: " + (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="mt-4">
+      <CardContent className="space-y-4 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold">背景智慧審查（僅建議）</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              新待審批自動排程至裁判模型產生風險建議；不會自動核准、不執行工具。沿用上方「裁判模型」profile 設定。
+            </p>
+          </div>
+          <Switch checked={cfg.enabled} disabled={loading} onCheckedChange={(v) => setCfg((c) => ({ ...c, enabled: v }))} />
+        </div>
+        <label className="flex items-start gap-2 text-xs">
+          <input type="checkbox" className="mt-0.5" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
+          <span>我確認待審批內容（命令、參數與選取背景）可能送往外部 LLM，且結果僅供人工參考，不是授權。</span>
+        </label>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="全域並行上限">
+            <Input type="number" min={1} max={32} value={cfg.global_slots} onChange={(e) => setCfg((c) => ({ ...c, global_slots: Number(e.target.value) || 8 }))} />
+          </Field>
+          <Field label="失敗重試次數">
+            <Input type="number" min={0} max={10} value={cfg.max_retries} onChange={(e) => setCfg((c) => ({ ...c, max_retries: Number(e.target.value) }))} />
+          </Field>
+          <Field label="每日自動審查上限">
+            <Input type="number" min={1} max={5000} value={cfg.daily_budget} onChange={(e) => setCfg((c) => ({ ...c, daily_budget: Number(e.target.value) || 200 }))} />
+          </Field>
+        </div>
+        <p className="text-xs text-muted-foreground">今日已用 {cfg.daily_used} / {cfg.daily_budget} 次自動審查。</p>
+        <Button size="sm" disabled={saving || loading} onClick={() => void save()}>保存背景審查設定</Button>
+      </CardContent>
+    </Card>
+  );
+}
 
 const defaultJudge = (): JudgeConfig => ({
   enabled: false,
@@ -906,6 +992,7 @@ export default function InterceptPage() {
         {/* ---- tab: 模型配置 ---- */}
         <TabsContent value="judge" className="mt-4">
           <JudgeCard />
+          <AdvisoryAutoCard />
         </TabsContent>
       </Tabs>
 

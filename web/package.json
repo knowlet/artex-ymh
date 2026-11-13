@@ -13,12 +13,12 @@
     "check:fix": "biome check --write",
     "test:e2e": "playwright test",
     "prepare": "husky",
-    "generate:presets": "ts-node -P tsconfig.scripts.json src/scripts/generate-theme-presets.ts"
+    "generate:presets": "ts-node -P tsconfig.scripts.json src/scripts/generate-theme-presets.ts",
+    "e2e:advisory": "playwright test -c playwright.advisory.config.ts",
+    "test:e2e:config": "node --test playwright-suites.test.cjs"
   },
   "lint-staged": {
-    "*.{js,ts,jsx,tsx}": [
-      "biome check --write --no-errors-on-unmatched"
-    ]
+    "*.{js,ts,jsx,tsx}": ["biome check --write --no-errors-on-unmatched"]
   },
   "dependencies": {
     "@antv/g6": "^5.1.1",
