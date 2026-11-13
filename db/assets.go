@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+
+	"github.com/Autumn-27/artex/internal/endpoint"
 )
 
 // =====================================================================
@@ -686,6 +688,9 @@ type UpsertHTTPServiceReq struct {
 func (s *AssetStore) UpsertHTTPService(req UpsertHTTPServiceReq) (int64, error) {
 	if req.URL == "" {
 		return 0, fmt.Errorf("url is required")
+	}
+	if err := endpoint.ValidateAssetURL(req.URL); err != nil {
+		return 0, err
 	}
 	if err := ValidateAssetIP(req.IP); err != nil {
 		return 0, err

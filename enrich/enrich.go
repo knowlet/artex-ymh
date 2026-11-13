@@ -244,12 +244,14 @@ func (e *Engine) doHTTP(id int64, rawURL string) {
 	statusCode := resp.StatusCode
 	bodyLen := int64(len(body))
 	title := extractTitle(body)
-	_, _ = e.as.UpsertHTTPService(db.UpsertHTTPServiceReq{
+	if _, err := e.as.UpsertHTTPService(db.UpsertHTTPServiceReq{
 		URL:           rawURL,
 		StatusCode:    &statusCode,
 		ContentLength: &bodyLen,
 		PageTitle:     title,
-	})
+	}); err != nil {
+		log.Printf("[enrich] HTTP 服务资产更新失败 id=%d: %v", id, err)
+	}
 }
 
 func extractTitle(body []byte) string {
