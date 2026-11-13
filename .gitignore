@@ -20,6 +20,7 @@ web/next-env.d.ts
 .playwright-mcp/
 .playwright-cli/
 web/e2e/.runtime/
+web/e2e/proof/
 web/test-results/
 web/e2e/playwright-report/
 .idea/
