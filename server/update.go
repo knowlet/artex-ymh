@@ -86,7 +86,7 @@ func (c *releaseCache) get(ctx context.Context, client *http.Client, force bool)
 
 	if !force {
 		ttl := releaseTTL
-		if c.err != nil {
+		if c.err != nil && selfupdate.CheckErrorCode(c.err) != "no_release" {
 			ttl = releaseErrTTL
 		}
 		if !c.at.IsZero() && time.Since(c.at) < ttl {
@@ -243,6 +243,10 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 		"install_reason":  selfupdate.InstallDisabledReason,
 		"boot_notice":     boot.Detail,
 		"rolled_back":     boot.RolledBack,
+		"release_status":  "error",
+		"has_update":      false,
+		"comparable":      false,
+		"asset_available": false,
 	}
 
 	// 顶栏提示走缓存（默认）；用户点"检查更新"时带 force=1 强制回源。
@@ -250,12 +254,19 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	client := selfupdate.NewClient(s.m.GlobalProxy())
 	rel, err := relCache.get(r.Context(), client, force)
 	if err != nil {
-		out["error"] = err.Error()
-		out["error_code"] = selfupdate.CheckErrorCode(err)
+		if selfupdate.CheckErrorCode(err) == "no_release" {
+			// 仓库可访问但没有正式版本，是正常查询结果，不是连接失败。
+			out["release_status"] = "no_release"
+			out["message"] = err.Error()
+		} else {
+			out["error"] = err.Error()
+			out["error_code"] = selfupdate.CheckErrorCode(err)
+		}
 		writeJSON(w, 200, out)
 		return
 	}
 
+	out["release_status"] = "available"
 	latest := rel.TagName
 	out["latest"] = latest
 	out["notes"] = rel.Body
