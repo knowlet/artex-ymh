@@ -575,25 +575,40 @@ func (t *Traffic) initIndex() error {
 }
 
 func (t *Traffic) backfillReqPath(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+
 	var ver int
 	if err := conn.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&ver); err != nil {
 		return err
 	}
 	if ver >= indexUserVersionReqPath {
+		if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+			return err
+		}
+		committed = true
 		return nil
 	}
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck
-	rows, err := tx.QueryContext(ctx, `SELECT id, url FROM exchanges WHERE req_path='' AND url!=''`)
+
+	rows, err := conn.QueryContext(ctx, `SELECT id, url FROM exchanges WHERE req_path='' AND url!=''`)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "no such column") {
 			return nil
 		}
 		return err
 	}
+	type backfillRow struct {
+		id   string
+		path string
+	}
+	var todo []backfillRow
 	for rows.Next() {
 		var id, raw string
 		if rows.Scan(&id, &raw) != nil {
@@ -603,10 +618,7 @@ func (t *Traffic) backfillReqPath(ctx context.Context, conn *sql.Conn) error {
 		if rp == "" {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE exchanges SET req_path=? WHERE id=?`, rp, id); err != nil {
-			rows.Close()
-			return err
-		}
+		todo = append(todo, backfillRow{id: id, path: rp})
 	}
 	if err := rows.Close(); err != nil {
 		return err
@@ -614,10 +626,19 @@ func (t *Traffic) backfillReqPath(ctx context.Context, conn *sql.Conn) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, indexUserVersionReqPath)); err != nil {
+	for _, item := range todo {
+		if _, err := conn.ExecContext(ctx, `UPDATE exchanges SET req_path=? WHERE id=?`, item.path, item.id); err != nil {
+			return err
+		}
+	}
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, indexUserVersionReqPath)); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 // initIndexReadOnly probes an already-migrated on-disk index. No DDL — safe on mode=ro.

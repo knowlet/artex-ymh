@@ -51,10 +51,17 @@ func openPreReqPathIndex(t *testing.T, dir string) {
 	if _, err := db.Exec(preReqPathIndexSchema); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path)
-VALUES ('leg1',100,'h','GET','/users/{id}','http://h/users/42',200,'text/plain',0,0,'')`); err != nil {
-		t.Fatal(err)
+	ins := func(id string, ts int64, url string) {
+		t.Helper()
+		tmpl := "/users/{id}"
+		if _, err := db.Exec(`INSERT INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path)
+VALUES (?,?,'h','GET',?,?,200,'text/plain',0,0,'')`, id, ts, tmpl, url); err != nil {
+			t.Fatal(err)
+		}
 	}
+	ins("leg1", 100, "http://h/users/42")
+	ins("leg2", 101, "http://h/users/43")
+	ins("leg3", 102, "http://h/admin/settings")
 }
 
 func TestOpenIndexReadOnlyLegacySchema(t *testing.T) {
@@ -75,6 +82,41 @@ func TestOpenIndexReadOnlyLegacySchema(t *testing.T) {
 	step := "GET /users/42 HTTP/1.1\nHost: h\n\n"
 	if id, ok := tr.ResolveStepExchange(step, ""); !ok || id != "leg1" {
 		t.Fatalf("legacy exchange link: want leg1/true, got %q/%v", id, ok)
+	}
+}
+
+func TestReqPathBackfillAllLegacyRows(t *testing.T) {
+	dir := t.TempDir()
+	openPreReqPathIndex(t, dir)
+	if err := migrateIndexFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	index := filepath.Join(dir, "_index", "index.sqlite")
+	db, err := sql.Open("sqlite", index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	want := map[string]string{
+		"leg1": "/users/42",
+		"leg2": "/users/43",
+		"leg3": "/admin/settings",
+	}
+	for id, path := range want {
+		var got string
+		if err := db.QueryRow(`SELECT req_path FROM exchanges WHERE id=?`, id).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != path {
+			t.Fatalf("%s req_path = %q, want %q", id, got, path)
+		}
+	}
+	var empty int
+	if err := db.QueryRow(`SELECT count(*) FROM exchanges WHERE req_path='' AND url!=''`).Scan(&empty); err != nil {
+		t.Fatal(err)
+	}
+	if empty != 0 {
+		t.Fatalf("%d legacy rows still missing req_path", empty)
 	}
 }
 
