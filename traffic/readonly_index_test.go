@@ -78,6 +78,56 @@ func TestOpenIndexReadOnlyLegacySchema(t *testing.T) {
 	}
 }
 
+func TestReqPathBackfillRunsOnce(t *testing.T) {
+	dir := t.TempDir()
+	openPreReqPathIndex(t, dir)
+	if err := migrateIndexFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	index := filepath.Join(dir, "_index", "index.sqlite")
+	readVer := func() int {
+		t.Helper()
+		db, err := sql.Open("sqlite", index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var ver int
+		if err := db.QueryRow(`PRAGMA user_version`).Scan(&ver); err != nil {
+			t.Fatal(err)
+		}
+		return ver
+	}
+	if ver := readVer(); ver != indexUserVersionReqPath {
+		t.Fatalf("first migrate user_version = %d, want %d", ver, indexUserVersionReqPath)
+	}
+	if err := migrateIndexFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	if ver := readVer(); ver != indexUserVersionReqPath {
+		t.Fatalf("second migrate user_version = %d", ver)
+	}
+	// user_version already set — backfill must not run again (row left empty stays empty).
+	db, err := sql.Open("sqlite", index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE exchanges SET req_path='' WHERE id='leg1'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateIndexFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	var rp string
+	if err := db.QueryRow(`SELECT req_path FROM exchanges WHERE id='leg1'`).Scan(&rp); err != nil {
+		t.Fatal(err)
+	}
+	if rp != "" {
+		t.Fatalf("backfill should have been skipped, req_path=%q", rp)
+	}
+}
+
 func TestReproductionLinksAfterReqPathBackfill(t *testing.T) {
 	dir := t.TempDir()
 	openPreReqPathIndex(t, dir)

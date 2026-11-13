@@ -109,6 +109,8 @@ const (
 	maxBlobRead = 8 * 1024
 	// autoVacuumIncremental is SQLite's numeric value for auto_vacuum=incremental.
 	autoVacuumIncremental = 2
+	// indexUserVersionReqPath: req_path column present and url→req_path backfill done.
+	indexUserVersionReqPath = 1
 	// reclaimChunkPages bounds how much index space one locked step returns to the
 	// filesystem (pages are 4KiB, so ~32MB). Reclamation holds the write lock, and
 	// record() runs before go-mitmproxy replies to the client, so an unbounded
@@ -573,14 +575,25 @@ func (t *Traffic) initIndex() error {
 }
 
 func (t *Traffic) backfillReqPath(ctx context.Context, conn *sql.Conn) error {
-	rows, err := conn.QueryContext(ctx, `SELECT id, url FROM exchanges WHERE req_path='' AND url!=''`)
+	var ver int
+	if err := conn.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&ver); err != nil {
+		return err
+	}
+	if ver >= indexUserVersionReqPath {
+		return nil
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	rows, err := tx.QueryContext(ctx, `SELECT id, url FROM exchanges WHERE req_path='' AND url!=''`)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "no such column") {
 			return nil
 		}
 		return err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var id, raw string
 		if rows.Scan(&id, &raw) != nil {
@@ -590,11 +603,21 @@ func (t *Traffic) backfillReqPath(ctx context.Context, conn *sql.Conn) error {
 		if rp == "" {
 			continue
 		}
-		if _, err := conn.ExecContext(ctx, `UPDATE exchanges SET req_path=? WHERE id=?`, rp, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE exchanges SET req_path=? WHERE id=?`, rp, id); err != nil {
+			rows.Close()
 			return err
 		}
 	}
-	return rows.Err()
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, indexUserVersionReqPath)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // initIndexReadOnly probes an already-migrated on-disk index. No DDL — safe on mode=ro.
