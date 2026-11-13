@@ -19,7 +19,7 @@ export default defineConfig({
   webServer: {
     command: "bash e2e/bin/start-backend.sh",
     url: "http://127.0.0.1:8787/api/health",
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 600_000,
     cwd: __dirname,
   },

@@ -896,6 +896,14 @@ export interface TrafficResp {
 export interface TrafficDetail {
   req: string;
   resp: string;
+  id?: string;
+  ts?: string;
+  host?: string;
+  method?: string;
+  url?: string;
+  status?: number;
+  content_type?: string;
+  resp_len?: number;
 }
 
 // One distinct recorded host with its exchange count (target picker).

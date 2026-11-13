@@ -33,10 +33,9 @@ test.describe("findings detail — reproduction panel", () => {
 
     await trafficLink.click();
     await expect(page).toHaveURL(/\/function\/traffic\/?\?id=e2e-ex-001/);
-    await expect(page.getByRole("cell", { name: "e2e.local", exact: true })).toBeVisible({
-      timeout: 20_000,
-    });
-    await expect(page.getByText("http://e2e.local/e2e/vuln")).toBeVisible();
+    await expect(page.getByRole("tab", { name: "请求 Request" })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("GET /e2e/vuln HTTP/1.1")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "e2e.local" })).toBeVisible();
   });
 
   test("finding without reproduction hides the reproduction panel", async ({ page }) => {

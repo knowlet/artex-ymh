@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useSearchParams } from "next/navigation";
 
 import {
   ArrowDownWideNarrowIcon,
@@ -111,7 +112,9 @@ const SORT_STORAGE_KEY = "traffic-sort";
 // which the backend reads as either an exact code or an "Nxx" class band.
 const STATUS_BUCKETS = ["2xx", "3xx", "4xx", "5xx"];
 
-export default function TrafficPage() {
+function TrafficPageInner() {
+  const searchParams = useSearchParams();
+  const deepLinkId = searchParams.get("id")?.trim() ?? "";
   const [selectedFlows, setSelectedFlows] = React.useState<Set<string>>(() => new Set());
   const [linking, setLinking] = React.useState(false);
   const [page, setPage] = React.useState(0);
@@ -332,6 +335,41 @@ export default function TrafficPage() {
     );
 
   const exchanges = React.useMemo(() => traffic?.exchanges ?? [], [traffic]);
+
+  // Deep-link from finding reproduction steps: ?id=<exchange_id> opens the detail sheet.
+  React.useEffect(() => {
+    if (!deepLinkId) {
+      return;
+    }
+    const inPage = exchanges.find((e) => e.id === deepLinkId);
+    if (inPage) {
+      setSelected(inPage);
+      return;
+    }
+    let alive = true;
+    api
+      .trafficExchange(deepLinkId)
+      .then((d) => {
+        if (!alive || !d.id) {
+          return;
+        }
+        setSelected({
+          id: d.id,
+          ts: d.ts ?? "",
+          host: d.host ?? "",
+          method: d.method ?? "GET",
+          url: d.url ?? "",
+          status: d.status ?? 0,
+          content_type: d.content_type ?? "",
+          resp_len: d.resp_len ?? 0,
+        });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [deepLinkId, exchanges]);
+
   const total = traffic?.total ?? exchanges.length;
   const pageCount = Math.max(1, Math.ceil(total / size));
   const rangeStart = total === 0 ? 0 : page * size + 1;
@@ -826,5 +864,14 @@ export default function TrafficPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+// useSearchParams must sit under a Suspense boundary for static export.
+export default function TrafficPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <TrafficPageInner />
+    </React.Suspense>
   );
 }
