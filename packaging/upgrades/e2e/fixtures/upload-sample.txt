@@ -1,0 +1,1 @@
+disposable upload fixture for upgrade e2e — no secrets

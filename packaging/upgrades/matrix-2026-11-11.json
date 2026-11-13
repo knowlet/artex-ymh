@@ -1,0 +1,96 @@
+{
+  "schema": "artex-upgrade-matrix/v1",
+  "reference_date": "2026-11-11",
+  "baseline_git": "main",
+  "rows": [
+    {
+      "component": "go-toolchain",
+      "current": "1.26.3",
+      "target": "1.27.4",
+      "status": "upgraded",
+      "evidence": "go.dev stable go1.27.4; full go test pass=2098 fail=0 on disposable PG17"
+    },
+    {
+      "component": "github.com/Autumn-27/norma",
+      "current": "v0.4.3",
+      "target": "v0.4.4",
+      "status": "upgraded"
+    },
+    {
+      "component": "github.com/jackc/pgx/v5",
+      "current": "v5.10.0",
+      "target": "v5.12.0",
+      "status": "upgraded",
+      "evidence": "pgx v5 supports PostgreSQL 17 (jackc/pgx release notes); PG17 integration pass"
+    },
+    {
+      "component": "postgres-server",
+      "current": "16",
+      "target": "17-alpine (17.11)",
+      "status": "upgraded",
+      "evidence": "postgresql.org supported major; CI/docker-compose bumped; measured go test on PG17.11",
+      "irreversible": "Major upgrade: rollback via pg_dump/pg_restore only (documented in MIGRATION-ROLLBACK)"
+    },
+    {
+      "component": "@hookform/resolvers",
+      "current": "^5.4.0",
+      "target": "^7.0.5",
+      "status": "upgraded",
+      "evidence": "No direct resolvers imports in web/src; tsc --noEmit + build:static pass after 7.x"
+    },
+    {
+      "component": "@tanstack/react-table",
+      "current": "^8.21.3",
+      "target": "^9.3.1",
+      "status": "upgraded",
+      "evidence": "No @tanstack/react-table imports in web/src; tsc + static build pass after 9.x"
+    },
+    {
+      "component": "docker-node-runtime",
+      "current": "22.14.0 / NodeSource 20",
+      "target": "22.23.4",
+      "status": "upgraded",
+      "evidence": "official nodejs.org tarball + SHASUMS256 grep|sha256sum -c (Dockerfile/Dockerfile.source)"
+    },
+    {
+      "component": "playwright (image global)",
+      "current": "1.63.0",
+      "target": "1.65.0",
+      "status": "upgraded"
+    },
+    {
+      "component": "python-base-image",
+      "current": "python:3.12-slim-bookworm",
+      "target": "3.12-slim-bookworm",
+      "status": "hold",
+      "rationale": "Bookworm 3.12 retained; impacket/nxc venv paths not revalidated on 3.13-slim in this pass"
+    },
+    {
+      "component": "npm audit (dev chain)",
+      "current": "shadcn→ts-morph→minimatch",
+      "target": "documented",
+      "status": "hold",
+      "evidence": "moderate=4 low=2; paths in packaging/upgrades/evidence/npm-audit-*.json"
+    },
+    {
+      "component": "govulncheck unreachable",
+      "current": "brotli GO-2026-6888; x/crypto openpgp GO-2026-5932",
+      "target": "monitor",
+      "status": "hold",
+      "evidence": "0 symbol hits; verbose report packaging/upgrades/evidence/govulncheck-verbose-*.txt"
+    },
+    {
+      "component": "pr15-integration",
+      "status": "compatible",
+      "rationale": "advisory Playwright e2e not merged; no go.mod conflict"
+    },
+    {
+      "component": "pr17-integration",
+      "status": "compatible",
+      "rationale": "URL validation isolated; no manifest overlap"
+    }
+  ],
+  "security_advisory_scope": {
+    "jwt_historical_exposure_pr15": "out_of_scope_not_addressed"
+  }
+}

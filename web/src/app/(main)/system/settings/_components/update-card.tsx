@@ -115,7 +115,7 @@ export function UpdateCard() {
         if (p.phase === "failed") {
           es.close();
           setBusy(false);
-          toast.error("更新失败：" + (p.error || p.message));
+          toast.error("更新失败：" + (p.error ?? p.message ?? "unknown"));
           return;
         }
         if (p.phase === "staged") {

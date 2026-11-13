@@ -1,0 +1,16 @@
+
+Running 9 tests using 1 worker
+
+(node:69328) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 smoke.spec.ts:5:3 › upgrade smoke › login route and API health (230ms)
+  ✓  2 smoke.spec.ts:13:3 › upgrade smoke › unauthenticated tasks API rejected (14ms)
+  ✓  3 ui-workflows.spec.ts:21:3 › rendered UI workflows (real backend) › login page rejects anonymous tasks; authorized list loads (536ms)
+  ✓  4 ui-workflows.spec.ts:35:3 › rendered UI workflows (real backend) › create task via rendered sheet (CRUD create + list read) (1.1s)
+  ✓  5 ui-workflows.spec.ts:48:3 › rendered UI workflows (real backend) › staging chat upload via UI control (521ms)
+  ✓  6 ui-workflows.spec.ts:59:3 › rendered UI workflows (real backend) › settings update card renders for authorized user (379ms)
+  ✓  7 workflows.spec.ts:18:3 › core workflows (real backend) › authorized API: login and list tasks (321ms)
+  ✓  8 workflows.spec.ts:36:3 › core workflows (real backend) › rejected API without token (6ms)
+  ✓  9 workflows.spec.ts:41:3 › core workflows (real backend) › health and setup UI (152ms)
+
+  9 passed (4.0s)

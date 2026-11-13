@@ -1,0 +1,43 @@
+{
+  "schema": "artex-pg-major-rehearsal/v1",
+  "timestamp_utc": "20261111T122428Z",
+  "pre_cutover": {
+    "postgres": "16.15",
+    "binary": "main baseline (go1.26.3 build)",
+    "database": "artex_pg16_pre",
+    "companies_seed": 1,
+    "tasks_seed": 1,
+    "task_id": "1",
+    "data_dir_marker": "migration-marker.txt"
+  },
+  "backup": {
+    "tool": "pg_dump -Fc via PG16 container client",
+    "file": "pg16-pre-cutover-20261111T122428Z.dump",
+    "sha256": "f6bb9242e1cd5242616961afb6295652a6efae6723a09a307c67e1a949ed125e"
+  },
+  "cutover": {
+    "method": "pg_restore into fresh PostgreSQL 17 database (logical dump/restore; pg_upgrade not used in this rehearsal)",
+    "postgres": "17.11",
+    "database": "artex_pg17_upgraded"
+  },
+  "post_upgrade_verify": {
+    "binary": "upgrade branch (go1.27.4)",
+    "companies_preserved": true,
+    "task_preserved": true,
+    "auth_login": true,
+    "data_dir_pre_marker_survives": true,
+    "post_cutover_data_loss_note": "Writes after cutover to PG17 (e.g. post-cutover-write line in data/) are NOT in the PG16-era dump; rollback restores DB to pre-cutover instant only \u2014 reconcile or lose post-cutover filesystem deltas."
+  },
+  "rollback": {
+    "method": "restore PRE-cutover PG16 dump into fresh PG16 database (NOT a PG17 dump)",
+    "database": "artex_pg16_rollback",
+    "baseline_binary_smoke": true,
+    "companies_preserved": true,
+    "tasks_preserved": true
+  },
+  "unsupported": {
+    "pg17_dump_restore_to_pg16": "pg_restore: error: unsupported version (1.16) in file header ",
+    "schema_major_downgrade": "restore-only via pre-cutover backup; never import PG17 logical dump into PG16"
+  },
+  "go_toolchain_note": "Go 1.26\u21921.27 is a compiler/runtime bump (redeploy prior binary); persistent irreversibility applies to PostgreSQL major state after cutover without a matching-era backup."
+}
