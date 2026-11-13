@@ -174,7 +174,7 @@ function FindingDetailInner() {
                 </CardContent>
               </Card>
               <FindingRetestPanel key={id} findingId={id} readOnly={finding.inherited} onCompleted={load} />
-              <FindingReproductionPanel repro={finding.reproduction} />
+              <FindingReproductionPanel repro={finding.reproduction} taskId={finding.task_id} />
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm">证据 / PoC</CardTitle>

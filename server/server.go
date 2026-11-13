@@ -3264,14 +3264,20 @@ func (s *Server) deleteAllTraffic(w http.ResponseWriter, r *http.Request) {
 // getTrafficExchange returns the full raw request/response of one exchange,
 // read on demand from the traffic tree (bodies are not in the paged list).
 func (s *Server) getTrafficExchange(w http.ResponseWriter, r *http.Request) {
-	tr := s.m.Traffic()
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, 400, "missing id")
+		return
+	}
+	taskID := int64(atoiDefault(r.URL.Query().Get("task_id"), 0))
+	tr := s.trafficStoreForExchange(taskID)
 	if tr == nil {
 		writeErr(w, 404, "traffic disabled")
 		return
 	}
-	id := r.URL.Query().Get("id")
-	if id == "" {
-		writeErr(w, 400, "missing id")
+	meta, err := tr.MetaByID(id)
+	if err != nil {
+		writeErr(w, 404, err.Error())
 		return
 	}
 	req, resp, err := tr.Get(id)
@@ -3279,21 +3285,17 @@ func (s *Server) getTrafficExchange(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err.Error())
 		return
 	}
-	out := map[string]any{"req": req, "resp": resp}
-	if meta, err := tr.MetaByID(id); err == nil {
-		if dtos := trafficDTOs([]traffic.ExchangeMeta{meta}); len(dtos) == 1 {
-			d := dtos[0]
-			out["id"] = d.ID
-			out["ts"] = d.TS
-			out["host"] = d.Host
-			out["method"] = d.Method
-			out["url"] = d.URL
-			out["status"] = d.Status
-			out["content_type"] = d.ContentType
-			out["resp_len"] = d.RespLen
-		}
+	writeJSON(w, 200, trafficExchangeDetail(meta, req, resp))
+}
+
+func (s *Server) trafficStoreForExchange(taskID int64) *traffic.Traffic {
+	if s.m == nil {
+		return nil
 	}
-	writeJSON(w, 200, out)
+	if taskID > 0 {
+		return s.m.TrafficStoreExistingForTask(taskID)
+	}
+	return s.m.Traffic()
 }
 
 // getTrafficBlob streams one oversized body by its sha256. Bodies past the inline

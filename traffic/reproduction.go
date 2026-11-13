@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/Autumn-27/artex/db"
 )
 
 // ResolveStepExchange maps a reproduction step back to the real recorded exchange it
@@ -314,7 +316,7 @@ func (t *Traffic) resolveStepInWindow(sinceUnix, untilUnix, cursor int64, used m
 }
 
 func reproBaseWhere(method, host, path string) (string, []any) {
-	path = normalizeReqPath(path)
+	path = templatePathForMatch(path)
 	where := `method=? AND url_template=?`
 	args := []any{strings.ToUpper(method), path}
 	if h := strings.TrimSpace(host); h != "" {
@@ -354,6 +356,16 @@ func normalizeReqPath(p string) string {
 		p = p[:i]
 	}
 	return p
+}
+
+// templatePathForMatch canonicalizes a step path the same way record() templates
+// url_template so /users/123 matches the indexed /users/{id}.
+func templatePathForMatch(p string) string {
+	p = normalizeReqPath(p)
+	if p == "" {
+		p = "/"
+	}
+	return db.TemplatePath(p)
 }
 
 // Reproduction-step request parsing: a step's "request" is either a verbatim HTTP
@@ -399,6 +411,9 @@ func parseStepRequest(text string) (method, host, path, query, bodyToken string)
 	if parsed, err := url.Parse(u); err == nil && parsed.Host != "" {
 		host = parsed.Hostname()
 		path, query = parsed.Path, parsed.RawQuery
+		if path == "" {
+			path = "/"
+		}
 	} else {
 		path, query = splitQuery(u)
 	}

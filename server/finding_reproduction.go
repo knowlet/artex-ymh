@@ -57,6 +57,14 @@ func (s *Server) taskReproWindow(taskID int64) (since time.Time, ok bool) {
 	return since, true
 }
 
+// taskTrafficResolver binds report_finding reproduction linking to a specific task's
+// traffic index (per-task MITM when enabled).
+func (s *Server) taskTrafficResolver(taskID int64) func(int64, json.RawMessage) json.RawMessage {
+	return func(_ int64, repro json.RawMessage) json.RawMessage {
+		return s.resolveFindingTraffic(taskID, repro)
+	}
+}
+
 // resolveFindingTraffic matches reproduction steps to recorded exchanges in the task window.
 func (s *Server) resolveFindingTraffic(taskID int64, repro json.RawMessage) json.RawMessage {
 	if s.m == nil || taskID <= 0 {
@@ -114,17 +122,24 @@ func (s *Server) reproductionForFinding(findingID int64, raw json.RawMessage, ta
 		}
 	}
 	if needResolve && s.m != nil && taskID != nil && *taskID > 0 {
-		trStore := s.m.TrafficStoreForTask(context.Background(), *taskID)
+		trStore := s.m.TrafficStoreExistingForTask(*taskID)
 		since, ok := s.taskReproWindow(*taskID)
 		if trStore != nil && ok {
-			refs := reproStepRefs(rp)
-			ids := trStore.ResolveSteps(since.Unix(), time.Now().Unix(), refs)
-			for i, id := range ids {
-				if id != "" && rp.Steps[i].ExchangeID == "" {
-					rp.Steps[i].ExchangeID = id
-				}
-			}
+			linkReproductionSteps(trStore, since.Unix(), time.Now().Unix(), &rp)
 		}
 	}
 	return rp
+}
+
+func linkReproductionSteps(trStore *traffic.Traffic, sinceUnix, untilUnix int64, rp *report.Reproduction) {
+	if trStore == nil || rp == nil {
+		return
+	}
+	refs := reproStepRefs(*rp)
+	ids := trStore.ResolveSteps(sinceUnix, untilUnix, refs)
+	for i, id := range ids {
+		if id != "" && rp.Steps[i].ExchangeID == "" {
+			rp.Steps[i].ExchangeID = id
+		}
+	}
 }

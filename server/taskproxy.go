@@ -102,12 +102,8 @@ func (m *taskProxyManager) resolveUpstream(ctx context.Context, taskID int64) (s
 	return pickUpstream(recs, gp), nil
 }
 
-// ForTask 返回任务 worker 应使用的代理地址与 CA:首次调用懒建该任务的 MITM
-// 实例(独立 CA 目录防首建竞争、端口池分配并登记端口审计台账),之后每次调用
-// 顺手重算上游(事件间隙的兜底,与 OnStateChange 的 Refresh 互补)。建实例失败
-// 只记日志并返回 "","" —— 调用方回落全局代理,绝不让录制子系统拖垮 worker。
 // StoreForTask returns the per-task traffic index, building the MITM instance when
-// needed. Nil when task proxy is disabled or instance creation fails.
+// needed (worker / record-time resolution). Nil when instance creation fails.
 func (m *taskProxyManager) StoreForTask(ctx context.Context, taskID int64) *traffic.Traffic {
 	if taskID <= 0 {
 		return nil
@@ -121,6 +117,24 @@ func (m *taskProxyManager) StoreForTask(ctx context.Context, taskID int64) *traf
 	return nil
 }
 
+// ExistingStoreForTask returns a running task MITM index without creating one
+// (view-time / API lookups). Nil when no instance is active for the task.
+func (m *taskProxyManager) ExistingStoreForTask(taskID int64) *traffic.Traffic {
+	if taskID <= 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inst := m.proxies[taskID]; inst != nil {
+		return inst.tr
+	}
+	return nil
+}
+
+// ForTask 返回任务 worker 应使用的代理地址与 CA:首次调用懒建该任务的 MITM
+// 实例(独立 CA 目录防首建竞争、端口池分配并登记端口审计台账),之后每次调用
+// 顺手重算上游(事件间隙的兜底,与 OnStateChange 的 Refresh 互补)。建实例失败
+// 只记日志并返回 "","" —— 调用方回落全局代理,绝不让录制子系统拖垮 worker。
 func (m *taskProxyManager) ForTask(ctx context.Context, taskID int64) (addr, caCert string) {
 	if taskID <= 0 {
 		return "", ""

@@ -115,6 +115,14 @@ const STATUS_BUCKETS = ["2xx", "3xx", "4xx", "5xx"];
 function TrafficPageInner() {
   const searchParams = useSearchParams();
   const deepLinkId = searchParams.get("id")?.trim() ?? "";
+  const deepTaskId = React.useMemo(() => {
+    const raw = searchParams.get("task_id")?.trim();
+    if (!raw) {
+      return undefined;
+    }
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  }, [searchParams]);
   const [selectedFlows, setSelectedFlows] = React.useState<Set<string>>(() => new Set());
   const [linking, setLinking] = React.useState(false);
   const [page, setPage] = React.useState(0);
@@ -335,12 +343,20 @@ function TrafficPageInner() {
     );
 
   const exchanges = React.useMemo(() => traffic?.exchanges ?? [], [traffic]);
+  const deepLinkOpened = React.useRef<string | null>(null);
 
-  // Deep-link from finding reproduction steps: ?id=<exchange_id> opens the detail sheet.
+  // Deep-link from finding reproduction steps: ?id=<exchange_id> opens the detail sheet once.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only re-run when URL id/task changes, not on poll refresh.
   React.useEffect(() => {
     if (!deepLinkId) {
+      deepLinkOpened.current = null;
       return;
     }
+    const key = deepTaskId ? `${deepTaskId}:${deepLinkId}` : deepLinkId;
+    if (deepLinkOpened.current === key) {
+      return;
+    }
+    deepLinkOpened.current = key;
     const inPage = exchanges.find((e) => e.id === deepLinkId);
     if (inPage) {
       setSelected(inPage);
@@ -348,9 +364,10 @@ function TrafficPageInner() {
     }
     let alive = true;
     api
-      .trafficExchange(deepLinkId)
+      .trafficExchange(deepLinkId, deepTaskId)
       .then((d) => {
         if (!alive || !d.id) {
+          toast.error("无法加载该流量记录（可能已归档或位于其他任务索引）");
           return;
         }
         setSelected({
@@ -364,11 +381,15 @@ function TrafficPageInner() {
           resp_len: d.resp_len ?? 0,
         });
       })
-      .catch(() => {});
+      .catch((e) => {
+        if (alive) {
+          toast.error(`无法打开流量记录：${(e as Error).message}`);
+        }
+      });
     return () => {
       alive = false;
     };
-  }, [deepLinkId, exchanges]);
+  }, [deepLinkId, deepTaskId]);
 
   const total = traffic?.total ?? exchanges.length;
   const pageCount = Math.max(1, Math.ceil(total / size));

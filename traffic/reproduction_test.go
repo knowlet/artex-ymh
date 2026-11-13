@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/Autumn-27/artex/db"
 )
 
 func insertReproExchange(t *testing.T, tr *Traffic, id string, ts int64, host, method, rawURL, reqB, respB string, status int) {
@@ -12,8 +14,12 @@ func insertReproExchange(t *testing.T, tr *Traffic, id string, ts int64, host, m
 		status = 200
 	}
 	tmpl := "/"
-	if u, err := url.Parse(rawURL); err == nil && u.Path != "" {
-		tmpl = normalizeReqPath(u.Path)
+	if u, err := url.Parse(rawURL); err == nil {
+		p := u.EscapedPath()
+		if p == "" {
+			p = "/"
+		}
+		tmpl = db.TemplatePath(p)
 	}
 	if _, err := tr.db.Exec(`INSERT OR REPLACE INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path)
 VALUES(?,?,?,?,?,?,?,?,?,?,'')`,
@@ -93,6 +99,22 @@ func TestResolveStepHostMismatch(t *testing.T) {
 	step := "GET /api HTTP/1.1\nHost: good.example\n\n"
 	if id, ok := tr.ResolveStepExchange(step, ""); ok {
 		t.Fatalf("want abstain on host mismatch, got %q", id)
+	}
+}
+
+func TestResolveStepTemplatePath(t *testing.T) {
+	tr, _ := openTraffic(t)
+	insertReproExchange(t, tr, "u1", 100, "h", "GET", "http://h/users/123", "", "ok", 200)
+	step := "GET /users/123 HTTP/1.1\nHost: h\n\n"
+	if id, ok := tr.ResolveStepExchange(step, "ok"); !ok || id != "u1" {
+		t.Fatalf("want u1/true, got %q/%v", id, ok)
+	}
+}
+
+func TestParseCurlRootURL(t *testing.T) {
+	_, _, path, _, _ := parseStepRequest(`curl http://host:8080`)
+	if path != "/" {
+		t.Fatalf("want / for root URL, got %q", path)
 	}
 }
 

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { FindingReproduction, ReproStep } from "@/lib/types";
 
-function StepBlock({ step, index }: { step: ReproStep; index: number }) {
+function StepBlock({ step, index, taskId }: { step: ReproStep; index: number; taskId?: string | number }) {
   return (
     <div className="space-y-2 rounded-md border bg-muted/20 p-3">
       <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
@@ -28,7 +28,11 @@ function StepBlock({ step, index }: { step: ReproStep; index: number }) {
       ) : null}
       {step.exchange_id ? (
         <Button asChild variant="outline" size="sm" className="h-7 gap-1">
-          <Link href={`/function/traffic?id=${encodeURIComponent(step.exchange_id)}`}>
+          <Link
+            href={`/function/traffic?id=${encodeURIComponent(step.exchange_id)}${
+              taskId ? `&task_id=${encodeURIComponent(String(taskId))}` : ""
+            }`}
+          >
             <ExternalLinkIcon className="size-3.5" />
             查看流量包 {step.exchange_id}
           </Link>
@@ -38,7 +42,13 @@ function StepBlock({ step, index }: { step: ReproStep; index: number }) {
   );
 }
 
-export function FindingReproductionPanel({ repro }: { repro?: FindingReproduction | null }) {
+export function FindingReproductionPanel({
+  repro,
+  taskId,
+}: {
+  repro?: FindingReproduction | null;
+  taskId?: string | number;
+}) {
   if (!repro) return null;
   const hasSteps = (repro.steps?.length ?? 0) > 0;
   if (!hasSteps && !repro.entry_point && !(repro.prerequisites?.length ?? 0)) {
@@ -66,7 +76,13 @@ export function FindingReproductionPanel({ repro }: { repro?: FindingReproductio
             </ul>
           </div>
         ) : null}
-        {hasSteps ? <div className="space-y-2">{repro.steps!.map((st, i) => <StepBlock key={i} step={st} index={i} />)}</div> : null}
+        {hasSteps ? (
+          <div className="space-y-2">
+            {repro.steps!.map((st, i) => (
+              <StepBlock key={i} step={st} index={i} taskId={taskId} />
+            ))}
+          </div>
+        ) : null}
         {repro.provenance ? (
           <p className="text-xs text-muted-foreground">
             来源：<span className="text-foreground">{repro.provenance}</span>

@@ -157,6 +157,18 @@ type TrafficExchangeDTO struct {
 	RespLen     int    `json:"resp_len"`
 }
 
+// TrafficExchangeDetailDTO is one exchange's list metadata plus raw req/resp bodies.
+type TrafficExchangeDetailDTO struct {
+	TrafficExchangeDTO
+	Req  string `json:"req"`
+	Resp string `json:"resp"`
+}
+
+func trafficExchangeDetail(meta traffic.ExchangeMeta, req, resp string) TrafficExchangeDetailDTO {
+	d := trafficDTOs([]traffic.ExchangeMeta{meta})[0]
+	return TrafficExchangeDetailDTO{TrafficExchangeDTO: d, Req: req, Resp: resp}
+}
+
 func trafficDTOs(ex []traffic.ExchangeMeta) []TrafficExchangeDTO {
 	out := make([]TrafficExchangeDTO, 0, len(ex))
 	for _, e := range ex {

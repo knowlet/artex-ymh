@@ -964,16 +964,29 @@ func (m *Manager) Assets() *pgdb.AssetStore  { return m.assets }
 func (m *Manager) PG() *pgdb.DB              { return m.pg }
 func (m *Manager) Traffic() *traffic.Traffic { return m.traffic }
 
-// TrafficStoreForTask returns the traffic index that holds exchanges for a task's
-// worker MITM (per-task instance when enabled, otherwise the global recorder).
+// TrafficStoreForTask returns the task's traffic index for record-time resolution,
+// building a per-task MITM instance when task proxy is enabled. When per-task
+// creation fails, returns nil (does not fall back to the global recorder). When
+// task proxy is disabled, returns the process-wide recorder.
 func (m *Manager) TrafficStoreForTask(ctx context.Context, taskID int64) *traffic.Traffic {
 	if taskID <= 0 {
 		return nil
 	}
 	if m.taskProxy != nil {
-		if tr := m.taskProxy.StoreForTask(ctx, taskID); tr != nil {
-			return tr
-		}
+		return m.taskProxy.StoreForTask(ctx, taskID)
+	}
+	return m.traffic
+}
+
+// TrafficStoreExistingForTask returns an already-running task traffic index without
+// creating MITM instances (view-time / UI). Nil when task proxy is on but the task
+// has no live instance; otherwise the global recorder when task proxy is off.
+func (m *Manager) TrafficStoreExistingForTask(taskID int64) *traffic.Traffic {
+	if taskID <= 0 {
+		return nil
+	}
+	if m.taskProxy != nil {
+		return m.taskProxy.ExistingStoreForTask(taskID)
 	}
 	return m.traffic
 }
