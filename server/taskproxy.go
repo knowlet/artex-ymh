@@ -49,12 +49,13 @@ type taskProxyManager struct {
 	portMax     int
 	mu          sync.Mutex
 	proxies     map[int64]*taskProxyInst
+	readOnly    map[int64]*traffic.Traffic
 }
 
 func newTaskProxyManager(dir string, store tunnelLister, globalProxy func() string, portMin, portMax int) *taskProxyManager {
 	return &taskProxyManager{
 		dir: filepath.Join(dir, "traffic-tasks"), store: store, globalProxy: globalProxy,
-		portMin: portMin, portMax: portMax, proxies: map[int64]*taskProxyInst{},
+		portMin: portMin, portMax: portMax, proxies: map[int64]*taskProxyInst{}, readOnly: map[int64]*traffic.Traffic{},
 	}
 }
 
@@ -117,8 +118,8 @@ func (m *taskProxyManager) StoreForTask(ctx context.Context, taskID int64) *traf
 	return nil
 }
 
-// ExistingStoreForTask returns a running task MITM index without creating one
-// (view-time / API lookups). Nil when no instance is active for the task.
+// ExistingStoreForTask returns a task traffic index without starting MITM: an active
+// in-memory instance when present, otherwise a read-only open of the on-disk index.
 func (m *taskProxyManager) ExistingStoreForTask(taskID int64) *traffic.Traffic {
 	if taskID <= 0 {
 		return nil
@@ -128,7 +129,16 @@ func (m *taskProxyManager) ExistingStoreForTask(taskID int64) *traffic.Traffic {
 	if inst := m.proxies[taskID]; inst != nil {
 		return inst.tr
 	}
-	return nil
+	if tr := m.readOnly[taskID]; tr != nil {
+		return tr
+	}
+	dir := filepath.Join(m.dir, strconv.FormatInt(taskID, 10))
+	tr, err := traffic.OpenIndexReadOnly(dir)
+	if err != nil {
+		return nil
+	}
+	m.readOnly[taskID] = tr
+	return tr
 }
 
 // ForTask 返回任务 worker 应使用的代理地址与 CA:首次调用懒建该任务的 MITM
@@ -239,7 +249,12 @@ func (m *taskProxyManager) CloseTask(taskID int64) {
 	m.mu.Lock()
 	inst := m.proxies[taskID]
 	delete(m.proxies, taskID)
+	ro := m.readOnly[taskID]
+	delete(m.readOnly, taskID)
 	m.mu.Unlock()
+	if ro != nil {
+		_ = ro.Close()
+	}
 	if inst == nil {
 		return
 	}
@@ -254,7 +269,12 @@ func (m *taskProxyManager) Close() {
 	m.mu.Lock()
 	insts := m.proxies
 	m.proxies = map[int64]*taskProxyInst{}
+	ros := m.readOnly
+	m.readOnly = map[int64]*traffic.Traffic{}
 	m.mu.Unlock()
+	for _, tr := range ros {
+		_ = tr.Close()
+	}
 	for id, inst := range insts {
 		unregisterManagedPort(inst.port)
 		if err := inst.tr.Close(); err != nil {

@@ -689,11 +689,41 @@ func (t *Traffic) Close() error {
 		t.closeOnce.Do(func() { close(t.closed) })
 	}
 	t.reaping.Wait()
-	err := t.proxy.Close()
+	var err error
+	if t.proxy != nil {
+		err = t.proxy.Close()
+	}
 	if derr := t.db.Close(); err == nil {
 		err = derr
 	}
 	return err
+}
+
+// OpenIndexReadOnly opens an existing traffic index for queries only (no MITM listener).
+func OpenIndexReadOnly(dir string) (*Traffic, error) {
+	index := filepath.Join(dir, "_index", "index.sqlite")
+	if _, err := os.Stat(index); err != nil {
+		return nil, err
+	}
+	dsn := index
+	if !strings.ContainsRune(index, '?') {
+		dsn = "file:" + index + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&mode=ro"
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	t := &Traffic{dir: dir, db: db, closed: make(chan struct{})}
+	if err := t.initIndex(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(ftsSchema); err != nil {
+		log.Printf("[traffic] 只读索引全文搜索不可用: %v", err)
+	} else {
+		t.fts = true
+	}
+	return t, nil
 }
 
 // stopping reports whether Close has been called. A nil channel (the zero value)

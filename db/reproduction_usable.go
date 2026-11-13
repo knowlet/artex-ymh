@@ -52,7 +52,7 @@ func jsonScalarNonempty(raw json.RawMessage) bool {
 func jsonPrereqNonempty(raw json.RawMessage) bool {
 	var arr []json.RawMessage
 	if err := json.Unmarshal(raw, &arr); err != nil {
-		return jsonScalarNonempty(raw)
+		return false
 	}
 	for _, item := range arr {
 		if jsonScalarNonempty(item) {

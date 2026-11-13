@@ -82,13 +82,7 @@ func (s *Server) resolveFindingTraffic(taskID int64, repro json.RawMessage) json
 	if !ok {
 		return repro
 	}
-	refs := reproStepRefs(rp)
-	ids := trStore.ResolveSteps(since.Unix(), time.Now().Unix(), refs)
-	for i, id := range ids {
-		if id != "" {
-			rp.Steps[i].ExchangeID = id
-		}
-	}
+	linkReproductionSteps(trStore, since.Unix(), time.Now().Unix(), &rp)
 	out, err := json.Marshal(rp)
 	if err != nil {
 		return repro

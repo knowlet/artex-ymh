@@ -343,20 +343,12 @@ function TrafficPageInner() {
     );
 
   const exchanges = React.useMemo(() => traffic?.exchanges ?? [], [traffic]);
-  const deepLinkOpened = React.useRef<string | null>(null);
 
-  // Deep-link from finding reproduction steps: ?id=<exchange_id> opens the detail sheet once.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only re-run when URL id/task changes, not on poll refresh.
+  // Deep-link from finding reproduction steps: ?id=<exchange_id> opens the detail sheet.
   React.useEffect(() => {
     if (!deepLinkId) {
-      deepLinkOpened.current = null;
       return;
     }
-    const key = deepTaskId ? `${deepTaskId}:${deepLinkId}` : deepLinkId;
-    if (deepLinkOpened.current === key) {
-      return;
-    }
-    deepLinkOpened.current = key;
     const inPage = exchanges.find((e) => e.id === deepLinkId);
     if (inPage) {
       setSelected(inPage);

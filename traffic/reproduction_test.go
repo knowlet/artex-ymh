@@ -102,6 +102,20 @@ func TestResolveStepHostMismatch(t *testing.T) {
 	}
 }
 
+func TestResolveStepLiteralPathCollision(t *testing.T) {
+	tr, _ := openTraffic(t)
+	insertReproExchange(t, tr, "u123", 100, "h", "GET", "http://h/users/123", "", "a", 200)
+	insertReproExchange(t, tr, "u456", 101, "h", "GET", "http://h/users/456", "", "b", 200)
+	step := "GET /users/123 HTTP/1.1\nHost: h\n\n"
+	if id, ok := tr.ResolveStepExchange(step, ""); !ok || id != "u123" {
+		t.Fatalf("want u123 only, got %q/%v", id, ok)
+	}
+	step456 := "GET /users/456 HTTP/1.1\nHost: h\n\n"
+	if id, ok := tr.ResolveStepExchange(step456, ""); !ok || id != "u456" {
+		t.Fatalf("want u456 only, got %q/%v", id, ok)
+	}
+}
+
 func TestResolveStepTemplatePath(t *testing.T) {
 	tr, _ := openTraffic(t)
 	insertReproExchange(t, tr, "u1", 100, "h", "GET", "http://h/users/123", "", "ok", 200)

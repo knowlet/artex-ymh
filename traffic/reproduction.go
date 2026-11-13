@@ -53,7 +53,8 @@ func (t *Traffic) ResolveStepExchange(reqText, respText string) (string, bool) {
 			tryNarrow("rowid IN (SELECT rowid FROM ex_fts WHERE ex_fts MATCH ?)", ftsQuote(disc))
 		}
 	}
-	return t.pickBest(where, args, expectedStatus(respText), narrowed)
+	concrete := concreteReqPath(reqText)
+	return t.pickBest(where, args, expectedStatus(respText), narrowed, concrete)
 }
 
 type reproCand struct {
@@ -68,14 +69,18 @@ type reproCand struct {
 // status (the step's stated status, else the sole 2xx). It abstains when nothing but
 // the bare endpoint matched, or the status doesn't single one out — never guessing
 // among equals (a wrong evidence link is worse than none).
-func (t *Traffic) pickBest(where string, args []any, wantStatus int, narrowed bool) (string, bool) {
+func (t *Traffic) pickBest(where string, args []any, wantStatus int, narrowed bool, concretePath string) (string, bool) {
 	cands := t.queryCandidates(where, args, 50, "DESC")
+	cands = t.filterCandidatesLiteralPath(cands, concretePath)
 	cands = filterByExpectedStatus(cands, wantStatus)
 	switch {
 	case len(cands) == 0:
 		return "", false
 	case len(cands) == 1:
-		return cands[0].id, true
+		if t.exchangeMatchesConcretePath(cands[0].id, concretePath) {
+			return cands[0].id, true
+		}
+		return "", false
 	case !narrowed:
 		return "", false // only the endpoint matched, still many → too ambiguous
 	}
@@ -91,11 +96,11 @@ func (t *Traffic) pickBest(where string, args []any, wantStatus int, narrowed bo
 		return hit, n == 1
 	}
 	if wantStatus > 0 {
-		if id, ok := uniq(func(s int) bool { return s == wantStatus }); ok {
+		if id, ok := uniq(func(s int) bool { return s == wantStatus }); ok && t.exchangeMatchesConcretePath(id, concretePath) {
 			return id, true
 		}
 	}
-	if id, ok := uniq(func(s int) bool { return s >= 200 && s < 300 }); ok {
+	if id, ok := uniq(func(s int) bool { return s >= 200 && s < 300 }); ok && t.exchangeMatchesConcretePath(id, concretePath) {
 		return id, true
 	}
 	return "", false // still ambiguous → abstain
@@ -104,14 +109,18 @@ func (t *Traffic) pickBest(where string, args []any, wantStatus int, narrowed bo
 // pickEarliestDisambiguated is like pickBest but chooses the chronologically earliest
 // match (multi-step ordered resolution) and requires content narrowing before
 // committing when multiple rows remain.
-func (t *Traffic) pickEarliestDisambiguated(where string, args []any, wantStatus int, narrowed bool) (string, int64, bool) {
+func (t *Traffic) pickEarliestDisambiguated(where string, args []any, wantStatus int, narrowed bool, concretePath string) (string, int64, bool) {
 	cands := t.queryCandidates(where, args, 50, "ASC")
+	cands = t.filterCandidatesLiteralPath(cands, concretePath)
 	cands = filterByExpectedStatus(cands, wantStatus)
 	switch {
 	case len(cands) == 0:
 		return "", 0, false
 	case len(cands) == 1:
-		return cands[0].id, cands[0].ts, true
+		if t.exchangeMatchesConcretePath(cands[0].id, concretePath) {
+			return cands[0].id, cands[0].ts, true
+		}
+		return "", 0, false
 	case !narrowed:
 		return "", 0, false
 	}
@@ -126,11 +135,11 @@ func (t *Traffic) pickEarliestDisambiguated(where string, args []any, wantStatus
 		return hit, n == 1
 	}
 	if wantStatus > 0 {
-		if c, ok := uniq(func(s int) bool { return s == wantStatus }); ok {
+		if c, ok := uniq(func(s int) bool { return s == wantStatus }); ok && t.exchangeMatchesConcretePath(c.id, concretePath) {
 			return c.id, c.ts, true
 		}
 	}
-	if c, ok := uniq(func(s int) bool { return s >= 200 && s < 300 }); ok {
+	if c, ok := uniq(func(s int) bool { return s >= 200 && s < 300 }); ok && t.exchangeMatchesConcretePath(c.id, concretePath) {
 		return c.id, c.ts, true
 	}
 	return "", 0, false
@@ -312,7 +321,8 @@ func (t *Traffic) resolveStepInWindow(sinceUnix, untilUnix, cursor int64, used m
 			tryNarrow("rowid IN (SELECT rowid FROM ex_fts WHERE ex_fts MATCH ?)", ftsQuote(disc))
 		}
 	}
-	return t.pickEarliestDisambiguated(where, args, expectedStatus(respText), narrowed)
+	concrete := concreteReqPathFromParts(path)
+	return t.pickEarliestDisambiguated(where, args, expectedStatus(respText), narrowed, concrete)
 }
 
 func reproBaseWhere(method, host, path string) (string, []any) {
@@ -361,11 +371,51 @@ func normalizeReqPath(p string) string {
 // templatePathForMatch canonicalizes a step path the same way record() templates
 // url_template so /users/123 matches the indexed /users/{id}.
 func templatePathForMatch(p string) string {
-	p = normalizeReqPath(p)
+	p = concreteReqPathFromParts(p)
+	return db.TemplatePath(p)
+}
+
+func concreteReqPath(reqText string) string {
+	_, _, path, _, _ := parseStepRequest(reqText)
+	return concreteReqPathFromParts(path)
+}
+
+func concreteReqPathFromParts(path string) string {
+	p := normalizeReqPath(path)
 	if p == "" {
 		p = "/"
 	}
-	return db.TemplatePath(p)
+	return p
+}
+
+func (t *Traffic) filterCandidatesLiteralPath(cands []reproCand, concretePath string) []reproCand {
+	if concretePath == "" {
+		return cands
+	}
+	out := cands[:0]
+	for _, c := range cands {
+		if t.exchangeMatchesConcretePath(c.id, concretePath) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func (t *Traffic) exchangeMatchesConcretePath(id, concretePath string) bool {
+	want := concreteReqPathFromParts(concretePath)
+	var exURL string
+	if err := t.db.QueryRow(`SELECT url FROM exchanges WHERE id=?`, id).Scan(&exURL); err != nil {
+		return false
+	}
+	u, err := url.Parse(exURL)
+	if err != nil {
+		return false
+	}
+	got := u.EscapedPath()
+	if got == "" {
+		got = "/"
+	}
+	return normalizeReqPath(got) == want
 }
 
 // Reproduction-step request parsing: a step's "request" is either a verbatim HTTP

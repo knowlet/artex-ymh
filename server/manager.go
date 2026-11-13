@@ -973,6 +973,9 @@ func (m *Manager) TrafficStoreForTask(ctx context.Context, taskID int64) *traffi
 		return nil
 	}
 	if m.taskProxy != nil {
+		if !m.TrafficEnabled() {
+			return nil
+		}
 		return m.taskProxy.StoreForTask(ctx, taskID)
 	}
 	return m.traffic
