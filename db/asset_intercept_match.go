@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/idna"
 )
 
 // 资产拦截规则的匹配/执行层。asset_intercept.go 只负责规则存储，这里负责把
@@ -51,12 +53,12 @@ func matchOne(r AssetInterceptRule, domains, ips, urls []string) (string, bool) 
 	}
 	switch r.Kind {
 	case "exact_domain":
-		p = DomainKey(p)
+		p = assetInterceptHostKey(p)
 		if p == "" {
 			return "", false
 		}
 		for _, d := range domains {
-			if strings.EqualFold(DomainKey(d), p) {
+			if strings.EqualFold(assetInterceptHostKey(d), p) {
 				return d, true
 			}
 		}
@@ -125,6 +127,20 @@ func MatchAssetInterceptRules(rules []AssetInterceptRule, domains, ips, urls []s
 	return AssetInterceptRule{}, "", false
 }
 
+// assetInterceptHostKey uses the same IDNA lookup profile as HTTP transports.
+// Only successful mappings establish host equivalence: ToASCII can also return
+// a partial result with an error, which must not inherit another host's policy.
+// Keep this separate from stored DomainKey values and from fuzzy candidates.
+func assetInterceptHostKey(host string) string {
+	// Match the Unicode case normalization already applied by asset storage.
+	host = strings.ToLower(strings.TrimSpace(host))
+	if ascii, err := idna.Lookup.ToASCII(host); err == nil {
+		host = ascii
+	}
+	// Trim the root separator once, after Unicode separators have been mapped.
+	return DomainKey(host)
+}
+
 // assetInterceptHosts is shared by insertion and stored-asset checks. Retain
 // original candidates for existing domain/fuzzy rules, and add canonical IP
 // candidates for numeric host spellings accepted by common URL clients. This
@@ -169,7 +185,7 @@ func assetInterceptHosts(domains, ips, urls []string) ([]string, []string) {
 // the remaining bytes. It deliberately does not accept signs, underscores,
 // overflow or arbitrary hostname resolution.
 func assetInterceptIP(host string) net.IP {
-	host = DomainKey(host)
+	host = assetInterceptHostKey(host)
 	if addr, err := netip.ParseAddr(host); err == nil {
 		return net.IP(addr.WithZone("").AsSlice())
 	}
