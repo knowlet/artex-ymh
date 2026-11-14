@@ -4,7 +4,7 @@
 
 ## 版本與安裝
 
-`packaging/projectdiscovery-lock.json` 保存本次核對的官方 release tag、commit、MIT 授權與 Linux amd64/arm64 **壓縮檔** SHA-256：Nuclei 3.11.1、httpx 1.12.0、Naabu 2.6.1、Katana 1.8.0、Subfinder 2.17.0、nuclei-templates 10.5.1。
+`packaging/projectdiscovery-lock.json` 保存本次核對的官方 release tag、commit、MIT 授權與 Linux amd64/arm64 **壓縮檔** SHA-256：Nuclei 3.11.1、httpx 1.12.0、Naabu 2.7.0、Katana 1.8.0、Subfinder 2.17.0、nuclei-templates 10.5.2。
 
 ```sh
 # 只驗證本地 lock 結構，不連網，也不證明仍是最新。
@@ -91,7 +91,7 @@ Release ZIP 與兩份 Docker 建置流程會收錄資料包、技能、維護腳
 
 ### 官方 Nuclei CVE 索引
 
-`packaging/nuclei-cve-index.json` 收錄 nuclei-templates `v10.5.1` 的 **4,509 筆模板 metadata、4,509 個 CVE**；含 CVE／template ID、名稱、嚴重度、上游 CVSS、檔案路徑與 protocol，省略描述、請求與 payload。來源固定在同一模板 commit；原始 MIT 通知保存在 [NUCLEI-LICENSE.txt](NUCLEI-LICENSE.txt)。metadata 的 CVSS 不是本次目標評分。
+`packaging/nuclei-cve-index.json` 收錄 nuclei-templates `v10.5.2` 的 **4,602 筆模板 metadata、4,602 個 CVE**；含 CVE／template ID、名稱、嚴重度、上游 CVSS、檔案路徑與 protocol，省略描述、請求與 payload。來源固定在同一模板 commit；原始 MIT 通知保存在 [NUCLEI-LICENSE.txt](NUCLEI-LICENSE.txt)。metadata 的 CVSS 不是本次目標評分。
 
 ```sh
 # 讀取 lock 指定 commit 的官方 metadata 與 MIT 通知，明確執行才連網。
