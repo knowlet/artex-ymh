@@ -17,20 +17,20 @@
       "license": "Apache-2.0",
       "tracking": "release",
       "role": "dependency-scanning",
-      "ref": "v2.7.0",
-      "commit": "bfe2f84abd2f09fe0b83ba7f6dad40d296762f40",
-      "source_url": "https://github.com/google/osv-scanner/tree/bfe2f84abd2f09fe0b83ba7f6dad40d296762f40",
-      "released_at": "2026-10-12T01:32:07Z"
+      "ref": "v2.7.1",
+      "commit": "02f96a40691c2d155fdda799af436e111231e365",
+      "source_url": "https://github.com/google/osv-scanner/tree/02f96a40691c2d155fdda799af436e111231e365",
+      "released_at": "2026-11-09T04:15:04Z"
     },
     {
       "repository": "aquasecurity/trivy",
       "license": "Apache-2.0",
       "tracking": "release",
       "role": "container-sbom-iac",
-      "ref": "v0.76.1",
-      "commit": "e713f67f7d54decdcd9b3132c9751833dcced698",
-      "source_url": "https://github.com/aquasecurity/trivy/tree/e713f67f7d54decdcd9b3132c9751833dcced698",
-      "released_at": "2026-10-21T11:18:34Z"
+      "ref": "v0.76.2",
+      "commit": "3f6334d223b52188324af3b9923b4249cd206652",
+      "source_url": "https://github.com/aquasecurity/trivy/tree/3f6334d223b52188324af3b9923b4249cd206652",
+      "released_at": "2026-11-05T12:50:25Z"
     },
     {
       "repository": "zaproxy/zaproxy",
