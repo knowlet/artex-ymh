@@ -151,6 +151,18 @@ func TestSecuritySkillMetadataCompatibility(t *testing.T) {
 			content: "---\nname: demo\n---",
 			want:    "---\nname: demo\n---\n",
 		},
+		{
+			name:        "embedded newlines cannot inject YAML keys",
+			content:     "---\nname: demo\ndescription: safe\n---\nbody\n",
+			description: str("x\nmcps: evil"),
+			want:        "---\nname: demo\ndescription: x mcps: evil\n---\nbody\n",
+		},
+		{
+			name:    "mcps entries strip embedded newlines",
+			content: "---\nname: demo\n---\nbody\n",
+			mcps:    list("one", "two\nmcps: injected"),
+			want:    "---\nname: demo\nmcps: one, two mcps: injected\n---\nbody\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

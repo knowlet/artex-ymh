@@ -1106,11 +1106,21 @@ func (s *Server) fsMissingSkills(w http.ResponseWriter, r *http.Request) {
 func cleanStrs(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, s := range in {
-		if s = strings.TrimSpace(s); s != "" {
+		if s = sanitizeSkillFrontmatterScalar(s); s != "" {
 			out = append(out, s)
 		}
 	}
 	return out
+}
+
+// sanitizeSkillFrontmatterScalar folds multi-line API input into one frontmatter
+// scalar so a value cannot inject additional YAML keys (for example mcps:).
+func sanitizeSkillFrontmatterScalar(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	return strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(s))
 }
 
 func (s *Server) fsCreateSkill(w http.ResponseWriter, r *http.Request) {
@@ -1286,7 +1296,7 @@ func rewriteSkillFrontmatter(content []byte, mcps *[]string, description, licens
 		for i := range updates {
 			update := &updates[i]
 			if update.value != nil && !update.applied && bytes.Equal(key, update.key) {
-				value = []byte(strings.TrimSpace(*update.value))
+				value = []byte(sanitizeSkillFrontmatterScalar(*update.value))
 				update.applied = true
 				break
 			}
@@ -1295,7 +1305,7 @@ func rewriteSkillFrontmatter(content []byte, mcps *[]string, description, licens
 	}
 	for _, update := range updates {
 		if update.value != nil && !update.applied {
-			writePair(update.key, []byte(strings.TrimSpace(*update.value)))
+			writePair(update.key, []byte(sanitizeSkillFrontmatterScalar(*update.value)))
 		}
 	}
 	if mcps != nil {

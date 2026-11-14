@@ -46,7 +46,8 @@ func (r AssetInterceptRule) Reason() string {
 }
 
 // matchOne 判断单条启用规则是否命中给定的域名/IP/URL 候选串，返回命中的具体值。
-func matchOne(r AssetInterceptRule, domains, ips, urls []string) (string, bool) {
+// domainKeys mirrors domains with assetInterceptHostKey precomputed once per match.
+func matchOne(r AssetInterceptRule, domains, domainKeys, ips, urls []string) (string, bool) {
 	p := strings.TrimSpace(r.Pattern)
 	if p == "" {
 		return "", false
@@ -57,9 +58,9 @@ func matchOne(r AssetInterceptRule, domains, ips, urls []string) (string, bool) 
 		if p == "" {
 			return "", false
 		}
-		for _, d := range domains {
-			if strings.EqualFold(assetInterceptHostKey(d), p) {
-				return d, true
+		for i, key := range domainKeys {
+			if strings.EqualFold(key, p) {
+				return domains[i], true
 			}
 		}
 	case "exact_ip":
@@ -116,11 +117,15 @@ func matchOne(r AssetInterceptRule, domains, ips, urls []string) (string, bool) 
 // 供 insert_assets 用原始输入（尚未落库的 assetInputItem）匹配。
 func MatchAssetInterceptRules(rules []AssetInterceptRule, domains, ips, urls []string) (AssetInterceptRule, string, bool) {
 	domains, ips = assetInterceptHosts(domains, ips, urls)
+	domainKeys := make([]string, len(domains))
+	for i, d := range domains {
+		domainKeys[i] = assetInterceptHostKey(d)
+	}
 	for _, r := range rules {
 		if !r.Enabled {
 			continue
 		}
-		if v, ok := matchOne(r, domains, ips, urls); ok {
+		if v, ok := matchOne(r, domains, domainKeys, ips, urls); ok {
 			return r, v, true
 		}
 	}
