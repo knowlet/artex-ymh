@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/idna"
 )
 
 // 资产拦截规则的匹配/执行层。asset_intercept.go 只负责规则存储，这里负责把
@@ -44,20 +46,21 @@ func (r AssetInterceptRule) Reason() string {
 }
 
 // matchOne 判断单条启用规则是否命中给定的域名/IP/URL 候选串，返回命中的具体值。
-func matchOne(r AssetInterceptRule, domains, ips, urls []string) (string, bool) {
+// domainKeys mirrors domains with assetInterceptHostKey precomputed once per match.
+func matchOne(r AssetInterceptRule, domains, domainKeys, ips, urls []string) (string, bool) {
 	p := strings.TrimSpace(r.Pattern)
 	if p == "" {
 		return "", false
 	}
 	switch r.Kind {
 	case "exact_domain":
-		p = DomainKey(p)
+		p = assetInterceptHostKey(p)
 		if p == "" {
 			return "", false
 		}
-		for _, d := range domains {
-			if strings.EqualFold(DomainKey(d), p) {
-				return d, true
+		for i, key := range domainKeys {
+			if strings.EqualFold(key, p) {
+				return domains[i], true
 			}
 		}
 	case "exact_ip":
@@ -114,15 +117,33 @@ func matchOne(r AssetInterceptRule, domains, ips, urls []string) (string, bool) 
 // 供 insert_assets 用原始输入（尚未落库的 assetInputItem）匹配。
 func MatchAssetInterceptRules(rules []AssetInterceptRule, domains, ips, urls []string) (AssetInterceptRule, string, bool) {
 	domains, ips = assetInterceptHosts(domains, ips, urls)
+	domainKeys := make([]string, len(domains))
+	for i, d := range domains {
+		domainKeys[i] = assetInterceptHostKey(d)
+	}
 	for _, r := range rules {
 		if !r.Enabled {
 			continue
 		}
-		if v, ok := matchOne(r, domains, ips, urls); ok {
+		if v, ok := matchOne(r, domains, domainKeys, ips, urls); ok {
 			return r, v, true
 		}
 	}
 	return AssetInterceptRule{}, "", false
+}
+
+// assetInterceptHostKey uses the same IDNA lookup profile as HTTP transports.
+// Only successful mappings establish host equivalence: ToASCII can also return
+// a partial result with an error, which must not inherit another host's policy.
+// Keep this separate from stored DomainKey values and from fuzzy candidates.
+func assetInterceptHostKey(host string) string {
+	// Match the Unicode case normalization already applied by asset storage.
+	host = strings.ToLower(strings.TrimSpace(host))
+	if ascii, err := idna.Lookup.ToASCII(host); err == nil {
+		host = ascii
+	}
+	// Trim the root separator once, after Unicode separators have been mapped.
+	return DomainKey(host)
 }
 
 // assetInterceptHosts is shared by insertion and stored-asset checks. Retain
@@ -169,7 +190,7 @@ func assetInterceptHosts(domains, ips, urls []string) ([]string, []string) {
 // the remaining bytes. It deliberately does not accept signs, underscores,
 // overflow or arbitrary hostname resolution.
 func assetInterceptIP(host string) net.IP {
-	host = DomainKey(host)
+	host = assetInterceptHostKey(host)
 	if addr, err := netip.ParseAddr(host); err == nil {
 		return net.IP(addr.WithZone("").AsSlice())
 	}
