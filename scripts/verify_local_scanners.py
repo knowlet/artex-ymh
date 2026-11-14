@@ -56,7 +56,7 @@ def main():
         command(installer + ['--install-dir', str(install)], expected=2, filename='refuse-overwrite')
         for tool in w.TOOLS:
             version = command([str(install / tool), '--version'], filename=tool + '-version').decode()
-            require(('2.7.0' if tool == 'osv-scanner' else '0.76.1') in version, tool + ' version mismatch: ' + version)
+            require(('2.7.1' if tool == 'osv-scanner' else '0.76.2') in version, tool + ' version mismatch: ' + version)
             command([str(install / tool), *(['scan', 'source'] if tool == 'osv-scanner' else ['sbom']), '--help'], filename=tool + '-help')
 
         # The only live downloads after install are explicitly separated DB prep.
