@@ -1,0 +1,42 @@
+name: LLM tool-call wire regressions
+on:
+  pull_request:
+    paths:
+      - 'internal/llmwire/**'
+      - 'agent/provider*.go'
+      - 'llmrec/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/llm-toolwire.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'internal/llmwire/**'
+      - 'agent/provider*.go'
+      - 'llmrec/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/llm-toolwire.yml'
+permissions:
+  contents: read
+concurrency:
+  group: llm-toolwire-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Formatting
+        run: test -z "$(gofmt -l internal/llmwire agent/provider.go agent/provider_toolwire_test.go)"
+      - name: Wire fixtures and race detector
+        run: go test -race -count=1 -v ./internal/llmwire
+      - name: Real pinned Norma and ARTEX provider wiring
+        run: go test -race -count=1 -v ./agent -run '^TestOpenAIWire'
+      - name: Short parser fuzz campaign
+        run: go test ./internal/llmwire -run '^$' -fuzz '^FuzzStreamBoundary$' -fuzztime=10s -parallel=2
