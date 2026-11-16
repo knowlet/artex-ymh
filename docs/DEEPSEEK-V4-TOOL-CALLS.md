@@ -40,9 +40,19 @@ For requests declaring function tools:
   terminal model frame and successful stream termination. The existing Norma
   accumulator then cannot mix calls. Text and reasoning continue streaming.
 - Validate that arguments are JSON objects and contain the declared top-level
-  required keys before Norma's `{}` fallback can run. This is **not** a full
+  required keys before Norma's `{}` fallback can run. A required value of `null`
+  is rejected only when the property's explicit standard `type` excludes null.
+  Nullable type unions and untyped/composed/reference schemas remain supported;
+  arbitrary schema evaluation stays with the tool. This is **not** a full
   JSON Schema validator. Empty arguments remain compatible with zero-required-
   argument tools; malformed JSON is never replaced with `{}`.
+- Require an explicit non-null `index` on every streamed tool-call delta;
+  omitted/null indices never alias call 0. Atomic tool calls need no index.
+- Reject noncanonical case-insensitive structural key aliases and duplicate
+  structural keys before forwarding either SSE or atomic responses. This closes
+  the map-versus-struct JSON decoding differential with Norma, including escaped
+  keys and Go's Unicode case folds. Tool argument strings and vendor metadata
+  remain opaque data, not protocol fields.
 - Reject duplicate IDs, conflicting IDs, undeclared tools, invalid indices,
   missing finish frames, truncation/content filtering during a tool turn,
   malformed SSE JSON, and in-stream error objects. A single invalid call
@@ -111,3 +121,20 @@ prefix, concurrent responses, delayed names, interleaved arguments, invalid JSON
 EOF/truncation, legitimate `arguments` properties, live text, cancellation, size
 limits and provider/no-tool passthrough. These tests are offline model fixtures,
 not evidence of a production V4 success rate.
+
+## PR review follow-up
+
+The CI provider gate consumes `go test -json` and requires a run event and a pass
+for each explicitly listed top-level integration test, plus package success.
+Renaming/removing/skipping a required test, fake PASS text in output, or an empty
+selection fails the gate. The checker has its own offline unit tests.
+
+Concurrency fixtures compare decoded call identities and complete argument
+strings, not numeric prefixes (`1` must never match `12`). Additional wire and
+real-provider regressions cover structural aliases/duplicates, absent/null
+stream indices, required nullability, and optional indices in atomic replies.
+
+JSON Schema `required` checks presence, not non-nullness; rejecting every null
+would incorrectly reject schemas such as `{"type":["integer","null"]}`. This
+shim enforces only nullability stated in a direct `type`, not `$ref` resolution,
+composition, enum, nested types, or a full schema validator.

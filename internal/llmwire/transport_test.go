@@ -16,10 +16,14 @@ import (
 	"time"
 )
 
-var testRules = map[string][]string{"get_worker_trace": {"intent_id"}, "ping": nil, "literal": {"arguments"}}
+var testRules = map[string]argumentRules{
+	"get_worker_trace": {Required: []string{"intent_id"}, Properties: map[string]json.RawMessage{"intent_id": json.RawMessage(`{"type":"integer"}`)}},
+	"ping":             {},
+	"literal":          {Required: []string{"arguments"}},
+}
 
 func testCall(index int, id, name, args string) wireCall {
-	call := wireCall{Index: index, ID: id, Type: "function"}
+	call := wireCall{Index: &index, ID: id, Type: "function"}
 	call.Function.Name, call.Function.Arguments = name, args
 	return call
 }
@@ -109,7 +113,7 @@ func TestDelayedAndFragmentedName(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, _, _ := legacyCalls(t, out)
-			if len(got) != 1 || got[0].Function.Name != "get_worker_trace" || got[0].Index != 3 {
+			if len(got) != 1 || got[0].Function.Name != "get_worker_trace" || (got[0].Index == nil || *got[0].Index != 3) {
 				t.Fatalf("calls=%+v", got)
 			}
 		})
@@ -400,8 +404,14 @@ func TestConcurrentResponsesHaveIndependentState(t *testing.T) {
 			defer wg.Done()
 			s := callsFrame(testCall(0, fmt.Sprint(n), "get_worker_trace", fmt.Sprintf(`{"intent_id":%d}`, n))) + terminal("tool_calls")
 			out, err := normalizeStream(s)
-			if err != nil || !strings.Contains(out, fmt.Sprintf(`\"intent_id\":%d`, n)) {
-				t.Errorf("n=%d: %v %s", n, err, out)
+			if err != nil {
+				t.Errorf("n=%d: %v", n, err)
+				return
+			}
+			calls, _, _ := legacyCalls(t, out)
+			want := fmt.Sprintf(`{"intent_id":%d}`, n)
+			if len(calls) != 1 || calls[0].ID != fmt.Sprint(n) || calls[0].Function.Arguments != want {
+				t.Errorf("n=%d: calls=%+v, want exact arguments %s", n, calls, want)
 			}
 		}(n)
 	}

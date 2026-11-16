@@ -19,7 +19,7 @@ type pendingCall struct {
 type streamBody struct {
 	source    io.ReadCloser
 	scanner   *bufio.Scanner
-	rules     map[string][]string
+	rules     map[string]argumentRules
 	calls     map[int]*pendingCall
 	buffered  int
 	content   contentGuard
@@ -30,7 +30,7 @@ type streamBody struct {
 	err       error
 }
 
-func newStreamBody(source io.ReadCloser, rules map[string][]string) *streamBody {
+func newStreamBody(source io.ReadCloser, rules map[string]argumentRules) *streamBody {
 	scanner := bufio.NewScanner(source)
 	scanner.Buffer(make([]byte, 4096), maxBodyBytes)
 	return &streamBody{source: source, scanner: scanner, rules: rules, calls: map[int]*pendingCall{}}
@@ -115,6 +115,9 @@ func (b *streamBody) frame(data string) error {
 	if json.Unmarshal([]byte(data), &envelope) != nil || envelope == nil {
 		return protocolError("invalid_sse_json")
 	}
+	if err := validateWireKeys([]byte(data), wireEnvelope); err != nil {
+		return err
+	}
 	if e := envelope["error"]; len(e) > 0 && string(e) != "null" {
 		return protocolError("upstream_stream_error")
 	}
@@ -193,17 +196,21 @@ func (b *streamBody) frame(data string) error {
 	return b.emit(envelope)
 }
 func (b *streamBody) addCall(call wireCall) error {
-	if call.Index < 0 || call.Index >= maxToolCalls {
+	if call.Index == nil {
+		return protocolError("missing_tool_index")
+	}
+	index := *call.Index
+	if index < 0 || index >= maxToolCalls {
 		return protocolError("invalid_tool_index")
 	}
 	b.buffered += len(call.ID) + len(call.Type) + len(call.Function.Name) + len(call.Function.Arguments)
 	if b.buffered > maxBodyBytes {
 		return protocolError("tool_arguments_too_large")
 	}
-	p := b.calls[call.Index]
+	p := b.calls[index]
 	if p == nil {
 		p = &pendingCall{}
-		b.calls[call.Index] = p
+		b.calls[index] = p
 	}
 	if call.ID != "" {
 		if p.id != "" && p.id != call.ID {
@@ -238,7 +245,7 @@ func (b *streamBody) finalize() error {
 	calls := make([]wireCall, 0, len(indices))
 	for _, index := range indices {
 		p := b.calls[index]
-		call := wireCall{Index: index, ID: p.id, Type: p.typ}
+		call := wireCall{Index: &index, ID: p.id, Type: p.typ}
 		call.Function.Name, call.Function.Arguments = p.name.String(), p.arguments.String()
 		calls = append(calls, call)
 	}

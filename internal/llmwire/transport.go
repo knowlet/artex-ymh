@@ -28,18 +28,24 @@ func protocolError(code string) error  { return &ProtocolError{Code: code} }
 type toolSpec struct {
 	Type     string `json:"type"`
 	Function struct {
-		Name       string `json:"name"`
-		Parameters struct {
-			Required []string `json:"required"`
-		} `json:"parameters"`
+		Name       string        `json:"name"`
+		Parameters argumentRules `json:"parameters"`
 	} `json:"function"`
 }
+
+// argumentRules intentionally covers only required keys and their explicit
+// top-level type's nullability, not arbitrary JSON Schema constraints.
+type argumentRules struct {
+	Required   []string                   `json:"required"`
+	Properties map[string]json.RawMessage `json:"properties"`
+}
+
 type requestSpec struct {
 	Stream bool       `json:"stream"`
 	Tools  []toolSpec `json:"tools"`
 }
 type wireCall struct {
-	Index    int    `json:"index,omitempty"`
+	Index    *int   `json:"index,omitempty"`
 	ID       string `json:"id"`
 	Type     string `json:"type"`
 	Function struct {
@@ -78,10 +84,10 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil || resp == nil || (resp.StatusCode < 200 || resp.StatusCode >= 300) || len(spec.Tools) == 0 {
 		return resp, err
 	}
-	rules := make(map[string][]string, len(spec.Tools))
+	rules := make(map[string]argumentRules, len(spec.Tools))
 	for _, tool := range spec.Tools {
 		if tool.Type == "function" {
-			rules[tool.Function.Name] = tool.Function.Parameters.Required
+			rules[tool.Function.Name] = tool.Function.Parameters
 		}
 	}
 	if len(rules) == 0 {
@@ -99,7 +105,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-func validateCalls(calls []wireCall, rules map[string][]string, finish string) error {
+func validateCalls(calls []wireCall, rules map[string]argumentRules, finish string) error {
 	if len(calls) == 0 {
 		if finish == "tool_calls" {
 			return protocolError("missing_tool_calls")
@@ -121,35 +127,74 @@ func validateCalls(calls []wireCall, rules map[string][]string, finish string) e
 		if call.Type != "function" {
 			return protocolError("unsupported_tool_type")
 		}
-		required, known := rules[call.Function.Name]
+		rule, known := rules[call.Function.Name]
 		if !known {
 			return protocolError("undeclared_tool")
 		}
 		raw := strings.TrimSpace(call.Function.Arguments)
 		// Empty is a legacy zero-argument call, never a substitute for broken JSON.
-		if raw == "" && len(required) == 0 {
+		if raw == "" && len(rule.Required) == 0 {
 			raw = "{}"
 		}
 		var args map[string]json.RawMessage
 		if !strings.HasPrefix(raw, "{") || json.Unmarshal([]byte(raw), &args) != nil || args == nil {
 			return protocolError("invalid_tool_arguments")
 		}
-		for _, key := range required {
-			if _, ok := args[key]; !ok {
+		for _, key := range rule.Required {
+			value, ok := args[key]
+			if !ok {
 				return protocolError("missing_required_tool_argument")
+			}
+			// JSON Schema required means present, not non-null. Reject null
+			// only when the property's explicit type excludes it; preserve
+			// nullable unions and leave untyped/composed schemas to the tool.
+			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) && forbidsNull(rule.Properties[key]) {
+				return protocolError("null_required_tool_argument")
 			}
 		}
 	}
 	return nil
 }
 
+// forbidsNull only interprets an explicit, standard JSON Schema type. A
+// missing type or a boolean/$ref/composed schema is outside this shim's scope.
+func forbidsNull(raw json.RawMessage) bool {
+	var schema struct {
+		Type json.RawMessage `json:"type"`
+	}
+	if json.Unmarshal(raw, &schema) != nil || len(schema.Type) == 0 {
+		return false
+	}
+	var single string
+	var types []string
+	if json.Unmarshal(schema.Type, &single) == nil {
+		types = []string{single}
+	} else if json.Unmarshal(schema.Type, &types) != nil {
+		return false
+	}
+	if len(types) == 0 {
+		return false
+	}
+	for _, typ := range types {
+		switch typ {
+		case "string", "integer", "number", "boolean", "object", "array":
+		default:
+			return false // includes null and unknown/nonstandard types
+		}
+	}
+	return true
+}
+
 // normalizeComplete validates the whole atomic response before Norma can turn
 // it into executable blocks. It deliberately does not unwrap arguments/input
 // wrappers: they can be legitimate schema properties.
-func normalizeComplete(raw []byte, rules map[string][]string) ([]byte, error) {
+func normalizeComplete(raw []byte, rules map[string]argumentRules) ([]byte, error) {
 	var envelope object
 	if json.Unmarshal(raw, &envelope) != nil {
 		return nil, protocolError("invalid_response_json")
+	}
+	if err := validateWireKeys(raw, wireEnvelope); err != nil {
+		return nil, err
 	}
 	if e := envelope["error"]; len(e) > 0 && string(e) != "null" {
 		return raw, nil
@@ -180,7 +225,7 @@ func normalizeComplete(raw []byte, rules map[string][]string) ([]byte, error) {
 
 type completeBody struct {
 	source io.ReadCloser
-	rules  map[string][]string
+	rules  map[string]argumentRules
 	ready  bool
 	reader *bytes.Reader
 	err    error
