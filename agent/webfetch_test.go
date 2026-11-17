@@ -10,6 +10,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"math/big"
@@ -209,15 +211,39 @@ func TestWebFetchRecordingProxyTLSException(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr := listener.Addr().String()
-	_ = listener.Close()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
 	recorder, err := traffic.Open(t.TempDir(), addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = recorder.Close() })
-	go func() { _ = recorder.Start() }()
+	var startError error
+	startDone := make(chan struct{})
+	go func() {
+		startError = recorder.Start()
+		close(startDone)
+	}()
+	t.Cleanup(func() {
+		if err := recorder.Close(); err != nil {
+			t.Errorf("closing recording proxy: %v", err)
+		}
+		select {
+		case <-startDone:
+			if startError != nil && !errors.Is(startError, http.ErrServerClosed) {
+				t.Errorf("recording proxy Start failed: %v", startError)
+			}
+		case <-time.After(time.Second):
+			t.Error("recording proxy Start did not return after Close")
+		}
+	})
 	ready := false
 	for range 100 {
+		select {
+		case <-startDone:
+			t.Fatalf("recording proxy stopped before ready: %v", startError)
+		default:
+		}
 		conn, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
@@ -243,6 +269,171 @@ func TestWebFetchRecordingProxyTLSException(t *testing.T) {
 	optIn := callWebFetch(t, tool, ctx, webFetchInput{URL: target.URL, InsecureSkipVerify: true, Direct: true})
 	if optIn.IsError || targetRequests.Load() != 1 || !strings.Contains(optIn.Flatten(), "recording-proxy-test-target") || !strings.Contains(optIn.Flatten(), "not captured") {
 		t.Fatalf("explicit per-call exception failed behind configured recorder: %+v", optIn)
+	}
+}
+
+func TestWebFetchScopedDNSDial(t *testing.T) {
+	ctx := WithRunInfo(t.Context(), RunInfo{TaskID: 42})
+	for _, test := range []struct {
+		name    string
+		ips     []string
+		extra   []guard.ScopeRule
+		allowed bool
+	}{
+		{"public domain address", []string{"203.0.113.9"}, nil, true},
+		{"private domain address", []string{"192.168.50.10"}, nil, true},
+		{"loopback alias blocked", []string{"127.0.0.1"}, nil, false},
+		{"linklocal alias blocked", []string{"169.254.169.254"}, nil, false},
+		{"IPv6 loopback alias blocked", []string{"::1"}, nil, false},
+		{"IPv6 linklocal alias blocked", []string{"fe80::1"}, nil, false},
+		{"mixed public local snapshot blocked", []string{"203.0.113.9", "127.0.0.1"}, nil, false},
+		{"explicitly scoped local alias", []string{"127.0.0.1"}, []guard.ScopeRule{{Kind: "ip", Value: "127.0.0.1"}}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			g := webFetchTestGuard(append([]guard.ScopeRule{{Kind: "domain", Value: "target.example"}}, test.extra...))
+			lookups, dials := 0, 0
+			var dialed string
+			dial := webFetchScopedDialContext(g, func(_ context.Context, host string) ([]net.IPAddr, error) {
+				lookups++
+				if host != "target.example" {
+					t.Fatalf("lookup host=%q", host)
+				}
+				if lookups > 1 {
+					return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+				}
+				var addresses []net.IPAddr
+				for _, ip := range test.ips {
+					addresses = append(addresses, net.IPAddr{IP: net.ParseIP(ip)})
+				}
+				return addresses, nil
+			}, func(_ context.Context, network, address string) (net.Conn, error) {
+				dials++
+				dialed = address
+				if network != "tcp" {
+					t.Fatalf("dial network=%q", network)
+				}
+				host, _, err := net.SplitHostPort(address)
+				if err != nil || net.ParseIP(host) == nil {
+					t.Fatalf("dial must receive pinned numeric IP: %q", address)
+				}
+				left, right := net.Pipe()
+				_ = right.Close()
+				return left, nil
+			})
+			conn, err := dial(ctx, "tcp", "target.example:443")
+			if conn != nil {
+				_ = conn.Close()
+			}
+			if (err == nil) != test.allowed || lookups != 1 || (test.allowed && (dials != 1 || dialed != net.JoinHostPort(test.ips[0], "443"))) || (!test.allowed && dials != 0) {
+				t.Fatalf("allowed=%v error=%v lookups=%d dials=%d address=%s", test.allowed, err, lookups, dials, dialed)
+			}
+		})
+	}
+	// A failed candidate uses only the originally validated DNS snapshot, not a
+	// second lookup that could return an unauthorized local address.
+	lookups, dials := 0, 0
+	g := webFetchTestGuard([]guard.ScopeRule{{Kind: "domain", Value: "target.example"}})
+	dial := webFetchScopedDialContext(g, func(context.Context, string) ([]net.IPAddr, error) {
+		lookups++
+		return []net.IPAddr{{IP: net.ParseIP("203.0.113.9")}, {IP: net.ParseIP("203.0.113.10")}}, nil
+	}, func(_ context.Context, _ string, address string) (net.Conn, error) {
+		dials++
+		if address != fmt.Sprintf("203.0.113.%d:443", 8+dials) {
+			t.Fatalf("unexpected fallback address: %s", address)
+		}
+		return nil, errors.New("fixture connection refused")
+	})
+	if _, err := dial(ctx, "tcp", "target.example:443"); err == nil || lookups != 1 || dials != 2 {
+		t.Fatalf("fallback resolved again: error=%v lookup=%d dial=%d", err, lookups, dials)
+	}
+}
+
+func TestWebFetchLocalHostnameRequiresIPScope(t *testing.T) {
+	var requests atomic.Int32
+	srv := webFetchNoIPSANServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = io.WriteString(w, "local target")
+	}))
+	ctx := WithRunInfo(t.Context(), RunInfo{TaskID: 42})
+	input := webFetchInput{URL: strings.Replace(srv.URL, "127.0.0.1", "localhost", 1), InsecureSkipVerify: true, Direct: true}
+	for _, allowed := range []bool{false, true} {
+		rules := []guard.ScopeRule{{Kind: "domain", Value: "localhost"}}
+		if allowed {
+			rules = append(rules, guard.ScopeRule{Kind: "cidr", Value: "127.0.0.0/8"}, guard.ScopeRule{Kind: "ip", Value: "::1"})
+		}
+		before := requests.Load()
+		result := callWebFetch(t, newWebFetch("", "", webFetchTestGuard(rules)), ctx, input)
+		if result.IsError == allowed || (allowed && requests.Load() != before+1) || (!allowed && requests.Load() != before) {
+			t.Fatalf("local hostname scope failed: allowed=%v result=%+v requests=%d", allowed, result, requests.Load()-before)
+		}
+	}
+}
+
+func TestWebFetchMalformedRedirectDoesNotLeakSecret(t *testing.T) {
+	const secret = "synthetic-malformed-location-secret"
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Location", "https://"+secret+".example/%zz")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	g := webFetchTestGuard([]guard.ScopeRule{{Kind: "ip", Value: "127.0.0.1"}})
+	egress := guard.NewEgressGuard()
+	egress.AddFingerprint("test", secret)
+	g.SetEgress(egress)
+	result := callWebFetch(t, newWebFetch("", "", g), WithRunInfo(t.Context(), RunInfo{TaskID: 42}), webFetchInput{URL: srv.URL})
+	if !result.IsError || requests.Load() != 1 || strings.Contains(result.Flatten(), secret) || !strings.Contains(result.Flatten(), "invalid redirect Location header") {
+		t.Fatalf("malformed Location leaked: %+v requests=%d", result, requests.Load())
+	}
+	for _, entry := range g.Audit() {
+		if strings.Contains(entry.Reason, secret) || strings.Contains(entry.Command, secret) {
+			t.Fatalf("malformed Location leaked to audit: %+v", entry)
+		}
+	}
+}
+
+func TestWebFetchStrictTLSDowngrade(t *testing.T) {
+	var insecureRequests atomic.Int32
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		insecureRequests.Add(1)
+		_, _ = io.WriteString(w, "plain fixture")
+	}))
+	defer plain.Close()
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, plain.URL, http.StatusFound) }))
+	defer secure.Close()
+	caFile := filepath.Join(t.TempDir(), "target-ca.pem")
+	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: secure.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tool := newWebFetch("", caFile, nil)
+	result := callWebFetch(t, tool, t.Context(), webFetchInput{URL: secure.URL})
+	if !result.IsError || insecureRequests.Load() != 0 || !strings.Contains(result.Flatten(), "HTTPS to an insecure scheme") {
+		t.Fatalf("strict HTTPS downgraded: %+v requests=%d", result, insecureRequests.Load())
+	}
+	result = callWebFetch(t, tool, t.Context(), webFetchInput{URL: plain.URL})
+	if result.IsError || insecureRequests.Load() != 1 {
+		t.Fatalf("initial HTTP should remain supported: %+v", result)
+	}
+}
+
+func TestWebFetchRawResponseLimitReported(t *testing.T) {
+	for _, extra := range []int{0, 1} {
+		t.Run(fmt.Sprintf("extra-%d", extra), func(t *testing.T) {
+			prefix := "<p>visible</p><script>"
+			body := prefix + strings.Repeat(" ", maxWebFetchResponseBytes+extra-len(prefix))
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				w.Header().Set("Server", strings.Repeat("s", 4000))
+				w.Header().Set("X-Powered-By", strings.Repeat("p", 4000))
+				_, _ = io.WriteString(w, body)
+			}))
+			defer srv.Close()
+			result := callWebFetch(t, newWebFetch("", "", nil), t.Context(), webFetchInput{URL: srv.URL + "/" + strings.Repeat("a", 4000)})
+			if result.IsError || !strings.Contains(result.Flatten(), "visible") || strings.Contains(result.Flatten(), "body truncated at 2 MiB") != (extra > 0) || len(result.Flatten()) > 50000 {
+				t.Fatalf("raw body cutoff not represented: %+v", result)
+			}
+		})
 	}
 }
 

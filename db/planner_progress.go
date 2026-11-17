@@ -108,10 +108,11 @@ func (s *ExplorationStore) FinishPlannerProgress(ctx context.Context, before Pla
 	if threshold < 1 {
 		threshold = 1
 	}
+	sameEpisode := slices.Equal(previous.IntentIDs, current.IntentIDs) && slices.Equal(previous.OpenGoalIDs, current.OpenGoalIDs)
 	checkpoint := plannerProgressCheckpoint{IntentIDs: current.IntentIDs, OpenGoalIDs: current.OpenGoalIDs}
 	if stalled {
 		checkpoint.ConsecutiveStalls = 1
-		if slices.Equal(previous.IntentIDs, current.IntentIDs) && slices.Equal(previous.OpenGoalIDs, current.OpenGoalIDs) {
+		if sameEpisode {
 			// Once escalated, retain the threshold rather than grow an unbounded
 			// counter. Messages deliberately say "at least" after this point.
 			checkpoint.ConsecutiveStalls = min(previous.ConsecutiveStalls, threshold-1) + 1
@@ -125,7 +126,7 @@ func (s *ExplorationStore) FinishPlannerProgress(ctx context.Context, before Pla
 	if _, err = tx.ExecContext(ctx, `UPDATE explorations SET planner_progress=$2 WHERE id=$1`, s.expID, string(encoded)); err != nil {
 		return report, err
 	}
-	if !stalled || (previous.ConsecutiveStalls > 0 && checkpoint.ConsecutiveStalls == 1) {
+	if !stalled || (previous.ConsecutiveStalls > 0 && !sameEpisode) {
 		// Resolve the previous episode once real work/goals advance, including work
 		// that appeared and finished between two planning rounds.
 		if _, err = tx.ExecContext(ctx, `UPDATE exploration_nodes SET state='consumed'

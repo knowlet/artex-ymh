@@ -46,6 +46,14 @@ rejected even when ordinary ROE enforcement is `warn` or `off`. Localhost is not
 implicitly authorized. Existing scope rules describe hosts, domains and
 networks, not individual URL paths or ports.
 
+For the TLS exception, DNS is resolved once per connection, every returned
+address is checked, and the client dials a validated numeric address. A scoped
+hostname cannot implicitly authorize loopback, link-local, unspecified,
+multicast or other non-unicast destinations: those addresses must independently
+match an explicit task IP/CIDR rule. Ordinary public and private unicast
+addresses retain the existing domain-scope meaning. This is not a general
+network sandbox for all tools.
+
 When a proxy is configured, requesting the exception also requires an explicit
 `"direct": true`. This makes the routing change visible: that request bypasses
 both recording and the configured egress proxy. The tool reports that the
@@ -63,10 +71,19 @@ available only through an egress or tunnel proxy can still be unreachable.
 ```
 
 Each redirected destination is checked again before it can receive the TLS
-exception. The normal tool approval hooks still apply. This is a per-call
+exception. HTTPS-to-HTTP redirects are rejected for verified requests too;
+initial HTTP requests remain supported. Invalid redirect Location errors are
+redacted even when the HTTP client rejects them before the guard can run.
+The normal tool approval hooks still apply. This is a per-call
 option; it does not change global TLS settings, trust every private address, or
 alter the recording proxy's upstream certificate policy. A valid certificate
 or a configured trusted CA remains the way to retain ordinary verified access.
+
+Response bodies are limited to 2 MiB and tool output to 50,000 bytes. Input
+truncation is reported even if HTML rendering produces little visible text.
+Declared HTML charsets are decoded before text and RECON extraction, and
+bounded RECON space is reserved so a long page does not erase requested forms,
+script references or endpoints.
 
 ## Detecting a planner that makes no progress
 
@@ -85,10 +102,16 @@ When unfinished goals remain with no queued or running intent, a successful
 round that makes no progress receives one bounded corrective attempt in the
 same heartbeat: at most three turns and 60 seconds, reduced by a smaller
 positive configured turn limit or the task's remaining deadline. The correction
-uses the existing tools and approval hooks; it
+starts a fresh short session with the existing tools and approval hooks,
+refreshed graph and todos, and the preceding conclusion or tool error; it
 does not synthesize an intent or accept DSML prose as a tool call. Provider
 errors are preserved rather than immediately replaying a failed exchange.
 Cancellation and the task's final wrap-up prevent another work-producing run.
+
+If the initial progress snapshot cannot be read, the round returns a visible
+database error and leaves the normal heartbeat in control. An unavailable
+snapshot is not treated as an empty graph: that would disable the idle-goal
+check and could misclassify existing intents as newly created progress.
 
 Three consecutive idle rounds produce an actionable `planner_stalled` hint in the
 exploration graph. A durable checkpoint retains the consecutive-failure state
@@ -117,13 +140,13 @@ target or establish a production DeepSeek success rate.
 With `ARTEX_PG_DSN` pointing to a disposable PostgreSQL database, run:
 
 ```sh
-go test -race -count=1 -p=1 ./guard ./agent -run '^(TestInsecureTLS|TestWebFetch|TestPlannerProgress)'
+go test -race -count=1 -p=1 ./guard ./db ./agent -run '^(TestInsecureTLS|TestWebFetch|TestPlannerProgress)'
 go vet ./...
 go test -count=1 -p=1 ./...
 ```
 
 The dedicated `Planner progress and scoped WebFetch` workflow provides that
-database and checks JSON test events for all 15 named regressions. A missing,
+database and checks JSON test events for every required named regression. A missing,
 renamed or skipped required test fails the gate rather than producing an empty
 successful selection.
 

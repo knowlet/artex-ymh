@@ -60,15 +60,21 @@ jobs:
           cache: true
       - name: Formatting
         run: |
-          test -z "$(gofmt -l agent/planner*.go agent/webfetch*.go agent/chat.go agent/mainagent.go agent/worker.go agent/wrapup.go db/planner_progress*.go guard/roe.go guard/tls_scope_test.go server/task_llm.go)"
+          set -euo pipefail
+          unformatted=$(gofmt -l agent/planner*.go agent/webfetch*.go agent/chat.go agent/mainagent.go agent/worker.go agent/wrapup.go db/planner_progress*.go guard/roe.go guard/tls_scope_test.go server/task_llm.go)
+          test -z "$unformatted"
       - name: Local TLS and real PostgreSQL regressions
         run: |
           set -euo pipefail
-          go test -race -count=1 -p=1 -timeout=8m -json ./guard ./agent \
+          go test -race -count=1 -p=1 -timeout=8m -json ./guard ./db ./agent \
             -run '^(TestInsecureTLS|TestWebFetch|TestPlanner)' \
             | tee "$RUNNER_TEMP/planner-webfetch.jsonl"
           python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-webfetch.jsonl" \
-            github.com/Autumn-27/artex/guard TestInsecureTLSRequiresExplicitTaskScope
+            github.com/Autumn-27/artex/guard \
+            TestInsecureTLSRequiresExplicitTaskScope \
+            TestInsecureTLSResolvedAddressScope
+          python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-webfetch.jsonl" \
+            github.com/Autumn-27/artex/db TestPlannerProgressThresholdOneDeduplicatesHints
           python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-webfetch.jsonl" \
             github.com/Autumn-27/artex/agent \
             TestWebFetchScopedTLSOptIn \
@@ -77,7 +83,15 @@ jobs:
             TestWebFetchRecordingProxyTLSException \
             TestWebFetchProxyCATrustAndRedirectGuard \
             TestWebFetchContentAndSchema \
+            TestWebFetchDeclaredHTMLCharsets \
+            TestWebFetchReconSurvivesOutputLimit \
+            TestWebFetchContentOutputBudget \
             TestWebFetchRedirectEgressDoesNotLeakSecret \
+            TestWebFetchScopedDNSDial \
+            TestWebFetchLocalHostnameRequiresIPScope \
+            TestWebFetchMalformedRedirectDoesNotLeakSecret \
+            TestWebFetchStrictTLSDowngrade \
+            TestWebFetchRawResponseLimitReported \
             TestPlannerProgressRecoveryCreatesIntent \
             TestPlannerProgressFailedCallsEscalateDurably \
             TestPlannerProgressCommittedActionsDoNotRetry \

@@ -1,23 +1,53 @@
 package agent
 
 import (
+	"bytes"
 	"fmt"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/charset"
 )
+
+const (
+	webFetchOutputBytes = 50000
+	webFetchHeaderBytes = 2 << 10
+	webFetchReconBytes  = 12000
+)
+
+// Budget metadata and content together so a long page cannot push requested
+// RECON beyond a final blind truncation. Include markers in the byte budget.
+func webFetchOutput(header string, body []byte, contentType string, extract bool) string {
+	if header != "" {
+		header = webFetchTextWithinBudget(strings.TrimRight(header, "\n"), webFetchHeaderBytes-1) + "\n"
+	}
+	return header + webFetchContentWithBudget(body, contentType, extract, webFetchOutputBytes-len(header))
+}
 
 // Keep the page/Markdown and optional RECON contract of WebFetch independent
 // from the HTTP client so transport policy never depends on fetched content.
 func webFetchContent(body []byte, contentType string, extract bool) string {
-	if !strings.Contains(strings.ToLower(contentType), "html") {
-		return strings.TrimSpace(string(body))
+	return webFetchContentWithBudget(body, contentType, extract, webFetchOutputBytes)
+}
+
+func webFetchContentWithBudget(body []byte, contentType string, extract bool, budget int) string {
+	if budget <= 0 {
+		return ""
 	}
-	doc, err := html.Parse(strings.NewReader(string(body)))
+	if !strings.Contains(strings.ToLower(contentType), "html") {
+		return webFetchTextWithinBudget(strings.TrimSpace(string(body)), budget)
+	}
+	// html.Parse expects UTF-8. Honor a declared charset (or HTML encoding
+	// declaration/BOM) before parsing both visible text and RECON attributes.
+	reader, err := charset.NewReader(bytes.NewReader(body), contentType)
 	if err != nil {
-		return strings.TrimSpace(string(body))
+		return webFetchTextWithinBudget(strings.TrimSpace(string(body)), budget)
+	}
+	doc, err := html.Parse(reader)
+	if err != nil {
+		return webFetchTextWithinBudget(strings.TrimSpace(string(body)), budget)
 	}
 	var output strings.Builder
 	var render func(*html.Node, bool)
@@ -80,10 +110,11 @@ func webFetchContent(body []byte, contentType string, extract bool) string {
 	}
 	render(doc, false)
 	text := strings.TrimSpace(webFetchBlankLines.ReplaceAllString(output.String(), "\n\n"))
+	var recon string
 	if extract {
-		text += webFetchRecon(doc)
+		recon = webFetchRecon(doc, min(webFetchReconBytes, budget/3))
 	}
-	return strings.TrimSpace(text)
+	return strings.TrimSpace(webFetchTextWithinBudget(text, budget-len(recon)) + recon)
 }
 
 var (
@@ -101,7 +132,11 @@ func webFetchAttr(n *html.Node, name string) string {
 	return ""
 }
 
-func webFetchRecon(doc *html.Node) string {
+func webFetchRecon(doc *html.Node, budget int) string {
+	const prefix = "\n\n=== RECON ==="
+	if budget <= len(prefix) {
+		return ""
+	}
 	labels := []string{"COMMENTS", "SCRIPTS (src)", "INLINE ENDPOINTS", "FORMS", "META", "LINKS"}
 	sections := make([][]string, len(labels))
 	seen := make([]map[string]bool, len(labels))
@@ -172,20 +207,57 @@ func webFetchRecon(doc *html.Node) string {
 		}
 	}
 	visit(doc)
+	activeSections := 0
+	for _, entries := range sections {
+		if len(entries) > 0 {
+			activeSections++
+		}
+	}
+	if activeSections == 0 {
+		return ""
+	}
 	var result strings.Builder
+	result.WriteString(prefix)
 	for i, entries := range sections {
 		if len(entries) == 0 {
 			continue
 		}
-		if result.Len() == 0 {
-			result.WriteString("\n\n=== RECON ===")
-		}
-		fmt.Fprintf(&result, "\n\n## %s\n", labels[i])
+		var section strings.Builder
+		fmt.Fprintf(&section, "\n\n## %s\n", labels[i])
 		for _, entry := range entries {
-			result.WriteString("- " + entry + "\n")
+			section.WriteString("- " + entry + "\n")
 		}
+		// A page full of comments/scripts must not crowd out later form or link
+		// sections. Unused space from a short section is available to the rest.
+		sectionBudget := (budget - result.Len()) / activeSections
+		result.WriteString(webFetchTextWithinBudget(section.String(), sectionBudget))
+		activeSections--
 	}
 	return result.String()
+}
+
+// webFetchTextWithinBudget is an exact byte cap, including the truncation
+// marker. Never split a UTF-8 rune at the boundary. Tiny budgets cannot fit the
+// marker and retain only a complete text prefix instead.
+func webFetchTextWithinBudget(text string, budget int) string {
+	if budget <= 0 {
+		return ""
+	}
+	if len(text) <= budget {
+		return text
+	}
+	const marker = "\n[truncated]"
+	if budget < len(marker) {
+		for budget > 0 && !utf8.RuneStart(text[budget]) {
+			budget--
+		}
+		return text[:budget]
+	}
+	budget -= len(marker)
+	for budget > 0 && !utf8.RuneStart(text[budget]) {
+		budget--
+	}
+	return text[:budget] + marker
 }
 
 func limitWebFetchText(text string, max int) string {
