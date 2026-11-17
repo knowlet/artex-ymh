@@ -265,7 +265,8 @@ func (c Config) NewProvider() (llm.Provider, error) {
 		return nil, err
 	}
 	if c.Format == llm.FormatOpenAI {
-		// Keep raw recording inside the normalizer so diagnostics retain wire bytes.
+		// llmwire sits outside quotaAwareTransport: llmrec tees the upstream raw
+		// SSE here, while Norma reads the normalized response body from llmwire.
 		client.Transport = llmwire.Wrap(client.Transport)
 	}
 	lc := llm.Config{

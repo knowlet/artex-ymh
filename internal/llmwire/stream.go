@@ -23,6 +23,7 @@ type streamBody struct {
 	calls     map[int]*pendingCall
 	buffered  int
 	content   contentGuard
+	refusal   contentGuard
 	finish    string
 	sawFinish bool
 	ended     bool
@@ -186,13 +187,28 @@ func (b *streamBody) frame(data string) error {
 			delta["content"], _ = json.Marshal(text)
 		}
 	}
+	if raw := delta["refusal"]; len(raw) > 0 && string(raw) != "null" {
+		var text string
+		if json.Unmarshal(raw, &text) != nil {
+			return protocolError("invalid_refusal_delta")
+		}
+		text, err := b.refusal.push(text)
+		if err != nil {
+			return err
+		}
+		if text == "" {
+			delete(delta, "refusal")
+		} else {
+			delta["refusal"], _ = json.Marshal(text)
+		}
+	}
 	if finish != "" {
 		b.finish, b.sawFinish = finish, true
 	}
 	choice["delta"], _ = json.Marshal(delta)
 	choice["finish_reason"] = json.RawMessage("null")
 	envelope["choices"], _ = json.Marshal(choices)
-	// Reasoning, refusal, usage and vendor metadata pass through unchanged.
+	// Reasoning, usage and vendor metadata pass through unchanged.
 	return b.emit(envelope)
 }
 func (b *streamBody) addCall(call wireCall) error {
@@ -258,6 +274,15 @@ func (b *streamBody) finalize() error {
 	}
 	if tail != "" {
 		if err := b.delta(map[string]string{"content": tail}, nil); err != nil {
+			return err
+		}
+	}
+	refusalTail, err := b.refusal.finish()
+	if err != nil {
+		return err
+	}
+	if refusalTail != "" {
+		if err := b.delta(map[string]string{"refusal": refusalTail}, nil); err != nil {
 			return err
 		}
 	}

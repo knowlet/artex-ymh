@@ -168,6 +168,18 @@ func TestDSMLSplitAtEveryRune(t *testing.T) {
 		})
 	}
 }
+func TestDSMLInRefusalStream(t *testing.T) {
+	raw := []rune(`<｜DSML｜tool_calls <｜DSML｜invoke name="get_worker_trace">`)
+	for i := 0; i <= len(raw); i++ {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			_, err := normalizeStream(frame(map[string]string{"refusal": string(raw[:i])}, nil) + frame(map[string]string{"refusal": string(raw[i:])}, nil) + terminal("stop"))
+			expectCode(t, err, "unparsed_dsml_tool_call")
+		})
+	}
+	_, err := normalizeStream(frame(map[string]string{"refusal": "<｜DSML"}, nil) + terminal("stop"))
+	expectCode(t, err, "unparsed_dsml_tool_call")
+}
+
 func TestTruncatedDSMLAndTrailingLessThan(t *testing.T) {
 	_, err := normalizeStream(frame(map[string]string{"content": "<｜DSML"}, nil) + terminal("stop"))
 	expectCode(t, err, "unparsed_dsml_tool_call")
@@ -211,7 +223,15 @@ func TestEOFWithTerminalFrameAndZeroArgumentTool(t *testing.T) {
 	}
 }
 func complete(calls []wireCall, content, finish string) []byte {
-	raw, err := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": content, "tool_calls": calls}, "finish_reason": finish}}})
+	return completeMessage(calls, content, "", finish)
+}
+
+func completeMessage(calls []wireCall, content, refusal, finish string) []byte {
+	msg := map[string]any{"content": content, "tool_calls": calls}
+	if refusal != "" {
+		msg["refusal"] = refusal
+	}
+	raw, err := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": msg, "finish_reason": finish}}})
 	if err != nil {
 		panic(err)
 	}
@@ -226,6 +246,7 @@ func TestCompleteValidation(t *testing.T) {
 		{"valid", complete([]wireCall{testCall(0, "a", "get_worker_trace", `{"intent_id":4}`)}, "", "tool_calls"), ""},
 		{"prose", complete(nil, "normal answer", "stop"), ""},
 		{"DSML", complete(nil, `<｜DSML｜tool_calls <｜DSML｜invoke name="get_worker_trace">`, "stop"), "unparsed_dsml_tool_call"},
+		{"DSML refusal", completeMessage(nil, "", `<｜DSML｜tool_calls <｜DSML｜invoke name="get_worker_trace">`, "stop"), "unparsed_dsml_tool_call"},
 		{"broken arguments", complete([]wireCall{testCall(0, "a", "get_worker_trace", `{"intent_id":`)}, "", "tool_calls"), "invalid_tool_arguments"},
 		{"wrapped", complete([]wireCall{testCall(0, "a", "get_worker_trace", `{"arguments":{"intent_id":4}}`)}, "", "tool_calls"), "missing_required_tool_argument"},
 		{"legitimate arguments property", complete([]wireCall{testCall(0, "a", "literal", `{"arguments":{"intent_id":4}}`)}, "", "tool_calls"), ""},
