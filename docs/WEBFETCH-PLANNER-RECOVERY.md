@@ -75,6 +75,12 @@ An attempted tool call, a failed tool result, or a textual promise is not
 progress. A newly persisted intent counts even when its worker finishes before
 the planner returns. Newly proven goals also count.
 
+The legacy `goal_met` tool remains unbound by default. If an administrator has
+explicitly enabled it, its existing task-completion signal is honored without
+starting a corrective run. This signal comes from the tool handler, not from
+assistant prose; ordinary `add_intent` / `prove_goal` progress still requires
+committed graph changes.
+
 When unfinished goals remain with no queued or running intent, a successful
 round that makes no progress receives one bounded corrective attempt in the
 same heartbeat: at most three turns and 60 seconds, reduced by a smaller

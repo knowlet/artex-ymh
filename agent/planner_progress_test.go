@@ -210,7 +210,7 @@ func TestPlannerProgressFailedCallsEscalateDurably(t *testing.T) {
 }
 
 func TestPlannerProgressCommittedActionsDoNotRetry(t *testing.T) {
-	for _, scenario := range []string{"fast_done_intent", "partial_goal_proof", "all_goals_proven", "concurrent_active_intent", "out_of_order_commit"} {
+	for _, scenario := range []string{"fast_done_intent", "partial_goal_proof", "all_goals_proven", "concurrent_active_intent", "out_of_order_commit", "explicit_goal_met", "explicit_goal_met_during_recovery"} {
 		t.Run(scenario, func(t *testing.T) {
 			goals := 1
 			if scenario == "partial_goal_proof" {
@@ -220,6 +220,21 @@ func TestPlannerProgressCommittedActionsDoNotRetry(t *testing.T) {
 			evidence, err := ts.AddNode(db.KindFact, map[string]any{"summary": "fixture evidence"}, 0, "confirmed", "worker", nil)
 			if err != nil {
 				t.Fatal(err)
+			}
+			explicitCompletion := strings.HasPrefix(scenario, "explicit_goal_met")
+			if explicitCompletion {
+				before, err := ts.PlannerProgress(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i := 0; i < plannerStallThreshold; i++ {
+					if _, err := ts.FinishPlannerProgress(t.Context(), before, true, plannerStallThreshold, 5, "completed"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if progressHints(t, ts, "active") != 1 {
+					t.Fatal("fixture did not seed an active stall warning")
+				}
 			}
 			var commitLate func() error
 			if scenario == "out_of_order_commit" {
@@ -242,6 +257,12 @@ func TestPlannerProgressCommittedActionsDoNotRetry(t *testing.T) {
 				commitLate = tx.Commit
 			}
 			provider := &plannerProgressProvider{step: func(_ context.Context, _ llm.CompletionRequest, turn int) ([]llm.StreamEvent, error) {
+				// The standalone Plan assembly retains its actual base tools, as
+				// production does after goal_met is explicitly bound by ToolResolve.
+				// This exercises the real handler without changing default bindings.
+				if scenario == "explicit_goal_met" && turn == 1 || scenario == "explicit_goal_met_during_recovery" && turn == 2 {
+					return plannerCall(turn, "goal_met", `{"reason":"Fixture completion verified"}`), nil
+				}
 				if turn == 1 {
 					switch scenario {
 					case "partial_goal_proof", "all_goals_proven":
@@ -265,7 +286,11 @@ func TestPlannerProgressCommittedActionsDoNotRetry(t *testing.T) {
 				return plannerText(), nil
 			}}
 			p := NewPlanner(provider, "fixture", t.TempDir(), nil, 0, 5)
-			met, _, err := p.Plan(t.Context(), ts.ID(), nil, ts, "fixture", nil, func(a db.Activity) {
+			retries := 0
+			met, reason, err := p.Plan(t.Context(), ts.ID(), nil, ts, "fixture", nil, func(a db.Activity) {
+				if strings.Contains(string(a.Metadata), "planner_progress_retry") {
+					retries++
+				}
 				if scenario == "fast_done_intent" && a.Kind == "tool_result" && a.Tool == "add_intent" && !a.IsError {
 					intents, err := ts.ListByKind(db.KindIntent, 10)
 					if err != nil || len(intents) != 1 {
@@ -280,8 +305,19 @@ func TestPlannerProgressCommittedActionsDoNotRetry(t *testing.T) {
 			if scenario == "concurrent_active_intent" || scenario == "out_of_order_commit" {
 				wantCalls = 1
 			}
-			if err != nil || len(provider.requests) != wantCalls || met != (scenario == "all_goals_proven") || progressCheckpoint(t, d, ts) != 0 {
+			wantRetries := 0
+			if scenario == "explicit_goal_met_during_recovery" {
+				wantCalls, wantRetries = 3, 1
+			}
+			if err != nil || len(provider.requests) != wantCalls || retries != wantRetries || met != (scenario == "all_goals_proven" || explicitCompletion) || progressCheckpoint(t, d, ts) != 0 {
 				t.Fatalf("err=%v calls=%d met=%v", err, len(provider.requests), met)
+			}
+			if explicitCompletion {
+				intents, err := ts.ListByKind(db.KindIntent, 10)
+				open, goalErr := ts.HasOpenGoal()
+				if err != nil || goalErr != nil || len(intents) != 0 || !open || reason != "Fixture completion verified" || progressHints(t, ts, "active") != 0 || progressHints(t, ts, "consumed") != 1 {
+					t.Fatalf("explicit completion changed its contract or left a warning: intents=%d open=%v reason=%q err=%v goalErr=%v", len(intents), open, reason, err, goalErr)
+				}
 			}
 		})
 	}

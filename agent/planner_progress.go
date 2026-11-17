@@ -49,7 +49,11 @@ func recoveryBudget(maxTurns int, clock TaskClock, now time.Time) (int, time.Dur
 	return turns, duration, true
 }
 
-func (p *Planner) runWithProgressCheck(ctx context.Context, opts agentcore.Options, input string, ts *db.ExplorationStore, before db.PlannerProgress, heartbeat bool, overview func() map[string]any, emit func(db.Activity)) error {
+func (p *Planner) runWithProgressCheck(ctx context.Context, opts agentcore.Options, input string, ts *db.ExplorationStore, before db.PlannerProgress, heartbeat bool, overview func() map[string]any, goalMet func() bool, emit func(db.Activity)) error {
+	// An explicitly enabled goal_met tool completes the task through ToolSet's
+	// authoritative flag without rewriting individual goal nodes. Preserve that
+	// existing contract; assistant prose alone never sets this flag.
+	completed := func() bool { return goalMet != nil && goalMet() }
 	var lastToolError string
 	record := func(a db.Activity) {
 		if a.Kind == "tool_result" && a.IsError {
@@ -69,7 +73,7 @@ func (p *Planner) runWithProgressCheck(ctx context.Context, opts agentcore.Optio
 		return errors.Join(runErr, fmt.Errorf("read planner progress after round: %w", err))
 	}
 	required := heartbeat && before.NeedsWork()
-	stalled := required && after.NeedsWork() && !after.AdvancedFrom(before)
+	stalled := required && !completed() && after.NeedsWork() && !after.AdvancedFrom(before)
 	turns, duration, canRecover := recoveryBudget(opts.MaxTurns, clock, time.Now())
 	// A provider/DSML error is already actionable. Do not blindly retry it or
 	// override a hook stop. Only a normally completed/budget-limited planning
@@ -93,7 +97,7 @@ func (p *Planner) runWithProgressCheck(ctx context.Context, opts agentcore.Optio
 		if err != nil {
 			return errors.Join(runErr, fmt.Errorf("recheck planner progress before correction: %w", err))
 		}
-		stalled = after.NeedsWork() && !after.AdvancedFrom(before)
+		stalled = !completed() && after.NeedsWork() && !after.AdvancedFrom(before)
 		_, duration, canRecover = recoveryBudget(opts.MaxTurns, clock, time.Now())
 		if stalled && canRecover {
 			// Recompute remaining time: overview reads must not extend the task
@@ -112,12 +116,12 @@ func (p *Planner) runWithProgressCheck(ctx context.Context, opts agentcore.Optio
 		if err != nil {
 			return errors.Join(runErr, fmt.Errorf("read planner progress after correction: %w", err))
 		}
-		stalled = after.NeedsWork() && !after.AdvancedFrom(before)
+		stalled = !completed() && after.NeedsWork() && !after.AdvancedFrom(before)
 	}
 	if plannerDeadlineExpired(clock) {
 		return runErr // task coordinator owns deadline settlement, not this monitor
 	}
-	if !required && after.NeedsWork() && !after.AdvancedFrom(before) {
+	if !required && !completed() && after.NeedsWork() && !after.AdvancedFrom(before) {
 		return runErr // event-triggered no-op rounds do not count as idle heartbeats
 	}
 	report, err := ts.FinishPlannerProgress(ctx, before, stalled, plannerStallThreshold, opts.MaxTurns, string(terminal))

@@ -474,7 +474,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	input += renderPlannerTodos(opts.Todos.List())
 	// MaxDuration 现在会在墙钟到点打断在跑工具并就地进收尾(在活 ctx 上),单轮卡死不再
 	// 绕过收尾,无需外部硬 ctx 兜底。ctx 只承载 pause / kill / shutdown。
-	err = p.runWithProgressCheck(ctx, opts, input, ts, before, len(triggers) == 0, tsx.graphOverviewData,
+	err = p.runWithProgressCheck(ctx, opts, input, ts, before, len(triggers) == 0, tsx.graphOverviewData, func() bool { return tsx.GoalMet },
 		func(r db.Activity) {
 			if emit != nil {
 				r.Worker = "planner" // planner activity has no intent_id (it generates them)
