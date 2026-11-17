@@ -202,6 +202,7 @@ func normalizeComplete(raw []byte, rules map[string]argumentRules) ([]byte, erro
 	var choices []struct {
 		Message struct {
 			Content   string     `json:"content"`
+			Refusal   string     `json:"refusal"`
 			ToolCalls []wireCall `json:"tool_calls"`
 		} `json:"message"`
 		Finish string `json:"finish_reason"`
@@ -213,7 +214,8 @@ func normalizeComplete(raw []byte, rules map[string]argumentRules) ([]byte, erro
 		return nil, protocolError("multiple_choices_unsupported")
 	}
 	for _, choice := range choices {
-		if strings.Contains(choice.Message.Content, dsmlMarker) {
+		if strings.Contains(choice.Message.Content, dsmlMarker) ||
+			strings.Contains(choice.Message.Refusal, dsmlMarker) {
 			return nil, protocolError("unparsed_dsml_tool_call")
 		}
 		if err := validateCalls(choice.Message.ToolCalls, rules, choice.Finish); err != nil {
@@ -256,7 +258,8 @@ func (b *completeBody) Close() error { return b.source.Close() }
 
 // contentGuard retains only a possible marker suffix, so normal text remains
 // streaming and a DSML marker split across arbitrary chunks never escapes.
-// Reasoning and tool arguments are not passed through this guard.
+// Used for assistant content and refusal; reasoning and tool arguments are not
+// passed through this guard.
 type contentGuard struct{ tail string }
 
 func (g *contentGuard) push(text string) (string, error) {
