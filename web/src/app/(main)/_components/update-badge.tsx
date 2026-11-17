@@ -7,6 +7,7 @@ import Link from "next/link";
 import { ArrowUpCircleIcon } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { getServerUpdateChannel, getUpdateChannel, subscribeUpdateChannel } from "@/lib/update-channel";
 
 /**
  * 顶栏的"有新版本"提示：整页加载时查一次，有更新就在版本号旁边亮出来，
@@ -19,15 +20,17 @@ import { api } from "@/lib/api";
  * 查询失败一律静默：顶栏不是报错的地方，用户进设置页点「检查更新」会看到原因。
  */
 export function UpdateBadge() {
+  const channel = React.useSyncExternalStore(subscribeUpdateChannel, getUpdateChannel, getServerUpdateChannel);
   const [latest, setLatest] = React.useState("");
 
   React.useEffect(() => {
     let alive = true;
+    setLatest("");
     api
-      .checkUpdate()
+      .checkUpdate(false, channel)
       .then((r) => {
         // has_update 已经包含了"版本号可比较"的判断，开发构建不会亮这个提示。
-        if (alive && r.install_enabled && r.has_update && r.latest) {
+        if (alive && channel === getUpdateChannel() && r.has_update && r.latest) {
           setLatest(r.latest.replace(/^v(?=\d)/, ""));
         }
       })
@@ -37,14 +40,14 @@ export function UpdateBadge() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [channel]);
 
   if (!latest) return null;
 
   return (
     <Link
       href="/system/settings"
-      title={`发现新版本 ${latest}，点击前往更新`}
+      title={`发现目标版本 ${latest}，点击前往更新设置`}
       className="inline-flex items-center gap-1.5 rounded-full bg-primary px-2.5 py-1 font-medium text-primary-foreground text-xs transition-opacity hover:opacity-90"
     >
       {/* 呼吸点：顶栏元素很多，纯文字容易被忽略，动效让它一眼可见。 */}
@@ -58,3 +61,4 @@ export function UpdateBadge() {
     </Link>
   );
 }
+

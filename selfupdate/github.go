@@ -44,6 +44,8 @@ type Release struct {
 	PublishedAt time.Time `json:"published_at"`
 	HTMLURL     string    `json:"html_url"`
 	Assets      []Asset   `json:"assets"`
+	// CommitSHA is resolved by this client, never accepted from release JSON.
+	CommitSHA   string    `json:"-"`
 }
 
 // Asset 是 Release 上挂的一个文件。
@@ -330,3 +332,4 @@ func (r *Release) FindAsset(name string) (Asset, bool) {
 	}
 	return Asset{}, false
 }
+

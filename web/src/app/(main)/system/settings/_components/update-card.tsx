@@ -16,9 +16,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, sseUrl } from "@/lib/api";
 import { safeHref } from "@/lib/safe-href";
 import type { UpdateCheck, UpdateProgress } from "@/lib/types";
+import {
+  getServerUpdateChannel,
+  getUpdateChannel,
+  isUpdateChannel,
+  setUpdateChannel,
+  subscribeUpdateChannel,
+} from "@/lib/update-channel";
 
 /** 等待新版本上线的最长时间。一次升级要经过三次进程启动（暂存 → 换装 → 新版），
  *  每次都是秒级，三分钟足够覆盖慢磁盘和 Docker 容器重建。 */
@@ -39,6 +47,8 @@ function humanSize(n?: number): string {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function UpdateCard() {
+  const channel = React.useSyncExternalStore(subscribeUpdateChannel, getUpdateChannel, getServerUpdateChannel);
+  const checkSequence = React.useRef(0);
   const [info, setInfo] = React.useState<UpdateCheck | null>(null);
   const [checking, setChecking] = React.useState(true);
   const [progress, setProgress] = React.useState<UpdateProgress | null>(null);
@@ -48,27 +58,47 @@ export function UpdateCard() {
 
   // quiet 同时决定要不要绕过后端缓存：进页面时的自动检查用缓存（顶栏刚查过），
   // 用户手动点「检查更新」则强制回源，否则刚发布的版本要等缓存过期才看得到。
-  const check = React.useCallback((quiet = false) => {
-    setChecking(true);
-    api
-      .checkUpdate(!quiet)
-      .then((r) => {
-        setInfo(r);
-        if (!quiet) {
-          if (r.error) toast.error("检查更新失败：" + r.error);
-          else if (r.has_update && r.install_enabled) toast.success(`发现新版本 ${r.latest}`);
-          else if (r.has_update) toast.message(`发现新版本 ${r.latest}（一键安装未启用，请从源码编译升级）`);
-          else if (r.comparable) toast.success("当前已是最新版本");
-        }
-      })
-      .catch((e) => {
-        if (!quiet) toast.error("检查更新失败：" + (e as Error).message);
-      })
-      .finally(() => setChecking(false));
-  }, []);
+  const [checkError, setCheckError] = React.useState("");
+  const check = React.useCallback(
+    (quiet = false) => {
+      const sequence = ++checkSequence.current;
+      const active = () => sequence === checkSequence.current && channel === getUpdateChannel();
+      setChecking(true);
+      setInfo(null);
+      setCheckError("");
+      api
+        .checkUpdate(!quiet, channel)
+        .then((r) => {
+          if (!active()) return;
+          setInfo(r);
+          if (!quiet) {
+            if (r.error) toast.error("检查更新失败：" + r.error);
+            else if (r.release_status === "no_release") toast.message(r.message || "此通道尚无发布版本");
+            else if (r.has_update && r.source_only) toast.message(`目标提交与当前构建不同：${r.latest}`);
+            else if (r.has_update && r.install_enabled) toast.success(`发现新版本 ${r.latest}`);
+            else if (r.has_update) toast.message(`发现新版本 ${r.latest}（请从源码编译升级）`);
+            else if (r.comparable) toast.success(r.source_only ? "当前构建已包含目标提交" : "当前已是最新版本");
+            else if (r.reason) toast.message(r.reason);
+          }
+        })
+        .catch((e) => {
+          if (!active()) return;
+          const message = e instanceof Error ? e.message : "无法获取更新信息";
+          setCheckError(message);
+          if (!quiet) toast.error("检查更新失败：" + message);
+        })
+        .finally(() => {
+          if (active()) setChecking(false);
+        });
+    },
+    [channel],
+  );
 
   React.useEffect(() => {
     check(true);
+    return () => {
+      checkSequence.current++;
+    };
   }, [check]);
 
   // 轮询 /api/health 直到版本号变化。
@@ -197,6 +227,7 @@ export function UpdateCard() {
   const pct = downloading ? Math.max(progress?.percent ?? 0, 0) : 100;
   // html_url 来自 GitHub API 响应,只允许 http(s) 进 href;异常值时不渲染链接。
   const changelogHref = safeHref(info?.html_url);
+  const sourceHref = safeHref(info?.source_url);
 
   return (
     // 设置页是多列瀑布流布局，卡片自己负责行间距并禁止跨列断开（见 page.tsx 的注释）。
@@ -207,10 +238,38 @@ export function UpdateCard() {
           版本与更新
         </CardTitle>
         <CardDescription>
-          检查此二开版的 GitHub 正式版本。独立发布与签名链审核完成前，一键安装保持禁用。
+          可选择正式版、nightly / 预发布或 main 最新提交。nightly 与 main 通过源码编译升级。
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <span id="update-channel-label" className="text-sm text-muted-foreground">
+            更新通道
+          </span>
+          <Select
+            value={channel}
+            onValueChange={(value) => {
+              if (isUpdateChannel(value) && value !== channel) {
+                checkSequence.current++;
+                setInfo(null);
+                setCheckError("");
+                setChecking(true);
+                setUpdateChannel(value);
+              }
+            }}
+            disabled={busy || restarting}
+          >
+            <SelectTrigger aria-labelledby="update-channel-label" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="stable">正式版（默认）</SelectItem>
+              <SelectItem value="nightly">Nightly / 预发布</SelectItem>
+              <SelectItem value="main">Main 最新提交</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">选择会记在此浏览器中。Nightly 与 main 可能包含尚未正式发布的变更。</p>
+        </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-muted-foreground">当前版本</span>
           <Badge variant="secondary" className="font-mono">
@@ -239,7 +298,7 @@ export function UpdateCard() {
               rel="noreferrer"
               className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-4 hover:underline"
             >
-              更新日志 <ExternalLinkIcon className="size-3" />
+              {info?.source_only ? "查看目标版本" : "更新日志"} <ExternalLinkIcon className="size-3" />
             </a>
           )}
         </div>
@@ -255,17 +314,30 @@ export function UpdateCard() {
           <p className="text-xs text-muted-foreground">{info.install_reason}</p>
         )}
 
-        {info?.error && (
+        {(checkError || info?.error) && (
           <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
             <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
-            检查更新：{info.error}
-            {info.error_code === "network" && " 请检查服务器网络；确实需要代理时，可在上方配置全局代理。"}
+            检查更新：{checkError || info?.error}
+            {info?.error_code === "network" && " 请检查服务器网络；确实需要代理时，可在上方配置全局代理。"}
           </p>
+        )}
+
+        {info?.message && <p className="rounded-md border p-2 text-xs text-muted-foreground">{info.message}</p>}
+
+        {sourceHref && (
+          <a
+            href={sourceHref}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-sm underline underline-offset-4"
+          >
+            下载此提交的源码 <ExternalLinkIcon className="size-3" />
+          </a>
         )}
 
         {info && !info.comparable && info.reason && <p className="text-xs text-muted-foreground">{info.reason}</p>}
 
-        {info?.has_update && info.asset_available === false && (
+        {!info?.source_only && info?.has_update && info.asset_available === false && (
           <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
             <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
             {info.latest} 没有提供 {info.os}/{info.arch} 的发布包（缺少 {info.asset}），无法自动更新。
@@ -282,7 +354,7 @@ export function UpdateCard() {
         {info && !info.has_update && info.comparable && !info.error && (
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             <CheckCircle2Icon className="size-3.5 text-emerald-600" />
-            当前已是最新版本。
+            {info.source_only ? "当前构建已包含目标提交。" : "当前已是最新版本。"}
           </p>
         )}
 
@@ -313,7 +385,7 @@ export function UpdateCard() {
             size="sm"
             onClick={doUpdate}
             disabled={
-              busy || restarting || !info?.install_enabled || !info?.has_update || info?.asset_available === false
+              checking || busy || restarting || !info?.install_enabled || !info?.has_update || info?.asset_available === false
             }
           >
             <DownloadIcon className="size-4" />
@@ -335,3 +407,4 @@ export function UpdateCard() {
     </Card>
   );
 }
+
