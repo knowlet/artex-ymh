@@ -1767,4 +1767,3 @@ export interface InterceptExecution {
   seq: number;
   items: Activity[];
 }
-

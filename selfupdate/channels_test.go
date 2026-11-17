@@ -20,7 +20,7 @@ func TestFetchChannelMainWithoutRelease(t *testing.T) {
 	calls := 0
 	client := &http.Client{Transport: checkTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
-		if r.URL.String() != "https://api.github.com/repos/"+Repo+"/commits/main" {
+		if r.URL.String() != "https://api.github.com/repos/"+Repo+"/commits/main?per_page=1" {
 			t.Fatalf("main must not depend on a Release: %s", r.URL)
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(channelCommitJSON(channelTestSHA))), Request: r}, nil
@@ -45,7 +45,7 @@ func TestFetchChannelNightlyPublicationOrderAndMovingTag(t *testing.T) {
 		]`
 		switch r.URL.RequestURI() {
 		case repoAPIPrefix + "/releases?per_page=100&page=1":
-		case repoAPIPrefix + "/commits/nightly":
+		case repoAPIPrefix + "/commits/nightly?per_page=1":
 			body = channelCommitJSON(sha)
 		default:
 			t.Fatalf("unexpected source: %s", r.URL)
@@ -79,7 +79,7 @@ func TestFetchChannelNightlyPaginates(t *testing.T) {
 			body = string(first)
 		case repoAPIPrefix + "/releases?per_page=100&page=2":
 			body = `[{"tag_name":"v2.0.0-beta","prerelease":true,"published_at":"2026-11-16T00:00:00Z"}]`
-		case repoAPIPrefix + "/commits/v2.0.0-beta":
+		case repoAPIPrefix + "/commits/v2.0.0-beta?per_page=1":
 			body = channelCommitJSON(channelTestSHA)
 		default:
 			t.Fatalf("unexpected page: %s", r.URL)

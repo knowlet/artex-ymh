@@ -1374,4 +1374,3 @@ export const api = {
   credentials: (taskId?: string) =>
     get<{ items: Credential[] }>(`/credentials${taskQuery(taskId)}`).then((r) => arr(r.items)),
 };
-

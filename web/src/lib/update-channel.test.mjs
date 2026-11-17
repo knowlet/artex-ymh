@@ -1,6 +1,3 @@
-import assert from "node:assert/strict";
-import test from "node:test";
-
 import {
   getServerUpdateChannel,
   getUpdateChannel,
@@ -8,6 +5,8 @@ import {
   setUpdateChannel,
   subscribeUpdateChannel,
 } from "./update-channel.ts";
+import assert from "node:assert/strict";
+import test from "node:test";
 
 const store = new Map();
 const events = new EventTarget();
@@ -36,10 +35,18 @@ test("a channel choice is persisted and both subscribers observe it", () => {
   setUpdateChannel("main");
   setUpdateChannel("nightly");
   assert.equal(store.get("artex_update_channel"), "nightly");
-  assert.deepEqual(snapshots, [["main", "nightly"], ["main", "nightly"]]);
-  unsubscribe.forEach((stop) => stop());
+  assert.deepEqual(snapshots, [
+    ["main", "nightly"],
+    ["main", "nightly"],
+  ]);
+  unsubscribe.forEach((stop) => {
+    stop();
+  });
   setUpdateChannel("stable");
-  assert.deepEqual(snapshots, [["main", "nightly"], ["main", "nightly"]]);
+  assert.deepEqual(snapshots, [
+    ["main", "nightly"],
+    ["main", "nightly"],
+  ]);
 });
 
 test("other tabs and storage clearing notify subscribers; unrelated keys do not", () => {
@@ -61,7 +68,9 @@ test("other tabs and storage clearing notify subscribers; unrelated keys do not"
 
 test("blocked writes keep the selection usable even when reads still work", () => {
   const original = window.localStorage.setItem;
-  window.localStorage.setItem = () => { throw new Error("quota exceeded"); };
+  window.localStorage.setItem = () => {
+    throw new Error("quota exceeded");
+  };
   setUpdateChannel("main");
   assert.equal(getUpdateChannel(), "main");
   window.localStorage.setItem = original;

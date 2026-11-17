@@ -21,17 +21,19 @@ import { getServerUpdateChannel, getUpdateChannel, subscribeUpdateChannel } from
  */
 export function UpdateBadge() {
   const channel = React.useSyncExternalStore(subscribeUpdateChannel, getUpdateChannel, getServerUpdateChannel);
-  const [latest, setLatest] = React.useState("");
+  const [result, setResult] = React.useState<{ channel: string; latest: string } | null>(null);
+  const latest = result?.channel === channel ? result.latest : "";
+  const label = channel === "stable" ? "新版本" : "目标提交";
 
   React.useEffect(() => {
     let alive = true;
-    setLatest("");
+    setResult(null);
     api
       .checkUpdate(false, channel)
       .then((r) => {
-        // has_update 已经包含了"版本号可比较"的判断，开发构建不会亮这个提示。
+        // Source channels compare commit identity; unknown/dirty builds do not light the badge.
         if (alive && channel === getUpdateChannel() && r.has_update && r.latest) {
-          setLatest(r.latest.replace(/^v(?=\d)/, ""));
+          setResult({ channel, latest: r.latest.replace(/^v(?=\d)/, "") });
         }
       })
       .catch(() => {
@@ -56,9 +58,10 @@ export function UpdateBadge() {
         <span className="relative inline-flex size-1.5 rounded-full bg-primary-foreground" />
       </span>
       <ArrowUpCircleIcon className="size-3.5" />
-      <span className="hidden sm:inline">新版本 {latest}</span>
-      <span className="sm:hidden">新版本</span>
+      <span className="hidden sm:inline">
+        {label} {latest}
+      </span>
+      <span className="sm:hidden">{label}</span>
     </Link>
   );
 }
-

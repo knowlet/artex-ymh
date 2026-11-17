@@ -28,7 +28,7 @@ errors retain their classification. Source links use the resolved commit.
 
 Validation: transport fixtures for release selection, pagination, draft/fork
 rejection and commit parsing; server fixtures for cache isolation, force refresh,
-channel validation and build identity; browser-store and stale-request tests;
+channel validation and build identity; browser-store tests and stale-request guard review;
 existing selfupdate safety CI covers race tests, vet/build, TypeScript and static
 frontend build. Local checkout is a selected-file snapshot acquired through the
 GitHub connector: shell clone failed DNS resolution and Go is unavailable here.

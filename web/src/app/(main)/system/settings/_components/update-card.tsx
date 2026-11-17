@@ -72,7 +72,7 @@ export function UpdateCard() {
           if (!active()) return;
           setInfo(r);
           if (!quiet) {
-            if (r.error) toast.error("检查更新失败：" + r.error);
+            if (r.error) toast.error(`检查更新失败：${r.error}`);
             else if (r.release_status === "no_release") toast.message(r.message || "此通道尚无发布版本");
             else if (r.has_update && r.source_only) toast.message(`目标提交与当前构建不同：${r.latest}`);
             else if (r.has_update && r.install_enabled) toast.success(`发现新版本 ${r.latest}`);
@@ -85,7 +85,7 @@ export function UpdateCard() {
           if (!active()) return;
           const message = e instanceof Error ? e.message : "无法获取更新信息";
           setCheckError(message);
-          if (!quiet) toast.error("检查更新失败：" + message);
+          if (!quiet) toast.error(`检查更新失败：${message}`);
         })
         .finally(() => {
           if (active()) setChecking(false);
@@ -407,4 +407,3 @@ export function UpdateCard() {
     </Card>
   );
 }
-

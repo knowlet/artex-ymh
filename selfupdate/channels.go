@@ -115,7 +115,9 @@ func ValidCommitSHA(sha string) bool {
 }
 
 func fetchCommit(ctx context.Context, c *http.Client, ref string) (*Release, error) {
-	resp, err := githubRequest(ctx, c, "https://api.github.com/repos/"+Repo+"/commits/"+url.PathEscape(ref))
+	// The commits API also includes file patches. Only request one file: none of
+	// those patches are needed for identity, and the body still has the hard cap.
+	resp, err := githubRequest(ctx, c, "https://api.github.com/repos/"+Repo+"/commits/"+url.PathEscape(ref)+"?per_page=1")
 	if err != nil {
 		return nil, err
 	}
