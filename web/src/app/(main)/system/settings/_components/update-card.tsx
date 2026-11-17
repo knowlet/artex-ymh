@@ -268,7 +268,9 @@ export function UpdateCard() {
               <SelectItem value="main">Main 最新提交</SelectItem>
             </SelectContent>
           </Select>
-          <p className="text-muted-foreground text-xs">选择会记在此浏览器中。Nightly 与 main 可能包含尚未正式发布的变更。</p>
+          <p className="text-muted-foreground text-xs">
+            选择会记在此浏览器中。Nightly 与 main 可能包含尚未正式发布的变更。
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-muted-foreground">当前版本</span>
@@ -385,7 +387,12 @@ export function UpdateCard() {
             size="sm"
             onClick={doUpdate}
             disabled={
-              checking || busy || restarting || !info?.install_enabled || !info?.has_update || info?.asset_available === false
+              checking ||
+              busy ||
+              restarting ||
+              !info?.install_enabled ||
+              !info?.has_update ||
+              info?.asset_available === false
             }
           >
             <DownloadIcon className="size-4" />
