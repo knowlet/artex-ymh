@@ -35,6 +35,32 @@ func (g *Guard) SetRoE(cfg RoEConfig) {
 	g.mu.Unlock()
 }
 
+// AuthorizeInsecureTLS requires a positive match against a task's registered
+// host/network scope. Unlike ordinary RoE checks, warn/off, unknown scope and
+// the local-host convenience exemption cannot authorize a TLS exception. The
+// caller checks every requested/redirected URL before making a connection.
+func (g *Guard) AuthorizeInsecureTLS(ctx context.Context, host string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if g == nil {
+		return fmt.Errorf("insecure_skip_verify requires a task scope guard")
+	}
+	g.mu.Lock()
+	cfg := g.roe
+	g.mu.Unlock()
+	if cfg.Scope == nil || cfg.TaskIDOf == nil || cfg.TaskIDOf(ctx) <= 0 {
+		return fmt.Errorf("insecure_skip_verify requires an explicitly registered task scope")
+	}
+	matcher := NewScopeMatcher(cfg.Scope(cfg.TaskIDOf(ctx)))
+	matcher.AllowLocal = false
+	if matcher.Check(host) != ScopeIn {
+		return fmt.Errorf("insecure_skip_verify denied: host %q is not in the task's explicitly registered scope", host)
+	}
+	g.record("WebFetch", "allow", "explicit in-scope TLS certificate verification exception", host)
+	return nil
+}
+
 // roeMode normalizes the configured mode; 默认 warn。
 func (c RoEConfig) mode() string {
 	if c.Mode == nil {

@@ -377,6 +377,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	// 并追加 cancel_intent 让 planner 能自己消化积压(红日 3 R2:frontier 36 条 open)。
 	domain := tsx.capFrontierTools(tsx.DropCoverageTools(tsx.PlannerTools()))
 	base := append(domain, actool.DefaultTools()...)
+	base = append(base, newWebFetch(p.proxyAddr, p.proxyCACert, p.guard))
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts)})
 	tools, def, cleanup := AugmentTools(ctx, "planner", base)
 	defer cleanup()
@@ -414,9 +415,6 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
 		PermissionMode:  permission.ModeBypass,
-		EnableWebFetch:  true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
-		WebFetchProxy:   p.proxyAddr,
-		WebFetchCACert:  p.proxyCACert,
 		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
 		// WebSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
 		EnableWebSearch:       p.webSearch.Enabled,
@@ -449,6 +447,13 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		opts.Transcript = p.tx
 		opts.SessionID = fmt.Sprintf("exp%d-planner", ts.ID())
 	}
+	var before db.PlannerProgress
+	if !tc.Final && !plannerDeadlineExpired(tc) {
+		before, err = ts.PlannerProgress(ctx)
+		if err != nil {
+			return false, "", fmt.Errorf("read planner progress before round: %w", err)
+		}
+	}
 	// 态势（刚完成的意图 + 完整图）现在拼进本轮 user 输入（见下方 input）。user 里还有
 	// 指令 + 跨唤醒待办（todo 是模型自己的规划便签，可再生，放 user 即可）。
 	// 开场白按「本轮有无具体变动」分两种：有变动 → 指向下方【实际变动】块；无变动
@@ -458,15 +463,18 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		lead = "本轮是**定时巡检（心跳到点）/无具体变动信号**的唤醒——图不一定有新变动。顺带复查在跑意图：长时间无进展或跑偏的用 steer_work 纠偏、方向整个错的用 kill_work 止损；再判定目标、决定是否补方向："
 		// 心跳/无变动唤醒时,若全图已无任何 open 或 running 意图 → 探索已停摆(没 worker 在跑、
 		// 也没排队方向)。明确告知 planner 并强制其本轮补出新方向,别只复查在跑意图后空转一轮。
-		if active, err := ts.HasActiveIntent(); err == nil && !active {
+		if !tc.Final && !plannerDeadlineExpired(tc) && before.NeedsWork() {
 			lead = "本轮是**定时巡检（心跳到点）**的唤醒,且当前**已没有任何 open 或 running 的意图**——没有 worker 在跑、也没有排队中的方向,探索已停摆。你**必须**在本轮产出一个或多个向目标推进、且与图中既有意图**互不重复**的新意图(不得产出 0 意图);先据下面的态势判定目标是否已达成,未达成则立即补方向："
 		}
 	}
-	input := lead + situational + "\n\n据上面的态势，判定目标。目标已【真正达成】（已拿到目标成果/已确认目标漏洞）时用 prove_goal 逐个标记。**硬底线：只要目标尚未达成、且当前没有任何 open 或 running 意图（frontier_open=0 且 running_intents 为空），本轮就必须产出至少一个向目标推进的意图——此时没有在跑的 work 可等、也没有在排队的方向，产出 0 意图=任务停摆。仅当已有 open/running 意图在推进、或目标已达成时，本轮才可以不产出新意图。**" +
-		renderPlannerTodos(opts.Todos.List())
+	input := lead + situational + "\n\n据上面的态势，判定目标。目标已【真正达成】（已拿到目标成果/已确认目标漏洞）时用 prove_goal 逐个标记。"
+	if !tc.Final && !plannerDeadlineExpired(tc) && before.NeedsWork() {
+		input += "当前仍有未达成的目标且没有 open/running 意图，请用 add_intent 提交有证据支撑、符合范围与约束且不重复的下一步，或用 prove_goal 提交实际达成证据；仅输出分析不算推进。若确实受约束或证据不足而不能安全推进，请明确说明阻碍，不要虚构意图或绕过审批。"
+	}
+	input += renderPlannerTodos(opts.Todos.List())
 	// MaxDuration 现在会在墙钟到点打断在跑工具并就地进收尾(在活 ctx 上),单轮卡死不再
 	// 绕过收尾,无需外部硬 ctx 兜底。ctx 只承载 pause / kill / shutdown。
-	_, _, err = captureRun(ctx, opts, input,
+	err = p.runWithProgressCheck(ctx, opts, input, ts, before, len(triggers) == 0, tsx.graphOverviewData,
 		func(r db.Activity) {
 			if emit != nil {
 				r.Worker = "planner" // planner activity has no intent_id (it generates them)

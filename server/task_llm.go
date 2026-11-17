@@ -570,6 +570,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	wk.SetMaxTokens(workerRuntime.maxTokens)       // 同上,输出上限也跟随当前激活 profile
 	wk.SetRunTimeout(time.Duration(s.agentRunSeconds("worker")) * time.Second)
 	wk.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
+	wk.SetWebFetchGuard(t.Guard)
 	wk.SetTaskProxyResolver(s.m.TaskProxyForTask) // 期 3b:按任务 MITM(经隧道时 任务实例→任务 socks)
 	wk.SetWebSearch(s.webSearchFor("worker"))
 	wk.SetConstraintInject(s.constraintInjectWorker) // 操作约束注入 worker(可配置,默认开)
@@ -603,7 +604,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	main.SetKillWork(func(intentID int64) error {
 		return s.engine.KillWorkAs(intentID, agent.AbortKilledByMainagent)
 	}) // kill_work：人立即终止运行中 work(killed_by_mainagent)
-	main.SetGuard(s.agentGuard())         // 审批门:mainagent 的工具调用同样过 PreToolUse 拦截
+	main.SetGuard(s.agentGuard()) // 审批门:mainagent 的工具调用同样过 PreToolUse 拦截
 	bundle := &taskAgentBundle{
 		runtime: goalRuntime, plannerRuntime: plannerRuntime, workerRuntime: workerRuntime,
 		mainRuntime: mainRuntime, pl: pl, wk: wk, main: main,
