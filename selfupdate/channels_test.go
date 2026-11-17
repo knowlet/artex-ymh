@@ -94,17 +94,17 @@ func TestFetchChannelNightlyPaginates(t *testing.T) {
 
 func TestFetchChannelRejectsInvalidMetadata(t *testing.T) {
 	cases := []struct {
-		name string
+		name    string
 		channel Channel
-		body string
-		status int
-		code string
+		body    string
+		status  int
+		code    string
 	}{
 		{"main missing", ChannelMain, `{}`, 404, "ref_unavailable"},
 		{"main short SHA", ChannelMain, channelCommitJSON("abc1234"), 200, "invalid_release"},
 		{"main invalid SHA", ChannelMain, channelCommitJSON(strings.Repeat("z", 40)), 200, "invalid_release"},
 		{"main other fork", ChannelMain, strings.ReplaceAll(channelCommitJSON(channelTestSHA), Repo, "Autumn-27/artex"), 200, "github_error"},
-		{"main extra JSON", ChannelMain, channelCommitJSON(channelTestSHA)+` {}`, 200, "invalid_release"},
+		{"main extra JSON", ChannelMain, channelCommitJSON(channelTestSHA) + ` {}`, 200, "invalid_release"},
 		{"nightly empty", ChannelNightly, `[]`, 200, "no_release"},
 		{"nightly only drafts", ChannelNightly, `[{"tag_name":"nightly","draft":true}]`, 200, "no_release"},
 		{"nightly only stable", ChannelNightly, `[{"tag_name":"v1.0.0"}]`, 200, "no_release"},

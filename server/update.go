@@ -64,8 +64,8 @@ type releaseCache struct {
 	err error
 	at  time.Time
 	// fetch 是取数函数，仅为测试留的注入点；为 nil 时走真正的 GitHub 查询。
-	fetch func(context.Context, *http.Client) (*selfupdate.Release, error)
-	channels map[selfupdate.Channel]*releaseCache
+	fetch        func(context.Context, *http.Client) (*selfupdate.Release, error)
+	channels     map[selfupdate.Channel]*releaseCache
 	fetchChannel func(context.Context, *http.Client, selfupdate.Channel) (*selfupdate.Release, error)
 }
 
@@ -492,4 +492,3 @@ func (s *Server) updateStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-
