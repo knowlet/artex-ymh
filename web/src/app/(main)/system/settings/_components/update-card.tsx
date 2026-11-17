@@ -145,7 +145,7 @@ export function UpdateCard() {
         if (p.phase === "failed") {
           es.close();
           setBusy(false);
-          toast.error("更新失败：" + (p.error || p.message));
+          toast.error(`更新失败：${p.error || p.message}`);
           return;
         }
         if (p.phase === "staged") {
@@ -185,14 +185,14 @@ export function UpdateCard() {
       } catch (e) {
         setBusy(false);
         setProgress(null);
-        toast.error("打开更新进度流失败：" + (e as Error).message);
+        toast.error(`打开更新进度流失败：${(e as Error).message}`);
         return;
       }
       api.applyUpdate().catch((e) => {
         es.close();
         setBusy(false);
         setProgress(null);
-        toast.error("启动更新失败：" + (e as Error).message);
+        toast.error(`启动更新失败：${(e as Error).message}`);
       });
     })();
   };
@@ -215,7 +215,7 @@ export function UpdateCard() {
       })
       .catch((e) => {
         setBusy(false);
-        toast.error("回滚失败：" + (e as Error).message);
+        toast.error(`回滚失败：${(e as Error).message}`);
       });
   };
 
@@ -243,7 +243,7 @@ export function UpdateCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
-          <span id="update-channel-label" className="text-sm text-muted-foreground">
+          <span id="update-channel-label" className="text-muted-foreground text-sm">
             更新通道
           </span>
           <Select
@@ -268,7 +268,7 @@ export function UpdateCard() {
               <SelectItem value="main">Main 最新提交</SelectItem>
             </SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground">选择会记在此浏览器中。Nightly 与 main 可能包含尚未正式发布的变更。</p>
+          <p className="text-muted-foreground text-xs">选择会记在此浏览器中。Nightly 与 main 可能包含尚未正式发布的变更。</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-muted-foreground">当前版本</span>
@@ -296,7 +296,7 @@ export function UpdateCard() {
               href={changelogHref}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-4 hover:underline"
+              className="inline-flex items-center gap-1 text-muted-foreground text-xs underline-offset-4 hover:underline"
             >
               {info?.source_only ? "查看目标版本" : "更新日志"} <ExternalLinkIcon className="size-3" />
             </a>
@@ -304,25 +304,25 @@ export function UpdateCard() {
         </div>
 
         {info?.boot_notice && (
-          <p className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
+          <p className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-amber-700 text-xs dark:text-amber-400">
             <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
             {info.boot_notice}
           </p>
         )}
 
         {info && !info.install_enabled && info.install_reason && (
-          <p className="text-xs text-muted-foreground">{info.install_reason}</p>
+          <p className="text-muted-foreground text-xs">{info.install_reason}</p>
         )}
 
         {(checkError || info?.error) && (
-          <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+          <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-destructive text-xs">
             <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
             检查更新：{checkError || info?.error}
             {info?.error_code === "network" && " 请检查服务器网络；确实需要代理时，可在上方配置全局代理。"}
           </p>
         )}
 
-        {info?.message && <p className="rounded-md border p-2 text-xs text-muted-foreground">{info.message}</p>}
+        {info?.message && <p className="rounded-md border p-2 text-muted-foreground text-xs">{info.message}</p>}
 
         {sourceHref && (
           <a
@@ -335,31 +335,31 @@ export function UpdateCard() {
           </a>
         )}
 
-        {info && !info.comparable && info.reason && <p className="text-xs text-muted-foreground">{info.reason}</p>}
+        {info && !info.comparable && info.reason && <p className="text-muted-foreground text-xs">{info.reason}</p>}
 
         {!info?.source_only && info?.has_update && info.asset_available === false && (
-          <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+          <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-destructive text-xs">
             <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
             {info.latest} 没有提供 {info.os}/{info.arch} 的发布包（缺少 {info.asset}），无法自动更新。
           </p>
         )}
 
         {info?.install_enabled && info.has_update && info.asset_available !== false && (
-          <p className="text-xs text-muted-foreground">
+          <p className="text-muted-foreground text-xs">
             将下载 <span className="font-mono">{info.asset}</span>
             {info.size ? `（${humanSize(info.size)}）` : ""}，校验 SHA256 并冒烟测试后才会替换，失败自动保留当前版本。
           </p>
         )}
 
         {info && !info.has_update && info.comparable && !info.error && (
-          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <p className="flex items-center gap-2 text-muted-foreground text-xs">
             <CheckCircle2Icon className="size-3.5 text-emerald-600" />
             {info.source_only ? "当前构建已包含目标提交。" : "当前已是最新版本。"}
           </p>
         )}
 
         {info?.install_enabled && info.mode === "docker" && info.has_update && (
-          <p className="text-xs text-muted-foreground">
+          <p className="text-muted-foreground text-xs">
             Docker 下的更新只替换程序本身，不更新镜像里的 playwright / nmap 等工具链，且
             <span className="font-mono"> docker compose up -d </span>
             重建容器后会退回镜像自带的版本。需要连镜像一起升级请执行
@@ -370,7 +370,7 @@ export function UpdateCard() {
         {showProgress && (
           <div className="space-y-1.5">
             <Progress value={pct} className={downloading ? undefined : "animate-pulse"} />
-            <p className="text-xs text-muted-foreground">
+            <p className="text-muted-foreground text-xs">
               {restarting ? "正在重启并应用新版本，请稍候（页面会自动刷新）…" : progress?.message}
             </p>
           </div>
@@ -399,7 +399,7 @@ export function UpdateCard() {
           )}
         </div>
 
-        <p className="text-xs text-muted-foreground">
+        <p className="text-muted-foreground text-xs">
           更新与回滚依赖守护脚本重启程序。请通过 <span className="font-mono">start.sh</span>（Windows 为
           <span className="font-mono"> start.bat</span>）启动 ARTEX；直接运行 artex 本体时，程序退出后不会被自动拉起。
         </p>

@@ -64,6 +64,6 @@ jobs:
         run: |
           node --test src/lib/update-channel.test.mjs
           npm ci --ignore-scripts
-          npx biome check 'src/app/(main)/_components/update-badge.tsx' 'src/app/(main)/system/settings/_components/update-card.tsx' src/lib/types.ts src/lib/update-channel.ts src/lib/update-channel.test.mjs
+          npx biome check --max-diagnostics=100 'src/app/(main)/_components/update-badge.tsx' 'src/app/(main)/system/settings/_components/update-card.tsx' src/lib/types.ts src/lib/update-channel.ts src/lib/update-channel.test.mjs
           npx tsc --noEmit
           npm run build:static

@@ -58,9 +58,7 @@ export function UpdateBadge() {
         <span className="relative inline-flex size-1.5 rounded-full bg-primary-foreground" />
       </span>
       <ArrowUpCircleIcon className="size-3.5" />
-      <span className="hidden sm:inline">
-        {label} {latest}
-      </span>
+      <span className="hidden sm:inline">{`${label} ${latest}`}</span>
       <span className="sm:hidden">{label}</span>
     </Link>
   );
