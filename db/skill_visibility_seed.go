@@ -49,3 +49,30 @@ func (d *DB) AgentSkillNamesForRuntime(agentID int64, skillRoot string) ([]strin
 	}
 	return out, nil
 }
+
+func visibilityLibraryForSkill(skillRoot, skillName string) (string, error) {
+	return skillprovider.SkillVisibilityLibraryID(skillRoot, skillName)
+}
+
+// SetAgentSkillVisibilityRuntime replaces skill visibility for one agent across every
+// library identity that applies to the configured skill root.
+func (d *DB) SetAgentSkillVisibilityRuntime(agentID int64, skillRoot string, names []string) error {
+	libraries, err := skillprovider.BundledSkillLibraryIDsForRuntime(skillRoot)
+	if err != nil {
+		return err
+	}
+	byLib := make(map[string][]string, len(libraries))
+	for _, name := range names {
+		lib, err := visibilityLibraryForSkill(skillRoot, name)
+		if err != nil {
+			return err
+		}
+		byLib[lib] = append(byLib[lib], name)
+	}
+	for _, lib := range libraries {
+		if err := d.SetAgentSkillVisibilityInLibrary(agentID, byLib[lib], lib); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -494,12 +494,7 @@ func (s *Server) pgGetAgent(w http.ResponseWriter, r *http.Request) {
 		vers = []db.PromptVersion{}
 	}
 	mcp, _ := pg.AgentVisible(a.ID, "mcp")
-	var sk []string
-	if libraryID, err := skillprovider.LibraryIdentity(s.skillDir); err == nil {
-		sk, _ = pg.AgentSkillNamesInLibrary(a.ID, libraryID)
-	} else {
-		log.Printf("[skills] library identity: %v", err)
-	}
+	sk, _ := pg.AgentSkillNamesForRuntime(a.ID, s.skillDir)
 	if sk == nil {
 		sk = []string{}
 	}
@@ -727,12 +722,7 @@ func (s *Server) pgGetAgentVisibility(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mcp, _ := pg.AgentVisible(a.ID, "mcp")
-	libraryID, err := skillprovider.LibraryIdentity(s.skillDir)
-	if err != nil {
-		writeErr(w, 409, err.Error())
-		return
-	}
-	sk, _ := pg.AgentSkillNamesInLibrary(a.ID, libraryID)
+	sk, _ := pg.AgentSkillNamesForRuntime(a.ID, s.skillDir)
 	if sk == nil {
 		sk = []string{}
 	}
@@ -752,16 +742,11 @@ func (s *Server) pgSetAgentVisibility(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	libraryID, err := skillprovider.LibraryIdentity(s.skillDir)
-	if err != nil {
-		writeErr(w, 409, err.Error())
-		return
-	}
 	if err := pg.SetAgentVisibilityKind(a.ID, "mcp", body.MCP); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	if err := pg.SetAgentSkillVisibilityInLibrary(a.ID, body.Skill, libraryID); err != nil {
+	if err := pg.SetAgentSkillVisibilityRuntime(a.ID, s.skillDir, body.Skill); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
@@ -1540,16 +1525,15 @@ func (s *Server) fsDeleteSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid skill name")
 		return
 	}
+	libraryID, err := skillprovider.SkillVisibilityLibraryID(s.skillDir, name)
+	if err != nil {
+		writeErr(w, 409, err.Error())
+		return
+	}
 	skillPath := filepath.Join(s.skillDir, name)
 	if err := os.RemoveAll(skillPath); err != nil {
 		writeErr(w, 500, err.Error())
 		return
-	}
-	libraryID := skillprovider.ShippedSkillLibraryID(s.skillDir, name)
-	if libraryID == "" {
-		if id, err := skillprovider.LibraryIdentity(s.skillDir); err == nil {
-			libraryID = id
-		}
 	}
 	shipped := db.IsShippedBuiltinSkill(name)
 	if err := pg.DeleteSkillVisibilityInLibrary(name, libraryID, shipped); err != nil {
@@ -1791,7 +1775,7 @@ func (s *Server) pgSkillVisibility(w http.ResponseWriter, r *http.Request) {
 	if pg == nil {
 		return
 	}
-	libraryID, err := skillprovider.LibraryIdentity(s.skillDir)
+	libraryID, err := skillprovider.SkillVisibilityLibraryID(s.skillDir, r.PathValue("name"))
 	if err != nil {
 		writeErr(w, 409, err.Error())
 		return
@@ -1818,7 +1802,7 @@ func (s *Server) pgToggleSkillVisibility(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 400, err.Error())
 		return
 	}
-	libraryID, err := skillprovider.LibraryIdentity(s.skillDir)
+	libraryID, err := skillprovider.SkillVisibilityLibraryID(s.skillDir, body.SkillName)
 	if err != nil {
 		writeErr(w, 409, err.Error())
 		return

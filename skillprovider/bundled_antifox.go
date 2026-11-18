@@ -91,6 +91,22 @@ func ShippedSkillLibraryID(skillRoot, skillName string) string {
 	return ""
 }
 
+// SkillVisibilityLibraryID returns the library_id used for visibility reads/writes for
+// one skill in the configured skill root (import receipt, else bundled antifox scope).
+func SkillVisibilityLibraryID(skillRoot, skillName string) (string, error) {
+	id, err := LibraryIdentity(skillRoot)
+	if err != nil {
+		return "", err
+	}
+	if id != "" {
+		return id, nil
+	}
+	if id := ShippedSkillLibraryID(skillRoot, skillName); id != "" {
+		return id, nil
+	}
+	return "", nil
+}
+
 // BundledSkillLibraryIDsForRuntime returns library_id values whose grants apply when
 // loading skills from a legacy (no provider receipt) skill root.
 func BundledSkillLibraryIDsForRuntime(skillRoot string) ([]string, error) {
