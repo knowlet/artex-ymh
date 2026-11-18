@@ -81,6 +81,7 @@ jobs:
             TestAddIntentWrappedCallsPersist \
             TestAddIntentWrappedCallsPreserveValidation \
             TestPlannerWrappedIntentCommitsWithinRound \
+            TestReportFindingWrappedCallsPersist \
             TestTransientModelErrorClassification \
             TestProviderContextOverflowAliasReachesCompactor \
             TestProviderStalledStreamUsesIdleTimeout \

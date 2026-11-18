@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/toolargs"
 	"github.com/Autumn-27/norma/llm"
 )
 
@@ -27,7 +28,7 @@ func wrapIntentArguments(t *testing.T, raw json.RawMessage, stringify bool) json
 func TestIntentArgumentsNormalizesKnownEnvelopes(t *testing.T) {
 	const input = `{"summary":"fixture direction","asset_ids":[9007199254740993],"parent_ids":[7],"chain_tags":["web","recon"]}`
 	for _, stringified := range []bool{true, false} {
-		for layers := 0; layers <= maxIntentArgumentWraps; layers++ {
+		for layers := 0; layers <= toolargs.MaxArgumentWraps; layers++ {
 			t.Run(fmt.Sprintf("string_%t_layers_%d", stringified, layers), func(t *testing.T) {
 				raw := json.RawMessage(input)
 				for i := 0; i < layers; i++ {
@@ -56,7 +57,7 @@ func TestIntentArgumentsNormalizesKnownEnvelopes(t *testing.T) {
 
 func TestIntentArgumentsRejectsAmbiguousEnvelopes(t *testing.T) {
 	tooDeep := json.RawMessage(`{"summary":"fixture"}`)
-	for i := 0; i <= maxIntentArgumentWraps; i++ {
+	for i := 0; i <= toolargs.MaxArgumentWraps; i++ {
 		tooDeep = wrapIntentArguments(t, tooDeep, true)
 	}
 	for i, raw := range []string{
@@ -77,7 +78,7 @@ func TestIntentArgumentsRejectsAmbiguousEnvelopes(t *testing.T) {
 		`{"intents":"wrong type"}`,
 		`null`, `[]`, `"{\"summary\":\"fixture\"}"`, ``,
 		string(tooDeep),
-		`{"summary":"` + strings.Repeat("x", maxIntentArgumentBytes) + `"}`,
+		`{"summary":"` + strings.Repeat("x", toolargs.MaxArgumentBytes) + `"}`,
 	} {
 		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
 			if _, _, err := parseIntentArguments(json.RawMessage(raw)); err == nil {

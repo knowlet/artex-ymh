@@ -41,9 +41,14 @@ an empty summary. Valid JSON and a valid domain request are different checks.
 
 The handler now unwraps up to four exact, single-property `arguments`
 envelopes. A layer can contain an object or a JSON-encoded object string.
-Normalization is specific to `add_intent`; other tools may legitimately use an
-`arguments` property. Integer IDs are kept as their original JSON bytes and raw
-provider audit captures are unchanged.
+Normalization is specific to the unambiguous single-property `arguments`
+envelope. `add_intent`, `report_finding`, and `record_fact` handlers accept the
+same unwrapped shape. For OpenAI wire validation, tools with required schema
+fields (including `report_finding`) now unwrap that envelope before required-key
+checks and forward the unwrapped JSON to tool handlers. `add_intent` still keeps
+wrapped audit bytes on the wire when its schema has no required fields.
+Integer IDs are kept as their original JSON bytes and raw provider audit captures
+are unchanged.
 
 Ambiguous siblings, duplicate top-level keys at any unwrapped layer, incorrectly
 cased envelope keys, malformed/non-object payloads,

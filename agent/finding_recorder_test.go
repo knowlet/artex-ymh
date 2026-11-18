@@ -106,3 +106,40 @@ func TestReportFindingAtomicContract(t *testing.T) {
 		t.Fatal("failed tool triggered reporter")
 	}
 }
+
+func TestReportFindingWrappedCallsPersist(t *testing.T) {
+	d := testDB(t)
+	defer d.Close()
+	task, err := d.CreateTask("wrapped finding", "fixture", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	intent, err := d.Exploration(task.ExplorationID).AddIntent(map[string]any{"summary": "exploit fixture"}, 5, nil, "planner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := NewToolSet(d.Exploration(task.ExplorationID), "work#1")
+	ts.SetTaskID(task.ID)
+	ts.SetOwnerNode(intent)
+	raw := json.RawMessage(fmt.Sprintf(`{"vulnclass":"auth","severity":"medium","summary":"session replay works","evidence":"whoami","intent_id":%d}`, intent))
+	for i := 0; i < 3; i++ {
+		var value any = raw
+		if i > 0 {
+			value = string(raw)
+		}
+		wrapped, err := json.Marshal(map[string]any{"arguments": value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = wrapped
+	}
+	res, err := ts.addFinding().Call(t.Context(), raw, nil)
+	if err != nil || res.IsError || !strings.HasPrefix(res.Flatten(), "finding recorded: ") {
+		t.Fatalf("wrapped report_finding failed: %+v err=%v", res, err)
+	}
+	var count int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM findings WHERE task_id=$1`, task.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("finding count=%d err=%v", count, err)
+	}
+}

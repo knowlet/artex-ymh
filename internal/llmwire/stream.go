@@ -290,7 +290,7 @@ func (b *streamBody) finalize() error {
 			finish = "tool_calls"
 		}
 	}
-	if err := validateCalls(calls, b.rules, finish); err != nil {
+	if _, err := validateCalls(calls, b.rules, finish); err != nil {
 		return err
 	}
 	if tail != "" {

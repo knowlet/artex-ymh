@@ -9,6 +9,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent/chainskel"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/toolargs"
 	acperm "github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -1312,6 +1313,11 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			"items": obj(map[string]any{"traffic_id": str("traffic_search 返回的真实流量 ID"), "role": map[string]any{"type": "string", "enum": []string{"baseline", "proof", "verification", "supporting"}}, "note": str("该流量如何支持漏洞结论")}, "traffic_id")},
 		"reproduction": ReproductionToolSchema(),
 	}, "vulnclass", "severity", "summary"), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+		if normalized, err := toolargs.NormalizeArguments(in); err != nil {
+			return actool.Errorf("Invalid report_finding input: " + err.Error()), nil
+		} else {
+			in = normalized
+		}
 		var a struct {
 			VulnClass, Name, Severity, Summary, Evidence string
 			IntentID                                     json.RawMessage   `json:"intent_id"`
@@ -1549,6 +1555,11 @@ func (t *ToolSet) recordFact() actool.CoreTool {
 			"asset_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "相关资产 id（可选，0/1/多个）：该事实涉及哪些资产"},
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			if normalized, err := toolargs.NormalizeArguments(in); err != nil {
+				return actool.Errorf("Invalid record_fact input: " + err.Error()), nil
+			} else {
+				in = normalized
+			}
 			var a struct {
 				Facts    []factItem `json:"facts"`
 				factItem            // 单条模式 + 批量默认 intent_id
