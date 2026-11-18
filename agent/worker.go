@@ -366,6 +366,10 @@ func cmdOutDir(dir string) string { return filepath.Join(dir, "cmd-output") }
 // managedResourceRule 是受管资源纪律的代码固定段(不可被 DB 正文覆盖):
 // 不要用 Bash 自行起监听/守护化进程——这类命令会触发人工审批(拦截规则 V9),
 // 且守护化进程逃逸平台的进程组清理,任务结束后成为无人回收的孤儿。
+const workerPOCVerificationTail = `
+
+【漏洞验证意图】若 summary/exploration 要求验证漏洞、复现或获取 PoC，成功触发并拿到可复现的请求/响应或命令输出后必须用 report_finding 写回；证据不足时 record_fact(inferred) 说明缺口，不要用 record_fact 冒充已确认漏洞。`
+
 const managedResourceRule = `
 
 **受管资源纪律(不可编辑)**:不要用 Bash 自行起监听或守护化进程(setsid / nohup / disown / python -m http.server / php -S 等)——平台对这类命令一律转人工审批,且守护化进程会逃逸进程组清理、任务结束后成为孤儿。需要反弹监听用 reverse_listen,投递文件用 stage_share(受管暂存、硬 TTL 自动销毁),建隧道用 tunnel_deploy。`
@@ -385,7 +389,7 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string, intranet bool) stri
 	// Optional finding guidance is added for every role after tool resolution.
 	// antiTrapRules(批 5 B1 反 AI 蜜罐红线,复测批起全角色注入)对内外网 worker
 	// 一律追加,内网红线尾仍只在 intranet 时生效。
-	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + untrustedDataRule + evidenceFirstRule + toolchainRule + chainskel.WorkerMetaRules + antiTrapRules + managedResourceRule + tail
+	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + untrustedDataRule + evidenceFirstRule + toolchainRule + chainskel.WorkerMetaRules + antiTrapRules + managedResourceRule + workerPOCVerificationTail + tail
 }
 
 // renderIntentTask formats the claimed intent for the worker's launch USER message:

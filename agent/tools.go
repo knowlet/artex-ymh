@@ -25,6 +25,9 @@ func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64) []map[
 		var p map[string]any
 		_ = json.Unmarshal(n.Payload, &p)
 		m := map[string]any{"id": n.ID, "summary": p["summary"], "state": n.State}
+		if n.State == "blocked" && n.BlockedReason != "" {
+			m["blocked_reason"] = n.BlockedReason
+		}
 		if n.State == "open" && n.ModelRetryAt != nil {
 			m["model_retry"] = map[string]any{"attempt": n.ModelRetryCount, "retry_at": n.ModelRetryAt,
 				"status": "waiting", "guidance": "模型暂时不可用，已排程恢复原会话；此方向仍在进行，不要重复派发"}
@@ -610,6 +613,16 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 			if len(m) > 0 {
 				out["coverage"] = m
 			}
+		}
+	}
+	if plannerPOCFollowupEnabled() {
+		openRunning := append(append([]*db.Node{}, fr...), running...)
+		snap := buildPOCFollowupSnapshot(factNodes, vulnNodes, all, parentsOf, yieldsOf, factFrom, openRunning)
+		if len(snap.Candidates) > 0 {
+			out["poc_verification_candidates"] = snap.Candidates
+		}
+		if len(snap.BlockedRetries) > 0 {
+			out["blocked_poc_retries"] = snap.BlockedRetries
 		}
 	}
 	return out
