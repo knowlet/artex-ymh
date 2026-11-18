@@ -1,0 +1,44 @@
+name: dependency CVE audit
+
+on:
+  pull_request:
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'web/package.json'
+      - 'web/package-lock.json'
+      - '.github/workflows/dependency-cve.yml'
+      - '.github/dependabot.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'web/package.json'
+      - 'web/package-lock.json'
+      - '.github/workflows/dependency-cve.yml'
+  schedule:
+    - cron: '47 23 * * *' # 07:47 Asia/Taipei; advisories can change without a code change.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-cve-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  osv-scanner:
+    permissions:
+      contents: read
+      actions: read
+      security-events: write # Required by the official reusable workflow contract.
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@0e457b42d0120153c352875e9b758b1e5c58c7e5 # v2.7.1
+    with:
+      scan-args: |-
+        --lockfile=go.mod
+        --lockfile=web/package-lock.json
+      fail-on-vuln: true
+      upload-sarif: false # SARIF remains an Actions artifact; Code Scanning is optional.
+      ref: ${{ github.event.pull_request.head.sha || github.sha }}

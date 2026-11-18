@@ -83,7 +83,7 @@ status 回傳資料年齡、是否為未來日期、本機檔案完整性、來�
 
 search 預設每個集合最多 20 筆，上限 100，至少需要一個篩選條件。`--cve` 精確比對；vendor／product／query 對 KEV 採大小寫不敏感 AND 篩選，再以匹配的 CVE 連接模板索引。只傳完整 CVE 時，即使 KEV 未列入，也能回傳索引候選。分別查看 `kev_matches`、`template_matches` 與各自 total／truncated；查無 KEV 不能當成查無模板或沒有風險。輸出的 `target_vulnerability=unverified` 不會因情資命中而變成確認漏洞。
 
-新增兩個 ARTEX 技能：`projectdiscovery-recon` 使用受管 CLI 規劃／執行；`vulnerability-triage` 使用離線查詢與證據流程分流。沿用既有技能目錄名稱的可見性設定，**不新增預設 agent 綁定或 MCP 權限**。部署後須在原技能可見性設定中選用；對既有同名授權也應核對實際載入的內容。技能透過 `${SKILL_DIR}` 定位自己的 references，部署 binary／工具／資料包路徑則使用明確設定，不能從 worker cwd 或自訂 skill root 推算。
+五個 ARTEX 選用技能：`projectdiscovery-recon` 使用受管 CLI；`vulnerability-triage` 做離線情資分流；`one-day-validation` 規劃有對照與證據的 CVE 驗證；`dependency-cve-audit` 判讀 OSV 套件漏洞；`vulnerability-tooling-maintenance` 維護更新與 CI。沿用既有技能目錄名稱的可見性設定，**不新增預設 agent 綁定或 MCP 權限**。部署後須在原技能可見性設定中選用；對既有同名授權也應核對實際載入的內容。技能透過 `${SKILL_DIR}` 定位自己的 references，部署 binary／工具／資料包路徑則使用明確設定，不能從 worker cwd 或自訂 skill root 推算。
 
 Release ZIP 與兩份 Docker 建置流程會收錄資料包、技能、維護腳本、操作文件及授權通知。資料放在 `packaging/`，避開 Docker 的 `data/` 持久化掛載。Compose 原有 `./skills` 掛載會覆蓋 image 內技能，須同步更新該目錄。
 
@@ -103,7 +103,7 @@ python3 scripts/update_nuclei_index.py --check
 
 ### CISA KEV 快照
 
-`packaging/vulnerability-intel.json` 是 CISA KEV 的情資快照，保留來源 commit、catalog 日期、內容 hash 與 CC0 資訊。本批完整匯入 **1,756 筆**，catalog 為 `2026.10.23`、發布時間 `2026-10-23T19:30:18.9209Z`，固定來源 commit `b9c486ef8f3ba0709bb662ae843ffee96953c400`。它列出已被實際利用的 CVE，**不是全量 CVE 清單**，也不代表受測主機具備這些漏洞。
+`packaging/vulnerability-intel.json` 是 CISA KEV 的情資快照，保留來源 commit、catalog 日期、內容 hash 與 CC0 資訊。此資料包包含 **1,781 筆**，catalog 為 `2026.11.13`、發布時間 `2026-11-13T20:24:18.3008Z`，固定來源 commit `a795af4c4afc47df12906b4c04e656156cf06493`。它列出已被實際利用的 CVE，**不是全量 CVE 清單**，也不代表受測主機具備這些漏洞。
 
 ```sh
 # 明確執行才連網，解析官方 mirror commit 再更新。
@@ -120,6 +120,12 @@ python3 scripts/update_vulnerability_intel.py --input /tmp/known_exploited_vulne
 ```
 
 更新器限制下載大小、HTTPS 來源與逾時，拒絕重新導向，驗證筆數、唯一 CVE ID、必要欄位、日期及重複 JSON key，成功後才原子替換。本批快照由 GitHub 連接器讀取官方 Git blob 後匯入並執行同一驗證器；終端網路更新尚未在此環境實測。CVE 資料是供 Read／離線分析使用的情資，未自動匯入 ARTEX findings 或啟動掃描。
+
+### 相依套件 CVE 掃描
+
+`.github/workflows/dependency-cve.yml` 每日 07:47（Asia/Taipei），並在 Go／npm manifest、lockfile 或 workflow 變更時，呼叫固定 commit 的 Google OSV-Scanner reusable workflow v2.7.1。掃描 `go.mod` 與 `web/package-lock.json`，保留 `fail-on-vuln: true`；漏洞命中或沒有結果檔的掃描失敗都不能當成通過。完整報告與 SARIF 以 Actions artifact 保留 5 天，不上傳至 GitHub Code Scanning，也不發 PR 評論或自動修補。上游 workflow 與結果行為見 [官方固定版本](https://github.com/google/osv-scanner-action/blob/32d3cd482bdadfb38b186c0ad1b031902d55d932/.github/workflows/osv-scanner-reusable.yml)。
+
+OSV 查詢會連外取得 advisory，並將套件名稱／版本送至服務。命中後需另核對套件、版本、依賴路徑、修補狀態與程式可達性；掃描結果不是部署可利用性證明。`.github/dependabot.yml` 每日 08:10（Asia/Taipei）只檢查 OSV workflow 與 PR action 的 GitHub Actions SHA，不更新 Go／npm 套件。
 
 所有維護命令的提交後 stdout 回報失敗都會明確標示已寫入並退出 `3`；不能把這種狀態當作舊檔仍在。先檢查實際內容，再決定是否重試。各命令的查詢／差異／驗證失敗 exit code 見 `--help` 與錯誤訊息。
 
