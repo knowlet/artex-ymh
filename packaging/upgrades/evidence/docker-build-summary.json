@@ -1,0 +1,1 @@
+{"image":"artex-ymh:upgrade-verify","dockerfile":"Dockerfile.source","result":"success","go_embedded":"go1.27.4","node_build_arg":"22.23.4"}
