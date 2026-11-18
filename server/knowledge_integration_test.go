@@ -154,11 +154,14 @@ func TestAntiFoxKnowledgeVisibilityPG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	antifoxLib := skillprovider.BundledAntiFoxLibraryID()
 	originalEnabled := slices.Contains(grants, "antifox-sql-injection-testing")
-	if err := pg.ToggleSkillVisibility(worker.ID, "antifox-sql-injection-testing", false); err != nil {
+	if err := pg.ToggleSkillVisibilityInLibrary(worker.ID, "antifox-sql-injection-testing", false, antifoxLib); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = pg.ToggleSkillVisibility(worker.ID, "antifox-sql-injection-testing", originalEnabled) })
+	t.Cleanup(func() {
+		_ = pg.ToggleSkillVisibilityInLibrary(worker.ID, "antifox-sql-injection-testing", originalEnabled, antifoxLib)
+	})
 	reopened, err := db.Open(dsn)
 	if err != nil {
 		t.Fatal(err)

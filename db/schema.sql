@@ -911,15 +911,18 @@ CREATE TABLE IF NOT EXISTS agent_visibility (
 CREATE INDEX IF NOT EXISTS idx_vis_resource ON agent_visibility(resource_kind, resource_id);
 
 CREATE TABLE IF NOT EXISTS agent_skill_visibility (
-    agent_id   BIGINT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    skill_name TEXT   NOT NULL,
-    enabled    BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (agent_id, skill_name)
+    agent_id    BIGINT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    skill_name  TEXT   NOT NULL,
+    library_id  TEXT   NOT NULL DEFAULT '',
+    enabled     BOOLEAN NOT NULL DEFAULT true,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (agent_id, library_id, skill_name)
 );
 CREATE INDEX IF NOT EXISTS idx_askv_skill ON agent_skill_visibility(skill_name);
--- Empty scope preserves legacy skills. Provider imports require a fresh grant.
+-- Scoped grants: same skill name in another library_id never overwrites this row.
 ALTER TABLE agent_skill_visibility ADD COLUMN IF NOT EXISTS library_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_skill_visibility DROP CONSTRAINT IF EXISTS agent_skill_visibility_pkey;
+ALTER TABLE agent_skill_visibility ADD PRIMARY KEY (agent_id, library_id, skill_name);
 
 -- Skill 调用账本（见 db/skill_usage.go）。一次 Skill() 调用一行，只记维度不记正文。
 -- 刻意不设外键：任务/会话删除后统计仍要保留（与 llm_usage 同理），skill 本身也只是

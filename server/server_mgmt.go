@@ -1540,11 +1540,19 @@ func (s *Server) fsDeleteSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid skill name")
 		return
 	}
-	if err := pg.DeleteSkillVisibility(name); err != nil {
+	skillPath := filepath.Join(s.skillDir, name)
+	if err := os.RemoveAll(skillPath); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	if err := os.RemoveAll(filepath.Join(s.skillDir, name)); err != nil {
+	libraryID := skillprovider.ShippedSkillLibraryID(s.skillDir, name)
+	if libraryID == "" {
+		if id, err := skillprovider.LibraryIdentity(s.skillDir); err == nil {
+			libraryID = id
+		}
+	}
+	shipped := db.IsShippedBuiltinSkill(name)
+	if err := pg.DeleteSkillVisibilityInLibrary(name, libraryID, shipped); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}

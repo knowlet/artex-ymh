@@ -282,7 +282,10 @@ ON CONFLICT (name) DO NOTHING`,
 	// NOTE: the placeholder ScopeSentry data-source MCP (empty URL + empty X-API-Key,
 	// disabled) is seeded directly in schema.sql §F so a raw `psql < schema.sql` init
 	// also gets it. schema.sql is Exec'd on every startup, so it stays idempotent.
-	if err := d.seedBuiltinSkillVisibility(); err != nil {
+	if err := d.migrateAntiFoxSkillLibraryIDs(); err != nil {
+		return fmt.Errorf("migrate antifox skill visibility: %w", err)
+	}
+	if err := d.seedBuiltinSkillVisibility(config.SkillDir()); err != nil {
 		return fmt.Errorf("seed skill visibility: %w", err)
 	}
 	if err := d.seedDefaultInterceptRules(); err != nil {
@@ -384,16 +387,23 @@ var builtinSkillVisibility = map[string][]string{
 	"antifox-xxe-testing":                 {"planner", "worker", "pentest"},
 }
 
-// seedBuiltinSkillVisibility binds the shipped built-in skills to their default
-// agents. Insert-if-absent (ON CONFLICT DO NOTHING) so a user's later toggle-off is
-// never resurrected on restart — matches the browser-MCP / intercept-rule seed policy.
-func (d *DB) seedBuiltinSkillVisibility() error {
+// seedBuiltinSkillVisibility binds verified shipped skills to their default agents.
+// Insert-if-absent (ON CONFLICT DO NOTHING) so a user's later toggle-off is never
+// resurrected on restart. Unverified same-named directories require an explicit grant.
+func (d *DB) seedBuiltinSkillVisibility(skillRoot string) error {
 	for skillName, agentKeys := range builtinSkillVisibility {
+		libraryID := shippedSkillLibraryID(skillRoot, skillName)
+		if libraryID == "" && strings.HasPrefix(skillName, "antifox-") {
+			continue
+		}
+		if libraryID == "" && !builtinSkillDirPresent(skillRoot, skillName) {
+			continue
+		}
 		for _, key := range agentKeys {
 			if _, err := d.Exec(`
-INSERT INTO agent_skill_visibility(agent_id, skill_name, enabled)
-SELECT id, $2, true FROM agents WHERE key=$1
-ON CONFLICT (agent_id, skill_name) DO NOTHING`, key, skillName); err != nil {
+INSERT INTO agent_skill_visibility(agent_id, skill_name, library_id, enabled)
+SELECT id, $2, $3, true FROM agents WHERE key=$1
+ON CONFLICT (agent_id, library_id, skill_name) DO NOTHING`, key, skillName, libraryID); err != nil {
 				return fmt.Errorf("skill %s → agent %s: %w", skillName, key, err)
 			}
 		}
