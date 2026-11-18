@@ -1328,7 +1328,8 @@ export const api = {
   // 后端对 GitHub 的查询结果有 30 分钟缓存（未认证的 GitHub API 是 60 次/小时/IP，
   // 顶栏每次整页加载都会查一次，不缓存会很快耗光配额）。force=true 强制回源，
   // 留给用户显式点「检查更新」时用。
-  checkUpdate: (force = false) => get<UpdateCheck>(`/update/check${force ? "?force=1" : ""}`),
+  checkUpdate: (force = false, channel: UpdateCheck["channel"] = "stable") =>
+    get<UpdateCheck>(`/update/check?channel=${channel}${force ? "&force=1" : ""}`),
   // 202 即返回，实际下载在后台跑，进度走 /api/update/stream。
   applyUpdate: () => post<{ ok: boolean; target: string }>(`/update/apply`),
   rollbackUpdate: () => post<{ ok: boolean }>(`/update/rollback`),

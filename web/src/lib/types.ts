@@ -1585,7 +1585,14 @@ export interface FindingTrafficDetail {
 }
 
 /** GET /api/update/check —— 当前版本与 GitHub 最新正式版的比较结果。 */
+export type UpdateChannel = "stable" | "nightly" | "main";
+
 export interface UpdateCheck {
+  channel: UpdateChannel;
+  source_only?: boolean;
+  current_commit?: string;
+  target_commit?: string;
+  source_url?: string;
   /** 当前运行的版本；开发构建为 "dev" 或 git describe 的带后缀形式。 */
   current: string;
   /** 运行形态。docker 下换装只作用于容器可写层，重建容器会退回镜像版本。 */
@@ -1614,6 +1621,8 @@ export interface UpdateCheck {
     | "access_denied"
     | "github_error"
     | "invalid_release"
+    | "invalid_channel"
+    | "ref_unavailable"
     | "unknown";
   latest?: string;
   notes?: string;

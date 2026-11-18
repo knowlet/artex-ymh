@@ -9,6 +9,7 @@ on:
       - 'web/src/app/(main)/system/settings/_components/update-card.tsx'
       - 'web/src/lib/api.ts'
       - 'web/src/lib/types.ts'
+      - 'web/src/lib/update-channel*'
       - 'web/package*.json'
       - 'go.mod'
       - 'go.sum'
@@ -23,6 +24,7 @@ on:
       - 'web/src/app/(main)/system/settings/_components/update-card.tsx'
       - 'web/src/lib/api.ts'
       - 'web/src/lib/types.ts'
+      - 'web/src/lib/update-channel*'
       - 'web/package*.json'
       - 'go.mod'
       - 'go.sum'
@@ -46,6 +48,7 @@ jobs:
           cache: true
       - name: Go formatting, race regressions, vet and build
         run: |
+          gofmt -d selfupdate server/update*.go
           test -z "$(gofmt -l selfupdate server/update*.go)"
           go test -race ./selfupdate -count=1 -v
           go test -race ./server -run '^(TestReleaseCache|TestUpdate)' -count=1 -v
@@ -59,7 +62,8 @@ jobs:
       - name: Frontend checks and production build
         working-directory: web
         run: |
+          node --test src/lib/update-channel.test.mjs
           npm ci --ignore-scripts
-          npx biome check 'src/app/(main)/_components/update-badge.tsx' 'src/app/(main)/system/settings/_components/update-card.tsx' src/lib/types.ts
+          npx biome check --max-diagnostics=100 'src/app/(main)/_components/update-badge.tsx' 'src/app/(main)/system/settings/_components/update-card.tsx' src/lib/types.ts src/lib/update-channel.ts src/lib/update-channel.test.mjs
           npx tsc --noEmit
           npm run build:static

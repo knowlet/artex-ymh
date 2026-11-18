@@ -8,6 +8,8 @@ import (
 	"log"
 	"net/http"
 	"runtime"
+	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,7 +64,10 @@ type releaseCache struct {
 	err error
 	at  time.Time
 	// fetch 是取数函数，仅为测试留的注入点；为 nil 时走真正的 GitHub 查询。
-	fetch func(context.Context, *http.Client) (*selfupdate.Release, error)
+	fetch        func(context.Context, *http.Client) (*selfupdate.Release, error)
+	channelsMu   sync.Mutex // separate from stable fetch locking
+	channels     map[selfupdate.Channel]*releaseCache
+	fetchChannel func(context.Context, *http.Client, selfupdate.Channel) (*selfupdate.Release, error)
 }
 
 const (
@@ -108,6 +113,55 @@ func (c *releaseCache) get(ctx context.Context, client *http.Client, force bool)
 	}
 	c.rel, c.err, c.at = rel, err, time.Now()
 	return rel, err
+}
+
+// Each channel owns its cached result, error, TTL and in-flight request. A slow
+// nightly lookup must not return or overwrite stable/main metadata.
+func (c *releaseCache) getChannel(ctx context.Context, client *http.Client, force bool, channel selfupdate.Channel) (*selfupdate.Release, error) {
+	if channel == selfupdate.ChannelStable {
+		return c.get(ctx, client, force)
+	}
+	if channel != selfupdate.ChannelNightly && channel != selfupdate.ChannelMain {
+		return nil, errors.New("invalid update channel")
+	}
+	c.channelsMu.Lock()
+	if c.channels == nil {
+		c.channels = make(map[selfupdate.Channel]*releaseCache)
+	}
+	cache := c.channels[channel]
+	if cache == nil {
+		fetch := c.fetchChannel
+		if fetch == nil {
+			fetch = selfupdate.FetchChannel
+		}
+		cache = &releaseCache{fetch: func(ctx context.Context, client *http.Client) (*selfupdate.Release, error) {
+			return fetch(ctx, client, channel)
+		}}
+		c.channels[channel] = cache
+	}
+	c.channelsMu.Unlock()
+	return cache.get(ctx, client, force)
+}
+
+var readUpdateBuildInfo = debug.ReadBuildInfo
+
+func updateBuildRevision() (revision string, dirty bool) {
+	info, ok := readUpdateBuildInfo()
+	if !ok {
+		return "", false
+	}
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = strings.ToLower(setting.Value)
+		case "vcs.modified":
+			dirty = setting.Value != "false"
+		}
+	}
+	if !selfupdate.ValidCommitSHA(revision) {
+		revision = ""
+	}
+	return revision, dirty
 }
 
 // updateProgress 是推给前端的一条进度。
@@ -219,13 +273,19 @@ func (h *updateHub) subscribe() (<-chan updateProgress, func()) {
 	}
 }
 
-// updateCheck 查询 GitHub 上的最新正式版并与当前版本比较。
+// updateCheck compares the selected stable, nightly or main metadata.
 //
 // 前端也会直连 api.github.com（GitHub 的 CORS 是 *），但**以本接口为准**：
 // 下载是后端做的，只有后端能访问 GitHub 才谈得上更新。浏览器能连、服务器连不上
 // 的情况很常见（服务器在内网、或代理只配在浏览器上），那时点更新必然失败，
 // 不如在检查这一步就如实报错。
 func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
+	channel, err := selfupdate.ParseChannel(r.URL.Query().Get("channel"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	sourceOnly := channel != selfupdate.ChannelStable
 	current := BuildVersion
 	mode := "binary"
 	if selfupdate.InDocker() {
@@ -234,25 +294,27 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	boot := bootUpdateState()
 	out := map[string]any{
 		"current":         current,
+		"channel":         channel,
+		"source_only":     sourceOnly,
+		"has_update":      false,
+		"comparable":      false,
 		"mode":            mode,
 		"os":              runtime.GOOS,
 		"arch":            runtime.GOARCH,
 		"has_backup":      selfupdate.HasBackup(),
 		"repo":            selfupdate.Repo,
-		"install_enabled": selfupdate.InstallEnabled,
+		"install_enabled": selfupdate.InstallEnabled && !sourceOnly,
 		"install_reason":  selfupdate.InstallDisabledReason,
 		"boot_notice":     boot.Detail,
 		"rolled_back":     boot.RolledBack,
 		"release_status":  "error",
-		"has_update":      false,
-		"comparable":      false,
 		"asset_available": false,
 	}
 
 	// 顶栏提示走缓存（默认）；用户点"检查更新"时带 force=1 强制回源。
 	force := r.URL.Query().Get("force") != ""
 	client := selfupdate.NewClient(s.m.GlobalProxy())
-	rel, err := relCache.get(r.Context(), client, force)
+	rel, err := relCache.getChannel(r.Context(), client, force, channel)
 	if err != nil {
 		if selfupdate.CheckErrorCode(err) == "no_release" {
 			// 仓库可访问但没有正式版本，是正常查询结果，不是连接失败。
@@ -269,10 +331,32 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	out["release_status"] = "available"
 	latest := rel.TagName
 	out["latest"] = latest
+	out["release_status"] = "available"
 	out["notes"] = rel.Body
 	out["html_url"] = rel.HTMLURL
 	if !rel.PublishedAt.IsZero() {
 		out["published_at"] = rel.PublishedAt.Format(time.RFC3339)
+	}
+	if sourceOnly {
+		out["target_commit"] = rel.CommitSHA
+		out["source_url"] = "https://github.com/" + selfupdate.Repo + "/archive/" + rel.CommitSHA + ".zip"
+		if channel == selfupdate.ChannelNightly {
+			out["latest"] = latest + "@" + rel.CommitSHA[:12]
+		}
+		revision, dirty := updateBuildRevision()
+		out["current_commit"] = revision
+		comparable := revision != "" && !dirty
+		out["comparable"] = comparable
+		out["has_update"] = comparable && revision != rel.CommitSHA
+		if dirty {
+			out["reason"] = "当前构建包含未提交改动，请核对目标提交后从源码编译"
+		} else if revision == "" {
+			out["reason"] = "当前构建没有完整 Git 提交信息，无法判断是否已包含目标提交；可下载目标源码编译"
+		} else if revision != rel.CommitSHA {
+			out["message"] = "目标提交与当前构建不同，请核对变更后从源码编译；提交不同不代表目标一定较新"
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
 	}
 
 	asset := selfupdate.AssetName(latest, runtime.GOOS, runtime.GOARCH)
