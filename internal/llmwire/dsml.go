@@ -3,7 +3,7 @@ package llmwire
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
+	"sort"
 	"strings"
 )
 
@@ -42,13 +42,22 @@ func extractDSMLToolCalls(text string) (prefix, suffix string, calls []wireCall,
 	if strings.Contains(prefix, dsmlMarker) || strings.Contains(suffix, dsmlMarker) {
 		return "", "", nil, protocolError("unparsed_dsml_tool_call")
 	}
+	inner = strings.TrimSpace(inner)
+	if strings.HasPrefix(inner, ">") {
+		inner = strings.TrimSpace(inner[1:])
+	}
+	if strings.TrimSpace(inner) != "" && strings.Index(inner, dsmlInvokeOpen) > 0 {
+		if junk := strings.TrimSpace(inner[:strings.Index(inner, dsmlInvokeOpen)]); junk != "" {
+			return "", "", nil, protocolError("unparsed_dsml_tool_call")
+		}
+	}
 	parsed, err := parseDSMLInvokes(inner)
 	if err != nil {
 		return "", "", nil, err
 	}
 	calls = make([]wireCall, 0, len(parsed))
 	for i, inv := range parsed {
-		raw, err := json.Marshal(inv.args)
+		raw, err := marshalDSMLArgs(inv.args)
 		if err != nil {
 			return "", "", nil, protocolError("unparsed_dsml_tool_call")
 		}
@@ -63,7 +72,7 @@ func extractDSMLToolCalls(text string) (prefix, suffix string, calls []wireCall,
 
 type dsmlInvoke struct {
 	name string
-	args map[string]any
+	args map[string]json.RawMessage
 }
 
 func parseDSMLInvokes(inner string) ([]dsmlInvoke, error) {
@@ -76,6 +85,9 @@ func parseDSMLInvokes(inner string) ([]dsmlInvoke, error) {
 				return nil, protocolError("unparsed_dsml_tool_call")
 			}
 			break
+		}
+		if start > 0 && strings.TrimSpace(remaining[:start]) != "" {
+			return nil, protocolError("unparsed_dsml_tool_call")
 		}
 		remaining = remaining[start+len(dsmlInvokeOpen):]
 		closeIdx := strings.Index(remaining, ">")
@@ -106,8 +118,8 @@ func parseDSMLInvokes(inner string) ([]dsmlInvoke, error) {
 	return out, nil
 }
 
-func parseDSMLParameters(body string) (map[string]any, error) {
-	args := map[string]any{}
+func parseDSMLParameters(body string) (map[string]json.RawMessage, error) {
+	args := map[string]json.RawMessage{}
 	remaining := body
 	for {
 		start := strings.Index(remaining, dsmlParamOpen)
@@ -116,6 +128,9 @@ func parseDSMLParameters(body string) (map[string]any, error) {
 				return nil, protocolError("unparsed_dsml_tool_call")
 			}
 			break
+		}
+		if start > 0 && strings.TrimSpace(remaining[:start]) != "" {
+			return nil, protocolError("unparsed_dsml_tool_call")
 		}
 		remaining = remaining[start+len(dsmlParamOpen):]
 		closeIdx := strings.Index(remaining, ">")
@@ -132,11 +147,14 @@ func parseDSMLParameters(body string) (map[string]any, error) {
 		if valEnd < 0 {
 			return nil, protocolError("unparsed_dsml_tool_call")
 		}
-		rawValue := strings.TrimSpace(remaining[:valEnd])
+		rawValue := remaining[:valEnd]
 		remaining = remaining[valEnd+len(dsmlParamClose):]
 		asString := dsmlAttrDefault(tag, "string", "false") == "true"
 		value, err := coerceDSMLValue(rawValue, asString)
 		if err != nil {
+			return nil, protocolError("unparsed_dsml_tool_call")
+		}
+		if _, exists := args[name]; exists {
 			return nil, protocolError("unparsed_dsml_tool_call")
 		}
 		args[name] = value
@@ -166,29 +184,109 @@ func dsmlAttrDefault(tag, key, fallback string) string {
 	return v
 }
 
-func coerceDSMLValue(raw string, asString bool) (any, error) {
+func coerceDSMLValue(raw string, asString bool) (json.RawMessage, error) {
 	if asString {
-		return raw, nil
-	}
-	if raw == "true" || raw == "false" {
-		return raw == "true", nil
-	}
-	if raw == "null" {
-		return nil, nil
-	}
-	if i, err := strconv.ParseInt(raw, 10, 64); err == nil {
-		return i, nil
-	}
-	if f, err := strconv.ParseFloat(raw, 64); err == nil {
-		return f, nil
-	}
-	if strings.HasPrefix(strings.TrimSpace(raw), "{") || strings.HasPrefix(strings.TrimSpace(raw), "[") {
-		var v any
-		if json.Unmarshal([]byte(raw), &v) == nil {
-			return v, nil
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			return nil, err
 		}
+		return json.RawMessage(encoded), nil
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, fmt.Errorf("unparsed dsml value")
+	}
+	switch trimmed {
+	case "true":
+		return json.RawMessage("true"), nil
+	case "false":
+		return json.RawMessage("false"), nil
+	case "null":
+		return json.RawMessage("null"), nil
+	}
+	num := json.Number(trimmed)
+	if _, err := num.Int64(); err == nil {
+		return json.RawMessage(trimmed), nil
+	}
+	if _, err := num.Float64(); err == nil {
+		return json.RawMessage(trimmed), nil
+	}
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		if !json.Valid([]byte(trimmed)) {
+			return nil, fmt.Errorf("unparsed dsml value")
+		}
+		return json.RawMessage(trimmed), nil
 	}
 	return nil, fmt.Errorf("unparsed dsml value")
+}
+
+func marshalDSMLArgs(args map[string]json.RawMessage) ([]byte, error) {
+	if len(args) == 0 {
+		return []byte("{}"), nil
+	}
+	var buf strings.Builder
+	buf.WriteByte('{')
+	first := true
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+		key, err := json.Marshal(k)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(key)
+		buf.WriteByte(':')
+		buf.Write(args[k])
+	}
+	buf.WriteByte('}')
+	return []byte(buf.String()), nil
+}
+
+// shouldPromoteContentDSML limits DSML→tool promotion to provider tool turns, not
+// quoted envelopes embedded in ordinary assistant prose (finish=stop with non-DSML text).
+func shouldPromoteContentDSML(finish, outsideText string) bool {
+	if finish == "tool_calls" {
+		return true
+	}
+	if finish != "stop" && finish != "" {
+		return false
+	}
+	return strings.TrimSpace(outsideText) == ""
+}
+
+func promoteContentDSML(content string, finish string, existing []wireCall) (plain string, calls []wireCall, newFinish string, promoted bool, err error) {
+	if !strings.Contains(content, dsmlMarker) {
+		return content, existing, finish, false, nil
+	}
+	if !strings.Contains(content, dsmlToolCallsOpen) {
+		return "", nil, finish, false, protocolError("unparsed_dsml_tool_call")
+	}
+	prefix, suffix, parsed, err := extractDSMLToolCalls(content)
+	if err != nil {
+		return "", nil, finish, false, err
+	}
+	if len(parsed) == 0 {
+		return "", nil, finish, false, protocolError("unparsed_dsml_tool_call")
+	}
+	if len(existing) > 0 {
+		return "", nil, finish, false, protocolError("unparsed_dsml_tool_call")
+	}
+	outside := prefix + suffix
+	if !shouldPromoteContentDSML(finish, outside) {
+		return "", nil, finish, false, protocolError("unparsed_dsml_tool_call")
+	}
+	newFinish = finish
+	if finish == "stop" || finish == "" {
+		newFinish = "tool_calls"
+	}
+	return outside, parsed, newFinish, true, nil
 }
 
 func appendParsedDSMLCalls(existing, parsed []wireCall) []wireCall {

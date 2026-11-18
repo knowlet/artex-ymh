@@ -34,7 +34,10 @@ type streamBody struct {
 func newStreamBody(source io.ReadCloser, rules map[string]argumentRules) *streamBody {
 	scanner := bufio.NewScanner(source)
 	scanner.Buffer(make([]byte, 4096), maxBodyBytes)
-	return &streamBody{source: source, scanner: scanner, rules: rules, calls: map[int]*pendingCall{}}
+	body := &streamBody{source: source, scanner: scanner, rules: rules, calls: map[int]*pendingCall{}}
+	body.content = newDSMLContentGuard()
+	body.refusal = newRefusalContentGuard()
+	return body
 }
 func (b *streamBody) Close() error { return b.source.Close() }
 func (b *streamBody) Read(p []byte) (int, error) {
@@ -270,23 +273,19 @@ func (b *streamBody) finalize() error {
 	if err != nil {
 		return err
 	}
-	refusalTail, dsmlRefusal, err := b.refusal.finish()
+	refusalTail, _, err := b.refusal.finish()
 	if err != nil {
 		return err
 	}
-	dsmlParsed := dsmlContent
-	if len(dsmlRefusal) > 0 {
-		if len(dsmlParsed) > 0 {
-			return protocolError("unparsed_dsml_tool_call")
-		}
-		dsmlParsed = dsmlRefusal
-	}
-	hadStructured := len(calls) > 0
-	calls = appendParsedDSMLCalls(calls, dsmlParsed)
-	if len(dsmlParsed) > 0 && hadStructured {
+	if refusalTail != "" && strings.Contains(refusalTail, dsmlMarker) {
 		return protocolError("unparsed_dsml_tool_call")
 	}
-	if len(dsmlParsed) > 0 {
+	hadStructured := len(calls) > 0
+	if len(dsmlContent) > 0 {
+		if hadStructured || !shouldPromoteContentDSML(finish, tail) {
+			return protocolError("unparsed_dsml_tool_call")
+		}
+		calls = appendParsedDSMLCalls(calls, dsmlContent)
 		if finish == "stop" || finish == "" {
 			finish = "tool_calls"
 		}
