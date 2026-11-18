@@ -1162,24 +1162,21 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	if len(tags) > 0 {
 		payload["chain_tags"] = tags
 	}
-	id, err := t.ts.AddIntent(payload, priority, anchors, "planner")
-	if err != nil {
-		return 0, err
-	}
-	// upstream lineage: link each (validated) fact/finding parent → this intent, so
-	// "multiple facts combine into one new intent" is expressible.
-	for _, parent := range parents {
-		_ = t.ts.Link(parent, db.RelDerivedFrom, id)
-	}
 	// a top-level intent (no explicit parent) connects to the origin fact, so every
 	// intent still traces back to a fact node — at task start the only fact is the
 	// origin, and the first intents derive from it.
 	if len(parents) == 0 {
-		if origin, _ := t.ts.OriginFactID(); origin > 0 {
-			_ = t.ts.Link(origin, db.RelDerivedFrom, id)
+		origin, err := t.ts.OriginFactID()
+		if err != nil {
+			return 0, err
+		}
+		if origin > 0 {
+			parents = []int64{origin}
 		}
 	}
-	return id, nil
+	// Commit identity and lineage together: concurrent admissions cannot observe
+	// a node before its parent edges exist, and storage errors remain observable.
+	return t.ts.AddIntentWithParents(payload, priority, anchors, "planner", parents)
 }
 
 func (t *ToolSet) addIntent() actool.CoreTool {
@@ -1341,6 +1338,9 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		}
 		if err := json.Unmarshal(in, &a); err != nil {
 			return actool.Errorf(err.Error()), nil
+		}
+		if strings.TrimSpace(a.VulnClass) == "" || strings.TrimSpace(a.Severity) == "" || strings.TrimSpace(a.Summary) == "" {
+			return actool.Errorf("report_finding requires non-empty vulnclass, severity and summary; no finding recorded"), nil
 		}
 		if t.ts == nil {
 			return actool.Errorf("report_finding 需要任务上下文；平台对话请通过 add_task_hint 向对应任务交接漏洞，并在提示中携带已有的 traffic_refs，由任务 Agent 登记。已登记漏洞可用 bind_finding_traffic 补绑。"), nil

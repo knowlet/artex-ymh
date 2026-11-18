@@ -219,10 +219,7 @@ VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 
 // AddIntent is a convenience: an open intent.
 func (s *ExplorationStore) AddIntent(payload map[string]any, priority int, anchors []int64, origin string) (int64, error) {
-	if origin == "" {
-		origin = "planner"
-	}
-	return s.AddNode("intent", payload, priority, "open", origin, anchors)
+	return s.AddIntentWithParents(payload, priority, anchors, origin, nil)
 }
 
 // AddGoal writes a goal node (state open).

@@ -142,4 +142,12 @@ func TestReportFindingWrappedCallsPersist(t *testing.T) {
 	if err := d.QueryRow(`SELECT COUNT(*) FROM findings WHERE task_id=$1`, task.ID).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("finding count=%d err=%v", count, err)
 	}
+	var class, severity, summary, evidence string
+	if err := d.QueryRow(`SELECT vulnclass,severity,summary,evidence FROM findings WHERE task_id=$1`, task.ID).
+		Scan(&class, &severity, &summary, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if class != "auth" || severity != "medium" || summary != "session replay works" || evidence != "whoami" {
+		t.Fatalf("wrapped finding fields lost: class=%q severity=%q summary=%q evidence=%q", class, severity, summary, evidence)
+	}
 }

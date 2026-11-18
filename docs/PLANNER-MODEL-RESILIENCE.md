@@ -71,6 +71,21 @@ An intent is still not a valid fact/finding parent. The model must select a
 visible evidence node or use the existing top-level/root behavior. The server
 does not remap an invalid intent parent into fabricated evidence.
 
+Exact duplicate active intents now reuse the existing ID. Admission is serialized
+per exploration in PostgreSQL and commits the node, asset anchors and parent
+evidence edges together. Identity requires the same complete JSON payload,
+asset set, parent-evidence set and origin; priority changes do not reset work.
+Open (including cooling), running and paused work retain their state and retry
+budget. Different evidence, assets or exploration metadata remains independent.
+Terminal work is not reopened, and historical duplicates are not rewritten.
+This is exact admission idempotency, not semantic deduplication or a general
+exactly-once guarantee for tool execution.
+
+`report_finding` also rejects missing/blank `vulnclass`, `severity` or `summary`
+before persistence or notification. Malformed inputs must produce a tool error,
+not a successful empty finding. This does not establish that any observed access
+constitutes a vulnerability, and does not create findings from facts automatically.
+
 ## Bounds and retry classification
 
 | Setting | Default | What it bounds |
