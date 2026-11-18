@@ -104,3 +104,15 @@ func TestPOCFollowupOldTerminalEvidenceDoesNotRedispatch(t *testing.T) {
 		t.Fatalf("history window reset evidence coverage: %s", g)
 	}
 }
+
+func TestPOCFollowupCompletedFindingChildNotRedispatched(t *testing.T) {
+	t.Setenv("ARTEX_PLANNER_POC_FOLLOWUP", "1")
+	fact := &db.Node{ID: 10, Kind: db.KindFact, Payload: []byte(`{"summary":"authenticated session established","confidence":"observed"}`)}
+	enumeration := &db.Node{ID: 1, Kind: db.KindIntent, State: "done"}
+	child := &db.Node{ID: 2, Kind: db.KindIntent, State: "done"}
+	finding := &db.Node{ID: 20, Kind: db.KindFinding}
+	snap := buildPOCFollowupSnapshot([]*db.Node{fact}, []*db.Node{finding}, []*db.Node{enumeration, child}, map[int64][]int64{2: {10}}, map[int64][]int64{2: {20}}, map[int64]int64{10: 1}, nil)
+	if len(snap.Candidates) != 1 || snap.Candidates[0]["needs_followup"] != false {
+		t.Fatalf("completed finding child requested another verification: %+v", snap)
+	}
+}

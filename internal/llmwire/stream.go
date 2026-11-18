@@ -123,7 +123,7 @@ func (b *streamBody) frame(data string) error {
 		return err
 	}
 	if e := envelope["error"]; len(e) > 0 && string(e) != "null" {
-		return protocolError("upstream_stream_error")
+		return &ProtocolError{Code: "upstream_stream_error", transient: transientStreamError(e)}
 	}
 	var choices []object
 	if raw := envelope["choices"]; len(raw) > 0 && json.Unmarshal(raw, &choices) != nil {
@@ -254,7 +254,13 @@ func (b *streamBody) finalize() error {
 	// A clean socket EOF is not a completed model turn. In particular, never
 	// release even syntactically valid tool arguments without a terminal frame.
 	if !b.sawFinish {
-		return protocolError("missing_finish_reason")
+		_, contentCalls, contentErr := b.content.finish()
+		_, refusalCalls, refusalErr := b.refusal.finish()
+		// No tool frame can be released without a finish marker. A truncated
+		// tool turn stays a permanent protocol failure; a text-only premature
+		// EOF retains transport classification for the caller's safe retry gate.
+		return &ProtocolError{Code: "missing_finish_reason", transient: len(b.calls) == 0 &&
+			len(contentCalls) == 0 && len(refusalCalls) == 0 && contentErr == nil && refusalErr == nil}
 	}
 	indices := make([]int, 0, len(b.calls))
 	for index := range b.calls {
@@ -315,4 +321,24 @@ func (b *streamBody) finalize() error {
 	}
 	b.pending.WriteString("data: [DONE]\n\n")
 	return nil
+}
+
+func transientStreamError(raw json.RawMessage) bool {
+	var e struct{ Type, Code string }
+	if json.Unmarshal(raw, &e) != nil {
+		return false
+	}
+	for _, value := range []string{e.Type, e.Code} {
+		switch strings.ToLower(value) {
+		case "insufficient_quota", "quota_exceeded", "authentication_error", "invalid_api_key", "permission_error", "invalid_request_error", "context_length_exceeded":
+			return false
+		}
+	}
+	for _, value := range []string{e.Type, e.Code} {
+		switch strings.ToLower(value) {
+		case "overloaded_error", "server_error", "api_error", "internal_server_error", "rate_limit_error", "rate_limit_exceeded":
+			return true
+		}
+	}
+	return false
 }

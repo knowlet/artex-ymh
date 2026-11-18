@@ -20,9 +20,17 @@ const (
 	dsmlMarker   = "<｜DSML｜"
 )
 
-// ProtocolError is a non-retryable malformed model response. Do not include
-// prompt text, arguments, or response bodies here: errors enter ordinary logs.
-type ProtocolError struct{ Code string }
+// ProtocolError is a sanitized wire failure. Malformed responses are permanent;
+// only recognized transport failures carry Transient. Do not include prompt text,
+// arguments, or response bodies here: errors enter ordinary logs.
+type ProtocolError struct {
+	Code      string
+	transient bool
+}
+
+// Transient preserves only a sanitized transport classification, never the
+// upstream error body or credentials. Other protocol failures remain permanent.
+func (e *ProtocolError) Transient() bool { return e.transient }
 
 func (e *ProtocolError) Error() string { return "openai tool protocol: " + e.Code }
 func protocolError(code string) error  { return &ProtocolError{Code: code} }

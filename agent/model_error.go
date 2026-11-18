@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Autumn-27/artex/internal/llmwire"
 	"github.com/Autumn-27/norma/llm"
 )
 
@@ -34,6 +35,10 @@ func IsTransientModelError(err error) bool {
 	}
 	if IsQuotaExhaustedMessage(s) {
 		return false
+	}
+	var wireErr *llmwire.ProtocolError
+	if errors.As(err, &wireErr) {
+		return wireErr.Transient()
 	}
 	if match := modelHTTPStatus.FindStringSubmatch(s); len(match) == 2 {
 		code, _ := strconv.Atoi(match[1])
