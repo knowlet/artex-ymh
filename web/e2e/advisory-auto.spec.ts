@@ -92,6 +92,7 @@ test.describe("approval advisory auto (fake provider, disposable PG)", () => {
     await expect(advisory.getByText(/已停止自動重試/)).toBeVisible();
     await expect(advisory.getByText(/不會中斷進行中的模型請求/)).toBeVisible();
     await expect(advisory.getByRole("button", { name: /手動審查|手動重新審查/ })).toBeVisible();
+    await page.screenshot({ path: "/opt/cursor/artifacts/pr15-e2e-cancel-midflight.png", fullPage: true });
   });
 
   test("queued → running → succeeded without manual review click", async ({ page, context }) => {
@@ -118,5 +119,6 @@ test.describe("approval advisory auto (fake provider, disposable PG)", () => {
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
     expect(body.status).toBe("pending");
+    await page.screenshot({ path: "/opt/cursor/artifacts/pr15-e2e-auto-success.png", fullPage: true });
   });
 });

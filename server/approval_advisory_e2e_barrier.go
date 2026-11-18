@@ -13,8 +13,8 @@ import (
 
 // advisoryE2EBarrierFake blocks the model call until ReleaseInference or ctx cancel.
 type advisoryE2EBarrierFake struct {
-	text string
-	mu   sync.Mutex
+	text    string
+	mu      sync.Mutex
 	block   bool
 	entered chan struct{}
 	release chan struct{}

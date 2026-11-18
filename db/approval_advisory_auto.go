@@ -20,10 +20,10 @@ const (
 )
 
 const (
-	defaultAdvisoryGlobalSlots  = 8
-	defaultAdvisoryMaxRetries   = 3
-	defaultAdvisoryDailyBudget  = 200
-	advisoryAutoBackoffBase     = 30 * time.Second
+	defaultAdvisoryGlobalSlots    = 8
+	defaultAdvisoryMaxRetries     = 3
+	defaultAdvisoryDailyBudget    = 200
+	advisoryAutoBackoffBase       = 30 * time.Second
 	advisoryGlobalAdvisoryLockKey = int64(7337741025)
 )
 
