@@ -35,6 +35,9 @@ services:
       ARTEX_LLM_MODEL: ${ARTEX_LLM_MODEL:-}
       ARTEX_LLM_BASE_URL: ${ARTEX_LLM_BASE_URL:-}
       ARTEX_LLM_PROXY: ${ARTEX_LLM_PROXY:-}
+      ARTEX_LLM_HEADER_TIMEOUT: ${ARTEX_LLM_HEADER_TIMEOUT:-120}
+      ARTEX_LLM_IDLE_TIMEOUT: ${ARTEX_LLM_IDLE_TIMEOUT:-120}
+      ARTEX_LLM_CALL_TIMEOUT: ${ARTEX_LLM_CALL_TIMEOUT:-600}
     ports:
       # Host Nginx proxies to loopback; do not expose the HTTP backend publicly.
       # Set ARTEX_BIND_IP explicitly only for a reviewed private-network setup.

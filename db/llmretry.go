@@ -89,7 +89,7 @@ type LLMRetryPolicy struct {
 	// Breaker：轮询熔断。Attempts=连续几次瞬时失败触发熔断(默认 3，-1=瞬时失败不熔断，
 	// 硬失败如余额不足/密钥失效仍立即熔断)；IntervalMS=固定冷却时长(0=默认 1/5/30min 梯度)。
 	Breaker RetryRule `json:"breaker"`
-	// Intent：worker 以 model_error 收场后的整条意图重跑。默认 2 次、固定 3s。
+	// Intent：瞬时 model_error 后从持久化会话恢复。默认 2 次、1min/5min 冷却。
 	Intent RetryRule `json:"intent"`
 }
 

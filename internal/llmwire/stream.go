@@ -123,6 +123,12 @@ func (b *streamBody) frame(data string) error {
 		return err
 	}
 	if e := envelope["error"]; len(e) > 0 && string(e) != "null" {
+		if streamContextOverflow(e) {
+			return protocolError("context_window_exceeded")
+		}
+		if transientStreamError(e) {
+			return protocolTransientError("upstream_stream_error", ErrUpstreamStreamInterrupted)
+		}
 		return protocolError("upstream_stream_error")
 	}
 	var choices []object
@@ -254,6 +260,14 @@ func (b *streamBody) finalize() error {
 	// A clean socket EOF is not a completed model turn. In particular, never
 	// release even syntactically valid tool arguments without a terminal frame.
 	if !b.sawFinish {
+		_, contentCalls, contentErr := b.content.finish()
+		_, refusalCalls, refusalErr := b.refusal.finish()
+		// No tool frame can be released without a finish marker. A truncated
+		// tool turn stays a permanent protocol failure; a text-only premature
+		// EOF retains transport classification for the caller's safe retry gate.
+		if len(b.calls) == 0 && len(contentCalls) == 0 && len(refusalCalls) == 0 && contentErr == nil && refusalErr == nil {
+			return protocolTransientError("missing_finish_reason", ErrStreamEndedWithoutFinish)
+		}
 		return protocolError("missing_finish_reason")
 	}
 	indices := make([]int, 0, len(b.calls))
@@ -290,7 +304,7 @@ func (b *streamBody) finalize() error {
 			finish = "tool_calls"
 		}
 	}
-	if err := validateCalls(calls, b.rules, finish); err != nil {
+	if _, err := validateCalls(calls, b.rules, finish); err != nil {
 		return err
 	}
 	if tail != "" {
@@ -315,4 +329,38 @@ func (b *streamBody) finalize() error {
 	}
 	b.pending.WriteString("data: [DONE]\n\n")
 	return nil
+}
+
+func transientStreamError(raw json.RawMessage) bool {
+	var e struct{ Type, Code string }
+	if json.Unmarshal(raw, &e) != nil {
+		return false
+	}
+	for _, value := range []string{e.Type, e.Code} {
+		switch strings.ToLower(value) {
+		case "insufficient_quota", "quota_exceeded", "authentication_error", "invalid_api_key", "permission_error", "invalid_request_error", "context_length_exceeded":
+			return false
+		}
+	}
+	for _, value := range []string{e.Type, e.Code} {
+		switch strings.ToLower(value) {
+		case "overloaded_error", "server_error", "api_error", "internal_server_error", "rate_limit_error", "rate_limit_exceeded":
+			return true
+		}
+	}
+	return false
+}
+
+func streamContextOverflow(raw json.RawMessage) bool {
+	var e struct{ Type, Code string }
+	if json.Unmarshal(raw, &e) != nil {
+		return false
+	}
+	for _, v := range []string{e.Type, e.Code} {
+		switch strings.ToLower(v) {
+		case "contextwindowexceedederror", "context_window_exceeded", "context_length_exceeded":
+			return true
+		}
+	}
+	return false
 }

@@ -298,7 +298,7 @@ func (c Config) NewProvider() (llm.Provider, error) {
 	// 整体墙钟(ARTEX_LLM_CALL_TIMEOUT):单次调用的最上层保险,防连接半开挂死冻住
 	// worker/planner。包在这里(组装处),recorder/pool 都在它之外,归一化错误可被
 	// llm_usage 记录并触发 llmpool 故障转移。0 = 不限,原样返回。
-	return wrapCallTimeout(prov, c), nil
+	return wrapCallTimeout(modelErrorProvider{inner: prov}, c), nil
 }
 
 // IsQuotaExhaustedMessage deliberately recognizes only explicit balance,
@@ -417,6 +417,7 @@ func requestBodySnapshot(req *http.Request) string {
 
 func quotaAwareHTTPClient(proxy, sessionHeaderKey string) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = llmTransportTimeout("ARTEX_LLM_HEADER_TIMEOUT")
 	proxy = strings.TrimSpace(proxy)
 	if proxy == "" {
 		transport.Proxy = nil // 留空=直连,不回退 HTTP_PROXY/HTTPS_PROXY 环境变量
@@ -434,7 +435,8 @@ func quotaAwareHTTPClient(proxy, sessionHeaderKey string) (*http.Client, error) 
 		}
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
-	return &http.Client{Transport: quotaAwareTransport{base: transport, sessionHeaderKey: strings.TrimSpace(sessionHeaderKey)}, CheckRedirect: endpoint.CheckRedirect}, nil
+	bounded := idleTimeoutTransport{base: transport, timeout: llmTransportTimeout("ARTEX_LLM_IDLE_TIMEOUT")}
+	return &http.Client{Transport: quotaAwareTransport{base: bounded, sessionHeaderKey: strings.TrimSpace(sessionHeaderKey)}, CheckRedirect: endpoint.CheckRedirect}, nil
 }
 
 // logTestConnection prints the raw HTTP status code(s) and response body of a

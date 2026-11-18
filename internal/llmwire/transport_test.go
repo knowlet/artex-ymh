@@ -120,12 +120,27 @@ func TestDelayedAndFragmentedName(t *testing.T) {
 		})
 	}
 }
+func TestProtocolErrorTransientClassification(t *testing.T) {
+	transient := []string{"missing_finish_reason", "upstream_stream_error"}
+	for _, code := range transient {
+		if err := protocolTransientError(code, io.EOF); err.(*ProtocolError).Transient() != true {
+			t.Fatalf("%s must be transient", code)
+		}
+	}
+	nonTransient := []string{"invalid_tool_arguments", "unparsed_dsml_tool_call", "missing_required_tool_argument"}
+	for _, code := range nonTransient {
+		if err := protocolError(code); err.(*ProtocolError).Transient() {
+			t.Fatalf("%s must not be transient", code)
+		}
+	}
+}
+
 func TestStreamFailuresNeverReleaseToolCalls(t *testing.T) {
 	good := callsFrame(testCall(0, "a", "get_worker_trace", `{"intent_id":4}`))
 	cases := []struct{ name, input, code string }{
 		{"truncated JSON", callsFrame(testCall(0, "a", "get_worker_trace", `{"intent_id":`)) + terminal("tool_calls"), "invalid_tool_arguments"},
 		{"missing required", callsFrame(testCall(0, "a", "get_worker_trace", `{}`)) + terminal("tool_calls"), "missing_required_tool_argument"},
-		{"wrapped arguments", callsFrame(testCall(0, "a", "get_worker_trace", `{"arguments":{"intent_id":4}}`)) + terminal("tool_calls"), "missing_required_tool_argument"},
+		{"nested envelope", callsFrame(testCall(0, "a", "get_worker_trace", `{"arguments":"not-json"}`)) + terminal("tool_calls"), "missing_required_tool_argument"},
 		{"null arguments", callsFrame(testCall(0, "a", "get_worker_trace", `null`)) + terminal("tool_calls"), "invalid_tool_arguments"},
 		{"array arguments", callsFrame(testCall(0, "a", "get_worker_trace", `[]`)) + terminal("tool_calls"), "invalid_tool_arguments"},
 		{"missing arguments", callsFrame(testCall(0, "a", "get_worker_trace", ``)) + terminal("tool_calls"), "invalid_tool_arguments"},
@@ -249,7 +264,7 @@ func TestCompleteValidation(t *testing.T) {
 		{"DSML", complete(nil, `<｜DSML｜tool_calls <｜DSML｜invoke name="get_worker_trace">`, "stop"), "unparsed_dsml_tool_call"},
 		{"DSML refusal", completeMessage(nil, "", `<｜DSML｜tool_calls <｜DSML｜invoke name="get_worker_trace">`, "stop"), "unparsed_dsml_tool_call"},
 		{"broken arguments", complete([]wireCall{testCall(0, "a", "get_worker_trace", `{"intent_id":`)}, "", "tool_calls"), "invalid_tool_arguments"},
-		{"wrapped", complete([]wireCall{testCall(0, "a", "get_worker_trace", `{"arguments":{"intent_id":4}}`)}, "", "tool_calls"), "missing_required_tool_argument"},
+		{"wrapped unwrapped", complete([]wireCall{testCall(0, "a", "get_worker_trace", `{"arguments":{"intent_id":4}}`)}, "", "tool_calls"), ""},
 		{"legitimate arguments property", complete([]wireCall{testCall(0, "a", "literal", `{"arguments":{"intent_id":4}}`)}, "", "tool_calls"), ""},
 		{"length", complete([]wireCall{testCall(0, "a", "get_worker_trace", `{"intent_id":4}`)}, "", "length"), "incomplete_tool_turn"},
 		{"upstream error", []byte(`{"error":{"message":"preserve SDK error"}}`), ""},
@@ -259,7 +274,32 @@ func TestCompleteValidation(t *testing.T) {
 			out, err := normalizeComplete(tc.raw, testRules)
 			if tc.code != "" {
 				expectCode(t, err, tc.code)
-			} else if err != nil || !bytes.Equal(out, tc.raw) {
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "wrapped unwrapped" {
+				var env struct {
+					Choices []struct {
+						Message struct {
+							ToolCalls []struct {
+								Function struct {
+									Arguments string `json:"arguments"`
+								} `json:"function"`
+							} `json:"tool_calls"`
+						} `json:"message"`
+					} `json:"choices"`
+				}
+				if err := json.Unmarshal(out, &env); err != nil || len(env.Choices) == 0 || len(env.Choices[0].Message.ToolCalls) == 0 {
+					t.Fatalf("parse: %v", err)
+				}
+				if got := env.Choices[0].Message.ToolCalls[0].Function.Arguments; got != `{"intent_id":4}` {
+					t.Fatalf("arguments=%q", got)
+				}
+				return
+			}
+			if !bytes.Equal(out, tc.raw) {
 				t.Fatalf("response changed: %s %v", out, err)
 			}
 		})
@@ -439,6 +479,74 @@ func TestConcurrentResponsesHaveIndependentState(t *testing.T) {
 	}
 	wg.Wait()
 }
+func TestValidateCallsUnwrapsProviderEnvelopeForRequiredTools(t *testing.T) {
+	base := `{"vulnclass":"sqli","severity":"high","summary":"fixture","evidence":"poc"}`
+	wrapped := base
+	for range 2 {
+		var err error
+		wrapped, err = wrapFixtureArguments(wrapped, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	rules := map[string]argumentRules{
+		"report_finding": {Required: []string{"vulnclass", "severity", "summary"}, Properties: map[string]json.RawMessage{
+			"vulnclass": json.RawMessage(`{"type":"string"}`),
+			"severity":  json.RawMessage(`{"type":"string"}`),
+			"summary":   json.RawMessage(`{"type":"string"}`),
+		}},
+	}
+	raw := string(fixtureJSON(map[string]any{"choices": []any{map[string]any{
+		"message": map[string]any{
+			"tool_calls": []any{map[string]any{"index": 0, "id": "wrapped-finding", "type": "function", "function": map[string]any{
+				"name": "report_finding", "arguments": wrapped,
+			}}},
+		},
+		"finish_reason": "tool_calls",
+	}}}))
+	body := &completeBody{source: io.NopCloser(strings.NewReader(raw)), rules: rules}
+	defer body.Close()
+	out, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env struct {
+		Choices []struct {
+			Message struct {
+				ToolCalls []struct {
+					Function struct {
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(out, &env); err != nil || len(env.Choices) == 0 || len(env.Choices[0].Message.ToolCalls) == 0 {
+		t.Fatalf("response parse failed: %v", err)
+	}
+	got := env.Choices[0].Message.ToolCalls[0].Function.Arguments
+	if got != base {
+		t.Fatalf("arguments not unwrapped for tool handler: %q", got)
+	}
+}
+
+func wrapFixtureArguments(raw string, stringify bool) (string, error) {
+	var value any = json.RawMessage(raw)
+	if stringify {
+		value = raw
+	}
+	b, err := json.Marshal(map[string]any{"arguments": value})
+	return string(b), err
+}
+
+func fixtureJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
 func TestLimits(t *testing.T) {
 	_, err := normalizeStream(callsFrame(testCall(0, "a", "ping", strings.Repeat("x", maxBodyBytes))) + terminal("tool_calls"))
 	if err == nil {
@@ -461,4 +569,13 @@ func FuzzStreamBoundary(f *testing.F) {
 		}
 		_, _ = normalizeStream(s)
 	})
+}
+
+func TestDeclaredArgumentsPropertyIsNotEnvelope(t *testing.T) {
+	rules := map[string]argumentRules{"literal": {Required: []string{"query"}, Properties: map[string]json.RawMessage{"arguments": json.RawMessage(`{"type":"object"}`), "query": json.RawMessage(`{"type":"string"}`)}}}
+	body := newStreamBody(io.NopCloser(strings.NewReader(callsFrame(testCall(0, "a", "literal", `{"arguments":{"query":"fixture"}}`))+terminal("tool_calls"))), rules)
+	defer body.Close()
+	if _, err := io.ReadAll(body); err == nil {
+		t.Fatal("declared arguments property was unwrapped into missing required field")
+	}
 }

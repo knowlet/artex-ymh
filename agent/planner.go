@@ -346,7 +346,7 @@ func plannerSystem(goal, dataDir, workDir string) string {
 	// untrustedDataRule 与 L2 meta 铁律(chainskel.PlannerMetaRules)是静态固定文本
 	// (不含每轮变量),追加在代码固定尾,不破坏跨轮缓存。
 	// plannerHoneypotRules(批 6 L1 蜜罐处置纪律)同为代码固定尾,一律追加。
-	return body + artifactSpec(workDir) + untrustedDataRule + chainskel.PlannerMetaRules + plannerHoneypotRules + plannerAdaptiveGuidance
+	return body + artifactSpec(workDir) + untrustedDataRule + chainskel.PlannerMetaRules + plannerHoneypotRules + plannerAdaptiveGuidance + plannerPOCFollowupRules
 }
 
 // Plan runs one planning round. emit, if non-nil, receives the planner's execution
@@ -389,7 +389,8 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	// 关键态势（刚完成的意图 + 预取的完整图）改放【本轮 user 输入】(见下方 input)，system
 	// 只留静态规划正文。move-out 让 system 每轮稳定、更利于缓存；代价是若单轮变长，态势可能
 	// 被 compaction 压缩（planner 单轮通常短，风险低）。situational 会拼进下方 input。
-	situational := renderTriggers(ts, triggers) + renderGraphOverview(tsx.graphOverviewData())
+	overview := tsx.graphOverviewData()
+	situational := renderTriggers(ts, triggers) + renderGraphOverview(overview) + renderPOCFollowupGuidance(overview)
 	// 任务级 deadline / 终局模式(经 ctx 注入,见 taskclock.go)。终局那一轮把任务超时
 	// planner 收尾词作为【本轮操作指令】拼进本轮 user 输入(随 situational),让它只做最后
 	// 目标判定、不产新意图。

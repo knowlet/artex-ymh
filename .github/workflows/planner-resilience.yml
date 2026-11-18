@@ -1,0 +1,153 @@
+name: Planner and worker model resilience
+
+on:
+  pull_request:
+    paths:
+      - 'agent/**'
+      - 'db/**'
+      - 'server/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'scripts/diagnose_planner_resilience.sql'
+      - 'scripts/assert_go_test_results.py'
+      - '.github/workflows/planner-resilience.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - 'db/**'
+      - 'server/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'scripts/diagnose_planner_resilience.sql'
+      - 'scripts/assert_go_test_results.py'
+      - '.github/workflows/planner-resilience.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: planner-resilience-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
+        env:
+          POSTGRES_USER: artex_test
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: artex_resilience
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U artex_test -d artex_resilience"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Local fixtures only. No deployed hosts or model credentials are needed.
+      ARTEX_PG_DSN: postgres://artex_test:fixture-only@127.0.0.1:5432/artex_resilience?sslmode=disable
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Formatting
+        run: |
+          set -euo pipefail
+          formatted=$(gofmt -l agent/wire_transient_test.go server/background_shutdown_test.go agent/poc_retry_boundary_test.go agent/poc_followup*.go agent/finding_validation_test.go agent/intent_dedup_test.go agent/intent_arguments*.go agent/model_error*.go agent/transport_timeout*.go agent/worker_retry*.go agent/calltimeout*.go agent/provider.go agent/tools.go agent/worker.go agent/terminalreason.go db/intent_dedup*.go db/intent_model_retry*.go db/exploration.go db/llmretry.go server/planner_retry*.go server/worker_retry*.go server/task_llm_budget_test.go server/task_llm.go server/engine.go server/intent_watchdog.go)
+          test -z "$formatted"
+      - name: Real PostgreSQL, stream fixtures, and recovery races
+        run: |
+          set -euo pipefail
+          go test -race -count=1 -p=1 -timeout=8m -json ./db ./agent ./server \
+            -run '^(TestReview|TestWaitBackgroundWorkersWaitsForSideSnapshotFlush|TestOpenAIWireTransientFailures|TestPOCFollowup|TestReportFindingValidation|TestIntentDedup|TestAddIntentConcurrent|TestIntentArguments|TestAddIntentWrapped|TestReportFindingWrapped|TestPlannerWrappedIntent|TestOpenAIWireWrappedIntent|TestAccessVulnCandidateFact|TestIntentLooksLikePOC|TestRenderPOCFollowup|TestBuildPOCFollowup|TestGraphOverviewPOC|TestGraphOverviewBlockedPOC|TestTransientModelError|TestProviderContextOverflow|TestProviderStalledStream|TestLLMTransport|TestCallTimeout|TestPlannerTransientRetry|TestPlannerOutage|TestTaskLLMRetryShares|TestTaskLLMStreamRetriesLlmwire|TestIntentModelRetry|TestWorkerModelRetry|TestWorkerModelRecovery)' \
+            | tee "$RUNNER_TEMP/planner-resilience.jsonl"
+          python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-resilience.jsonl" \
+            github.com/Autumn-27/artex/agent \
+            TestReviewUnicodeArgumentAmbiguity \
+            TestCallTimeoutDeliveredStopRemainsSuccess \
+            TestCallTimeoutPreservesCommittedTerminalOutcome \
+            TestReviewGatewayTimeoutDiagnostic \
+            TestReviewToolStreamContextOverflow \
+            TestReviewInferredGapDoesNotDispatch \
+            TestReviewOrphanResultCannotProveRecovery \
+            TestReviewIntentAssetSetAndTerminalOutcome \
+            TestReviewPOCPromptBounded \
+            TestReviewFactDecodeFailureDoesNotWrite \
+            TestWorkerModelRetryRejectsMarkerOnlyCompaction \
+            TestIntentArgumentsNormalizesKnownEnvelopes \
+            TestAddIntentConcurrentDuplicates \
+            TestPOCFollowupTerminalEvidenceDoesNotRedispatch \
+            TestPOCFollowupOldTerminalEvidenceDoesNotRedispatch \
+            TestPOCFollowupCompletedFindingChildNotRedispatched \
+            TestReportFindingValidationRejectsMissingFieldsWithoutWrites \
+            TestIntentArgumentsRejectsAmbiguousEnvelopes \
+            TestIntentArgumentsRejectsBatchSharedFields \
+            TestOpenAIWireWrappedIntentArgumentsPreservedForTool \
+            TestAddIntentWrappedCallsPersist \
+            TestAddIntentWrappedCallsPreserveValidation \
+            TestPlannerWrappedIntentCommitsWithinRound \
+            TestReportFindingWrappedCallsPersist \
+            TestAccessVulnCandidateFactClassification \
+            TestBuildPOCFollowupSnapshotUnit \
+            TestBuildPOCFollowupSnapshotCompletedVerificationFinding \
+            TestBuildPOCFollowupSnapshotCompletedVerificationNoFinding \
+            TestGraphOverviewPOCFollowupIntegration \
+            TestGraphOverviewBlockedPOCRetryHints \
+            TestTransientModelErrorClassification \
+            TestOpenAIWireTransientFailuresPreserveClassification \
+            TestProviderContextOverflowAliasReachesCompactor \
+            TestProviderStalledStreamUsesIdleTimeout \
+            TestCallTimeoutCannotBecomeSilentSuccess \
+            TestLLMTransportTimeoutConfiguration \
+            TestLLMTransportResponseHeaderTimeout \
+            TestLLMTransportIdleResponse \
+            TestLLMTransportHealthyStreamAndSlowConsumer \
+            TestLLMTransportCallerCancellation \
+            TestWorkerModelRetryRequiresCompleteDurableTranscript \
+            TestWorkerModelRetryDoesNotTrustReusedHistoricalToolIDs \
+            TestWorkerModelRetryVisibleInPlannerOverview
+          python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-resilience.jsonl" \
+            github.com/Autumn-27/artex/db \
+            TestReviewRetryLockCancellationAndFreshClaim \
+            TestReviewArchiveSnapshotCancellation \
+            TestReviewQuotaTransitionLockCancellation \
+            TestIntentDedupConcurrentAdmission \
+            TestIntentDedupPreservesIdentityAndControl \
+            TestIntentDedupLineageFailureRollsBack \
+            TestIntentDedupAllowsIndependentGraphCommit \
+            TestIntentModelRetryPersistsCooldownAndBudget \
+            TestIntentModelRetryConcurrentScheduleAndClaim \
+            TestIntentModelRetryHonorsControlDeadlineAndDisable \
+            TestIntentModelRetryDelayBounds
+          python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-resilience.jsonl" \
+            github.com/Autumn-27/artex/server \
+            TestWaitBackgroundWorkersWaitsForSideSnapshotFlush \
+            TestPlannerTransientRetrySchedule \
+            TestPlannerOutageNotificationsRespectCooldown \
+            TestTaskLLMRetrySharesCallBudget \
+            TestTaskLLMStreamRetriesLlmwireTransientPreCommit \
+            TestWorkerModelRecoveryPauseAfterProgress \
+            TestWorkerModelRecoveryRejectsRolledBackRevision \
+            TestWorkerModelRecoveryResumesWithoutRepeatingCommittedTools \
+            TestWorkerModelRecoveryBudgetSurvivesEngineRestart \
+            TestWorkerModelRecoveryRejectsPermanentFailuresAndUnpersistedEffects
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: planner-resilience-test-results
+          path: ${{ runner.temp }}/planner-resilience.jsonl
+          if-no-files-found: error
+          retention-days: 7

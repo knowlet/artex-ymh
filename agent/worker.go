@@ -366,6 +366,10 @@ func cmdOutDir(dir string) string { return filepath.Join(dir, "cmd-output") }
 // managedResourceRule 是受管资源纪律的代码固定段(不可被 DB 正文覆盖):
 // 不要用 Bash 自行起监听/守护化进程——这类命令会触发人工审批(拦截规则 V9),
 // 且守护化进程逃逸平台的进程组清理,任务结束后成为无人回收的孤儿。
+const workerPOCVerificationTail = `
+
+【漏洞验证意图】若 summary/exploration 要求验证漏洞、复现或获取 PoC，成功触发并拿到可复现的请求/响应或命令输出后必须用 report_finding 写回；证据不足时 record_fact(inferred) 说明缺口，不要用 record_fact 冒充已确认漏洞。`
+
 const managedResourceRule = `
 
 **受管资源纪律(不可编辑)**:不要用 Bash 自行起监听或守护化进程(setsid / nohup / disown / python -m http.server / php -S 等)——平台对这类命令一律转人工审批,且守护化进程会逃逸进程组清理、任务结束后成为孤儿。需要反弹监听用 reverse_listen,投递文件用 stage_share(受管暂存、硬 TTL 自动销毁),建隧道用 tunnel_deploy。`
@@ -385,7 +389,7 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string, intranet bool) stri
 	// Optional finding guidance is added for every role after tool resolution.
 	// antiTrapRules(批 5 B1 反 AI 蜜罐红线,复测批起全角色注入)对内外网 worker
 	// 一律追加,内网红线尾仍只在 intranet 时生效。
-	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + untrustedDataRule + evidenceFirstRule + toolchainRule + chainskel.WorkerMetaRules + antiTrapRules + managedResourceRule + tail
+	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + untrustedDataRule + evidenceFirstRule + toolchainRule + chainskel.WorkerMetaRules + antiTrapRules + managedResourceRule + workerPOCVerificationTail + tail
 }
 
 // renderIntentTask formats the claimed intent for the worker's launch USER message:
@@ -604,12 +608,46 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// session exists the worker continues from where it left off instead of
 	// restarting from scratch.
 	alreadyRecorded := false
+	var verifiedRetry []transcript.Record
+	if intent.ModelRetryCount > 0 && strings.HasPrefix(intent.ModelRetryRevision, db.ConsumedModelRetryRevisionPrefix) {
+		if err := w.CheckModelRetryTranscript(ts.ID(), intent.ID, nil); err != nil {
+			return harness.ReasonModelError, tsx.Writes(), err
+		}
+	} else if intent.ModelRetryCount > 0 {
+		var err error
+		verifiedRetry, err = w.VerifiedModelRetryTranscriptSince(ts.ID(), intent.ID, WorkerRetryCheckpoint{}, nil)
+		if err != nil {
+			return harness.ReasonModelError, tsx.Writes(), err
+		}
+		if intent.ModelRetryRevision == "" || WorkerRetryRevision(verifiedRetry) != intent.ModelRetryRevision {
+			return harness.ReasonModelError, tsx.Writes(), fmt.Errorf("worker retry transcript revision changed or unavailable; manual inspection required")
+		}
+	}
+
 	if w.tx != nil {
-		_ = s.Resume(opts.SessionID)
+		if err := s.Resume(opts.SessionID); err != nil {
+			return harness.ReasonModelError, tsx.Writes(), fmt.Errorf("resume worker transcript: %w", err)
+		}
+		if verifiedRetry != nil {
+			messages, usage := transcript.Messages(verifiedRetry)
+			expected, _ := json.Marshal(messages)
+			actual, _ := json.Marshal(s.Messages())
+			if string(expected) != string(actual) || usage != s.Usage() {
+				return harness.ReasonModelError, tsx.Writes(), fmt.Errorf("worker retry resume differs from verified transcript; manual inspection required")
+			}
+			ok, err := ts.ConsumeIntentModelRetryRevision(ctx, intent.ID, intent.ModelRetryRevision)
+			if err != nil {
+				return harness.ReasonModelError, tsx.Writes(), fmt.Errorf("consume worker recovery revision: %w", err)
+			}
+			if !ok {
+				return harness.ReasonModelError, tsx.Writes(), fmt.Errorf("worker recovery revision or state changed before resume")
+			}
+
+		}
 		alreadyRecorded = requestID != "" && hasWorkerChatMessage(s.Messages(), requestID)
 		if len(s.Messages()) > 0 && message == "" {
 			seedUnlockFromHistory(s.Messages(), def.UnlockSkill)
-			input = "继续执行。"
+			input = "继续执行。请先核对已有工具结果和已写回的事实，从中断处继续，不要重复已完成的动作。"
 		} else if len(s.Messages()) > 0 {
 			seedUnlockFromHistory(s.Messages(), def.UnlockSkill)
 		}

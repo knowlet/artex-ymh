@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/Autumn-27/artex/agent/chainskel"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/toolargs"
 	acperm "github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -24,6 +26,13 @@ func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64) []map[
 		var p map[string]any
 		_ = json.Unmarshal(n.Payload, &p)
 		m := map[string]any{"id": n.ID, "summary": p["summary"], "state": n.State}
+		if n.State == "blocked" && n.BlockedReason != "" {
+			m["blocked_reason"] = n.BlockedReason
+		}
+		if n.State == "open" && n.ModelRetryAt != nil {
+			m["model_retry"] = map[string]any{"attempt": n.ModelRetryCount, "retry_at": n.ModelRetryAt,
+				"status": "waiting", "guidance": "模型暂时不可用，已排程恢复原会话；此方向仍在进行，不要重复派发"}
+		}
 		if exploration := compactIntentExploration(n.Payload); exploration != nil {
 			m["exploration"] = exploration
 		}
@@ -607,6 +616,34 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 			}
 		}
 	}
+	if plannerPOCFollowupEnabled() {
+		ids := make([]int64, 0, len(factNodes))
+		for _, n := range factNodes {
+			ids = append(ids, n.ID)
+		}
+		followed, err := t.ts.FollowedFactIDs(ids)
+		if err != nil {
+			// Coverage is a retry boundary: storage failure cannot authorize new work.
+			out["poc_followup_unavailable"] = true
+			return out
+		}
+		openRunning := append(append([]*db.Node{}, fr...), running...)
+		snap := buildPOCFollowupSnapshot(factNodes, vulnNodes, all, parentsOf, yieldsOf, factFrom, openRunning)
+		for _, candidate := range snap.Candidates {
+			if id, ok := candidate["fact_id"].(int64); ok && followed[id] {
+				candidate["needs_followup"] = false
+				candidate["covered_by"] = "existing_intent_with_parent"
+				delete(candidate, "planner_action")
+			}
+		}
+		boundPOCFollowupSnapshot(&snap, out)
+		if len(snap.Candidates) > 0 {
+			out["poc_verification_candidates"] = snap.Candidates
+		}
+		if len(snap.BlockedRetries) > 0 {
+			out["blocked_poc_retries"] = snap.BlockedRetries
+		}
+	}
 	return out
 }
 
@@ -1091,27 +1128,31 @@ type intentItem struct {
 // 节点（不能挂在别的意图/目标/提示上）。顶层全新方向留空 parent_ids，兜底连 origin fact。
 // 这样"每个意图都连到 fact 节点、且是发现驱动而非凭空规划"从创建路径上被强制。
 func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
+	out, err := t.admitOneIntent(it)
+	return out.ID, err
+}
+func (t *ToolSet) admitOneIntent(it intentItem) (db.IntentAdmission, error) {
 	if strings.TrimSpace(it.Summary) == "" {
-		return 0, fmt.Errorf("summary 不能为空")
+		return db.IntentAdmission{}, fmt.Errorf("summary 不能为空")
 	}
 	// chain_tags(L3 反问骨架路由标签):取值 ∈ chainskel.Categories,至多 2 个。
 	tags := chainskel.NormalizeChainTags(it.ChainTags)
 	if err := chainskel.ValidateChainTags(tags); err != nil {
-		return 0, err
+		return db.IntentAdmission{}, err
 	}
 	exploration, err := t.prepareIntentExploration(it.Exploration)
 	if err != nil {
-		return 0, err
+		return db.IntentAdmission{}, err
 	}
 	// 先校验锚点（建节点前，避免坏锚点留下孤儿意图）。
 	parents := pidList(it.ParentIDs)
 	for _, pidv := range parents {
 		n, err := t.ts.GetNodeWithSources(pidv)
 		if err != nil || n == nil {
-			return 0, fmt.Errorf("parent_id %d 不存在于本任务或直接关联任务：parent_ids 必须是已存在的【事实(fact)/发现(finding)】节点 id；顶层全新方向请留空 parent_ids", pidv)
+			return db.IntentAdmission{}, fmt.Errorf("parent_id %d 不存在于本任务或直接关联任务：parent_ids 必须是已存在的【事实(fact)/发现(finding)】节点 id；顶层全新方向请留空 parent_ids", pidv)
 		}
 		if n.Kind != db.KindFact && n.Kind != db.KindFinding {
-			return 0, fmt.Errorf("parent_id %d 是 %q 节点，不能作为意图锚点：意图只能锚在已确认的【事实(fact)/发现(finding)】上，不能挂在意图/目标/提示上；顶层全新方向请留空 parent_ids", pidv, n.Kind)
+			return db.IntentAdmission{}, fmt.Errorf("parent_id %d 是 %q 节点，不能作为意图锚点：意图只能锚在已确认的【事实(fact)/发现(finding)】上，不能挂在意图/目标/提示上；顶层全新方向请留空 parent_ids", pidv, n.Kind)
 		}
 	}
 	priority := it.Priority
@@ -1119,11 +1160,13 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 		priority = 5
 	}
 	anchors := pidList(it.AssetIDs)
+	slices.Sort(anchors)
+	anchors = slices.Compact(anchors)
 	// 资产拦截：意图绑定的资产若命中系统资产拦截规则，则禁止下发该意图。
 	if t.as != nil && len(anchors) > 0 {
 		hits, err := t.as.CheckAssetsIntercept(t.taskID, anchors)
 		if err != nil {
-			return 0, fmt.Errorf("资产拦截校验失败：%w", err)
+			return db.IntentAdmission{}, fmt.Errorf("资产拦截校验失败：%w", err)
 		}
 		if len(hits) > 0 {
 			var b strings.Builder
@@ -1131,7 +1174,7 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 			for _, h := range hits {
 				fmt.Fprintf(&b, "\n - %s", h.Describe())
 			}
-			return 0, fmt.Errorf("%s", b.String())
+			return db.IntentAdmission{}, fmt.Errorf("%s", b.String())
 		}
 	}
 	payload := map[string]any{"summary": it.Summary}
@@ -1144,30 +1187,27 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	if len(tags) > 0 {
 		payload["chain_tags"] = tags
 	}
-	id, err := t.ts.AddIntent(payload, priority, anchors, "planner")
-	if err != nil {
-		return 0, err
-	}
-	// upstream lineage: link each (validated) fact/finding parent → this intent, so
-	// "multiple facts combine into one new intent" is expressible.
-	for _, parent := range parents {
-		_ = t.ts.Link(parent, db.RelDerivedFrom, id)
-	}
 	// a top-level intent (no explicit parent) connects to the origin fact, so every
 	// intent still traces back to a fact node — at task start the only fact is the
 	// origin, and the first intents derive from it.
 	if len(parents) == 0 {
-		if origin, _ := t.ts.OriginFactID(); origin > 0 {
-			_ = t.ts.Link(origin, db.RelDerivedFrom, id)
+		origin, err := t.ts.OriginFactID()
+		if err != nil {
+			return db.IntentAdmission{}, err
+		}
+		if origin > 0 {
+			parents = []int64{origin}
 		}
 	}
-	return id, nil
+	// Commit identity and lineage together: concurrent admissions cannot observe
+	// a node before its parent edges exist, and storage errors remain observable.
+	return t.ts.AdmitIntentWithParents(payload, priority, anchors, "planner", parents)
 }
 
 func (t *ToolSet) addIntent() actool.CoreTool {
 	return t.writeExpTool("add_intent", "生成【探索方向】写入 frontier，并连入探索链路。意图是开放的探索方向，不是固定类型——用 summary 一句话自由描述要探索/验证/利用什么。\n"+
 		"信息不足时可建立获取新证据的探索意图；可选 exploration 记录待回答的问题、方法、可区分假设的观察与停止条件，不把假设当事实。"+
-		"★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors）。单条则省略 intents 直接给顶层 summary。",
+		"★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors）。单条则省略 intents 直接给顶层 summary。参数直接传对象，不加 arguments 包装；批量时 asset_ids/parent_ids 等放在各个 intents 元素内，不作为顶层共享默认值。",
 		obj(map[string]any{
 			"intents":     map[string]any{"type": "array", "description": "【优先用这个】要新增的探索方向数组，按顺序处理。每个元素字段同下方顶层字段（summary/asset_ids/parent_ids/priority/chain_tags/exploration）。返回 ids 与本数组等长、同序。", "items": map[string]any{"type": "object"}},
 			"exploration": intentExplorationSchema(),
@@ -1178,30 +1218,24 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 			"chain_tags":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "攻击面链标签（可选，1-2 个，取值仅限 web/ad/app/priv/pwn/recon/rev/pivot/meta）：按该方向的主要攻击面打标，引擎据此给执行 worker 注入对应场景的反问决策骨架（场景→判据→转向）。拿不准按关键词选（sql/注入→web、域/kerberos→ad、提权→priv、隧道/代理/横向→pivot、逆向/脱壳→rev、堆/栈/ctf→pwn、侦察/指纹→recon、apk/frida/小程序→app）；实在拿不准留空，引擎按 summary 关键词自动匹配。"},
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
-			var a struct {
-				Intents    []intentItem `json:"intents"`
-				intentItem              // 单条模式：顶层 summary/asset_ids/parent_ids/priority
-			}
-			if err := json.Unmarshal(in, &a); err != nil {
+			items, batch, err := parseIntentArguments(in)
+			if err != nil {
 				return actool.Errorf("Invalid add_intent input: " + err.Error()), nil
-			}
-			batch := len(a.Intents) > 0
-			items := a.Intents
-			if !batch {
-				items = []intentItem{a.intentItem}
 			}
 
 			ids := make([]int64, len(items))
 			errs := map[string]string{}
 			createdAny := false
+			outcomes := make([]db.IntentAdmission, len(items))
 			for i, it := range items {
-				id, err := t.addOneIntent(it)
+				outcome, err := t.admitOneIntent(it)
 				if err != nil {
 					errs[strconv.Itoa(i)] = err.Error()
 					continue
 				}
-				ids[i] = id
-				createdAny = true
+				ids[i] = outcome.ID
+				outcomes[i] = outcome
+				createdAny = createdAny || !outcome.Reused
 			}
 
 			// 人经主 agent 直投意图 → 若任务已 done（无 open 目标的 goalless 分支），把它
@@ -1216,9 +1250,12 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 				if e, bad := errs["0"]; bad {
 					return actool.Errorf(e), nil
 				}
-				return actool.Text(fmt.Sprintf("intent created: %d", ids[0])), nil
+				if outcomes[0].Reused {
+					return actool.Text(fmt.Sprintf("intent reused: %d (state=%s); automatic reopening is disabled; use existing manual rerun controls after inspection", ids[0], outcomes[0].State)), nil
+				}
+				return actool.Text(fmt.Sprintf("intent created: %d (state=%s)", ids[0], outcomes[0].State)), nil
 			}
-			out := map[string]any{"ids": ids}
+			out := map[string]any{"ids": ids, "outcomes": outcomes}
 			if len(errs) > 0 {
 				out["errors"] = errs
 			}
@@ -1316,6 +1353,11 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			"items": obj(map[string]any{"traffic_id": str("traffic_search 返回的真实流量 ID"), "role": map[string]any{"type": "string", "enum": []string{"baseline", "proof", "verification", "supporting"}}, "note": str("该流量如何支持漏洞结论")}, "traffic_id")},
 		"reproduction": ReproductionToolSchema(),
 	}, "vulnclass", "severity", "summary"), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+		if normalized, err := toolargs.NormalizeArguments(in); err != nil {
+			return actool.Errorf("Invalid report_finding input: " + err.Error()), nil
+		} else {
+			in = normalized
+		}
 		var a struct {
 			VulnClass, Name, Severity, Summary, Evidence string
 			IntentID                                     json.RawMessage   `json:"intent_id"`
@@ -1326,6 +1368,9 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		}
 		if err := json.Unmarshal(in, &a); err != nil {
 			return actool.Errorf(err.Error()), nil
+		}
+		if strings.TrimSpace(a.VulnClass) == "" || strings.TrimSpace(a.Severity) == "" || strings.TrimSpace(a.Summary) == "" {
+			return actool.Errorf("report_finding requires non-empty vulnclass, severity and summary; no finding recorded"), nil
 		}
 		if t.ts == nil {
 			return actool.Errorf("report_finding 需要任务上下文；平台对话请通过 add_task_hint 向对应任务交接漏洞，并在提示中携带已有的 traffic_refs，由任务 Agent 登记。已登记漏洞可用 bind_finding_traffic 补绑。"), nil
@@ -1553,11 +1598,18 @@ func (t *ToolSet) recordFact() actool.CoreTool {
 			"asset_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "相关资产 id（可选，0/1/多个）：该事实涉及哪些资产"},
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			if normalized, err := toolargs.NormalizeArguments(in); err != nil {
+				return actool.Errorf("Invalid record_fact input: " + err.Error()), nil
+			} else {
+				in = normalized
+			}
 			var a struct {
 				Facts    []factItem `json:"facts"`
 				factItem            // 单条模式 + 批量默认 intent_id
 			}
-			_ = json.Unmarshal(in, &a)
+			if err := json.Unmarshal(in, &a); err != nil {
+				return actool.Errorf("Invalid record_fact input: " + err.Error()), nil
+			}
 			batch := len(a.Facts) > 0
 			items := a.Facts
 			if !batch {

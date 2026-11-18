@@ -6,11 +6,21 @@ package llmwire
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/Autumn-27/artex/internal/toolargs"
 )
+
+// ErrUpstreamStreamInterrupted marks an upstream SSE error frame before the turn
+// completed. It is attached to ProtocolError for transient retry classification.
+var ErrUpstreamStreamInterrupted = errors.New("upstream stream interrupted")
+
+// ErrStreamEndedWithoutFinish marks a clean socket close without finish_reason.
+var ErrStreamEndedWithoutFinish = errors.New("stream ended without finish_reason")
 
 const (
 	maxBodyBytes = 16 << 20
@@ -18,12 +28,35 @@ const (
 	dsmlMarker   = "<｜DSML｜"
 )
 
-// ProtocolError is a non-retryable malformed model response. Do not include
-// prompt text, arguments, or response bodies here: errors enter ordinary logs.
-type ProtocolError struct{ Code string }
+// ProtocolError is a malformed or incomplete model response at the wire boundary.
+// Do not include prompt text, arguments, or response bodies here: errors enter
+// ordinary logs. Some codes wrap ErrUpstreamStreamInterrupted or io.EOF so
+// transient retry classifiers can recognize transport failures without treating
+// malformed tool output as recoverable.
+type ProtocolError struct {
+	Code  string
+	Cause error
+}
 
 func (e *ProtocolError) Error() string { return "openai tool protocol: " + e.Code }
-func protocolError(code string) error  { return &ProtocolError{Code: code} }
+func (e *ProtocolError) Unwrap() error { return e.Cause }
+
+// Transient reports whether the failure is an upstream transport dropout that can
+// recover on an unchanged replay. Malformed tool turns stay non-transient.
+func (e *ProtocolError) Transient() bool {
+	switch e.Code {
+	case "upstream_stream_error", "missing_finish_reason":
+		return errors.Is(e.Cause, ErrUpstreamStreamInterrupted) || errors.Is(e.Cause, ErrStreamEndedWithoutFinish) || errors.Is(e.Cause, io.EOF) || errors.Is(e.Cause, io.ErrUnexpectedEOF)
+	default:
+		return false
+	}
+}
+
+func protocolError(code string) error { return &ProtocolError{Code: code} }
+
+func protocolTransientError(code string, cause error) error {
+	return &ProtocolError{Code: code, Cause: cause}
+}
 
 type toolSpec struct {
 	Type     string `json:"type"`
@@ -105,54 +138,83 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-func validateCalls(calls []wireCall, rules map[string]argumentRules, finish string) error {
+func validateArgumentObject(args map[string]json.RawMessage, rule argumentRules) error {
+	for _, key := range rule.Required {
+		value, ok := args[key]
+		if !ok {
+			return protocolError("missing_required_tool_argument")
+		}
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) && forbidsNull(rule.Properties[key]) {
+			return protocolError("null_required_tool_argument")
+		}
+	}
+	return nil
+}
+
+func validateCalls(calls []wireCall, rules map[string]argumentRules, finish string) (bool, error) {
 	if len(calls) == 0 {
 		if finish == "tool_calls" {
-			return protocolError("missing_tool_calls")
+			return false, protocolError("missing_tool_calls")
 		}
-		return nil
+		return false, nil
 	}
 	if len(calls) > maxToolCalls {
-		return protocolError("too_many_tool_calls")
+		return false, protocolError("too_many_tool_calls")
 	}
 	if finish != "tool_calls" && finish != "stop" {
-		return protocolError("incomplete_tool_turn")
+		return false, protocolError("incomplete_tool_turn")
 	}
 	seen := make(map[string]bool, len(calls))
-	for _, call := range calls {
+	rewrote := false
+	for i := range calls {
+		call := &calls[i]
 		if call.ID == "" || len(call.ID) > 512 || seen[call.ID] {
-			return protocolError("invalid_tool_id")
+			return false, protocolError("invalid_tool_id")
 		}
 		seen[call.ID] = true
 		if call.Type != "function" {
-			return protocolError("unsupported_tool_type")
+			return false, protocolError("unsupported_tool_type")
 		}
 		rule, known := rules[call.Function.Name]
 		if !known {
-			return protocolError("undeclared_tool")
+			return false, protocolError("undeclared_tool")
 		}
 		raw := strings.TrimSpace(call.Function.Arguments)
-		// Empty is a legacy zero-argument call, never a substitute for broken JSON.
 		if raw == "" && len(rule.Required) == 0 {
 			raw = "{}"
 		}
 		var args map[string]json.RawMessage
 		if !strings.HasPrefix(raw, "{") || json.Unmarshal([]byte(raw), &args) != nil || args == nil {
-			return protocolError("invalid_tool_arguments")
+			return false, protocolError("invalid_tool_arguments")
 		}
-		for _, key := range rule.Required {
-			value, ok := args[key]
-			if !ok {
-				return protocolError("missing_required_tool_argument")
+		if err := validateArgumentObject(args, rule); err != nil {
+			if _, declared := rule.Properties["arguments"]; declared {
+				return false, err
 			}
-			// JSON Schema required means present, not non-null. Reject null
-			// only when the property's explicit type excludes it; preserve
-			// nullable unions and leave untyped/composed schemas to the tool.
-			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) && forbidsNull(rule.Properties[key]) {
-				return protocolError("null_required_tool_argument")
+			inner, normErr := toolargs.NormalizeArguments(json.RawMessage(raw))
+			if normErr != nil {
+				return false, err
 			}
+			args = nil
+			if json.Unmarshal(inner, &args) != nil || args == nil {
+				return false, err
+			}
+			if err := validateArgumentObject(args, rule); err != nil {
+				return false, err
+			}
+			call.Function.Arguments = string(bytes.TrimSpace(inner))
+			rewrote = true
 		}
 	}
+	return rewrote, nil
+}
+
+func marshalCallsIntoMessage(msg object, calls []wireCall) error {
+	callsRaw, err := json.Marshal(calls)
+	if err != nil {
+		return protocolError("invalid_response_json")
+	}
+	msg["tool_calls"] = callsRaw
 	return nil
 }
 
@@ -269,8 +331,25 @@ func normalizeComplete(raw []byte, rules map[string]argumentRules) ([]byte, erro
 			choices[i] = choiceRaw
 			modified = true
 		}
-		if err := validateCalls(calls, rules, newFinish); err != nil {
+		rewrote, err := validateCalls(calls, rules, newFinish)
+		if err != nil {
 			return nil, err
+		}
+		if rewrote {
+			if err := marshalCallsIntoMessage(msg, calls); err != nil {
+				return nil, err
+			}
+			msgRaw, err := json.Marshal(msg)
+			if err != nil {
+				return nil, protocolError("invalid_response_json")
+			}
+			choice["message"] = msgRaw
+			choiceRaw, err := json.Marshal(choice)
+			if err != nil {
+				return nil, protocolError("invalid_response_json")
+			}
+			choices[i] = choiceRaw
+			modified = true
 		}
 	}
 	if !modified {

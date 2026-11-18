@@ -25,11 +25,10 @@ func workerFeedbackStore(t *testing.T) (*DB, *ExplorationStore) {
 
 func feedbackIntent(t *testing.T, store *ExplorationStore, state string) int64 {
 	t.Helper()
-	id, err := store.AddIntent(map[string]any{"summary": "fixture observation"}, 5, nil, "planner")
+	// These are distinct historical executions; admission idempotency is tested
+	// separately and must not collapse the feedback pagination fixture.
+	id, err := store.AddNode(KindIntent, map[string]any{"summary": "fixture observation"}, 5, state, "fixture", nil)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetIntentState(id, state); err != nil {
 		t.Fatal(err)
 	}
 	return id

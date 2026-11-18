@@ -13,6 +13,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/llmwire"
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
 )
@@ -458,6 +459,40 @@ func TestTaskLLMRuntimeErrorSkipsWorkerReplay(t *testing.T) {
 // A transient pre-commit stream failure (200-then-drop / overloaded / 5xx) is
 // retried on the SAME provider, without switching profiles, and succeeds once the
 // blip clears — instead of surfacing as a model_error.
+func TestTaskLLMStreamRetriesLlmwireTransientPreCommit(t *testing.T) {
+	defer withZeroRetryBackoff()()
+	provider := &flakyThenOKProvider{
+		failCount: 1,
+		failErr:   protocolTransientError("missing_finish_reason", llmwire.ErrStreamEndedWithoutFinish),
+		okEvents:  []llm.StreamEvent{{Type: llm.SEMessageStart}, {Type: llm.SETextDelta, Text: "ok"}},
+	}
+	hooks := taskLLMStreamHooks{
+		current: func() (taskLLMSelection, error) {
+			return taskLLMSelection{profileID: 11, provider: provider}, nil
+		},
+		exhaust: func(taskLLMSelection, error) (db.TaskLLMTransition, error) {
+			return db.TaskLLMTransition{}, nil
+		},
+	}
+	events, err := collectTaskLLMStream(streamTaskLLM(context.Background(), "7", llm.CompletionRequest{}, hooks))
+	if err != nil {
+		t.Fatalf("llmwire transient protocol failure should retry to success, got %v", err)
+	}
+	if provider.calls != 2 {
+		t.Fatalf("provider calls=%d, want 2", provider.calls)
+	}
+	if len(events) == 0 || events[len(events)-1].Text != "ok" {
+		t.Fatalf("recovered stream missing output: %+v", events)
+	}
+	if !isRetryableStreamError(protocolTransientError("upstream_stream_error", llmwire.ErrUpstreamStreamInterrupted)) {
+		t.Fatal("sanitized upstream_stream_error must stay retryable")
+	}
+}
+
+func protocolTransientError(code string, cause error) error {
+	return &llmwire.ProtocolError{Code: code, Cause: cause}
+}
+
 func TestTaskLLMStreamRetriesTransientPreCommitOnSameProvider(t *testing.T) {
 	defer withZeroRetryBackoff()()
 	provider := &flakyThenOKProvider{

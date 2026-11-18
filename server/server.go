@@ -131,6 +131,7 @@ type Server struct {
 	// channel coalesces enqueue bursts; the database remains the source of truth.
 	archiveWake chan struct{}
 	archiveWG   sync.WaitGroup
+	advisoryWG  sync.WaitGroup // approval-advisory auto worker + in-flight reviews
 	side        *sideQuestionState
 }
 

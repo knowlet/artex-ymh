@@ -160,7 +160,7 @@ func (s *Server) archiveTask(job *pgdb.TaskArchive) (runErr error) {
 		return err
 	}
 	_ = s.m.pg.UpdateTaskArchiveProgress(job.ID, "snapshot_database", 20)
-	snapshot, snapshotErr := s.m.pg.SnapshotTaskArchiveWithLLMRecords(job.TaskID, streamFile)
+	snapshot, snapshotErr := s.m.pg.SnapshotTaskArchiveWithLLMRecordsContext(s.ctx, job.TaskID, streamFile)
 	var syncErr error
 	if snapshotErr == nil {
 		syncErr = streamFile.Sync()

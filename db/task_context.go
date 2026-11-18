@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -258,7 +259,10 @@ ORDER BY task_id, id`, ids)
 // statement gives hydration one matching snapshot instead of a transient mix of
 // an old task cursor and a newly replaced chain (or vice versa).
 func (d *DB) taskLLMContext(taskID int64) (*int64, *int64, int64, []TaskLLMProfile, error) {
-	rows, err := d.Query(`
+	return d.taskLLMContextContext(context.Background(), taskID)
+}
+func (d *DB) taskLLMContextContext(ctx context.Context, taskID int64) (*int64, *int64, int64, []TaskLLMProfile, error) {
+	rows, err := d.QueryContext(ctx, `
 SELECT t.llm_profile_id, t.active_llm_profile_id, t.llm_chain_revision,
        p.profile_id, p.position, p.status, COALESCE(p.last_error,''), p.exhausted_at
 FROM tasks t
@@ -456,18 +460,21 @@ WHERE id=$1`, taskID, active); err != nil {
 // in-flight error from an older profile records that entry as exhausted but does
 // not advance past the profile another call already selected.
 func (d *DB) MarkTaskLLMProfileQuotaExhausted(taskID, profileID int64, reason string) (TaskLLMTransition, error) {
-	return d.markTaskLLMProfileQuotaExhausted(taskID, profileID, 0, false, reason)
+	return d.markTaskLLMProfileQuotaExhausted(context.Background(), taskID, profileID, 0, false, reason)
 }
 
 // MarkTaskLLMProfileQuotaExhaustedAtRevision applies a provider failure only
 // when it belongs to the chain snapshot used to start that call.
 func (d *DB) MarkTaskLLMProfileQuotaExhaustedAtRevision(taskID, profileID, revision int64, reason string) (TaskLLMTransition, error) {
-	return d.markTaskLLMProfileQuotaExhausted(taskID, profileID, revision, true, reason)
+	return d.markTaskLLMProfileQuotaExhausted(context.Background(), taskID, profileID, revision, true, reason)
 }
 
-func (d *DB) markTaskLLMProfileQuotaExhausted(taskID, profileID, revision int64, checkRevision bool, reason string) (TaskLLMTransition, error) {
+func (d *DB) MarkTaskLLMProfileQuotaExhaustedContext(ctx context.Context, taskID, profileID, revision int64, reason string) (TaskLLMTransition, error) {
+	return d.markTaskLLMProfileQuotaExhausted(ctx, taskID, profileID, revision, true, reason)
+}
+func (d *DB) markTaskLLMProfileQuotaExhausted(ctx context.Context, taskID, profileID, revision int64, checkRevision bool, reason string) (TaskLLMTransition, error) {
 	var out TaskLLMTransition
-	tx, err := d.Begin()
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return out, err
 	}
@@ -476,7 +483,7 @@ func (d *DB) markTaskLLMProfileQuotaExhausted(taskID, profileID, revision int64,
 		active          sql.NullInt64
 		currentRevision int64
 	)
-	if err := tx.QueryRow(`SELECT active_llm_profile_id, llm_chain_revision FROM tasks WHERE id=$1 FOR UPDATE`, taskID).Scan(&active, &currentRevision); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT active_llm_profile_id, llm_chain_revision FROM tasks WHERE id=$1 FOR UPDATE`, taskID).Scan(&active, &currentRevision); err != nil {
 		return out, err
 	}
 	out.PreviousProfileID = profileID
@@ -488,7 +495,7 @@ func (d *DB) markTaskLLMProfileQuotaExhausted(taskID, profileID, revision int64,
 		position    int
 		entryStatus string
 	)
-	if err := tx.QueryRow(`SELECT position, status FROM task_llm_profiles WHERE task_id=$1 AND profile_id=$2`, taskID, profileID).
+	if err := tx.QueryRowContext(ctx, `SELECT position, status FROM task_llm_profiles WHERE task_id=$1 AND profile_id=$2`, taskID, profileID).
 		Scan(&position, &entryStatus); err != nil {
 		if err == sql.ErrNoRows {
 			// The chain was edited while this request was in flight. Its provider
@@ -506,7 +513,7 @@ func (d *DB) markTaskLLMProfileQuotaExhausted(taskID, profileID, revision int64,
 	}
 	reason = truncateUTF8(strings.TrimSpace(reason), 1000)
 	if entryStatus != "quota_exhausted" {
-		if _, err := tx.Exec(`UPDATE task_llm_profiles
+		if _, err := tx.ExecContext(ctx, `UPDATE task_llm_profiles
 SET status='quota_exhausted', last_error=$3, exhausted_at=now()
 WHERE task_id=$1 AND profile_id=$2`, taskID, profileID, reason); err != nil {
 			return out, err
@@ -518,14 +525,14 @@ WHERE task_id=$1 AND profile_id=$2`, taskID, profileID, reason); err != nil {
 		return out, tx.Commit()
 	}
 	var next int64
-	err = tx.QueryRow(`SELECT profile_id FROM task_llm_profiles
+	err = tx.QueryRowContext(ctx, `SELECT profile_id FROM task_llm_profiles
 WHERE task_id=$1 AND position>$2 AND status='ready'
 ORDER BY position LIMIT 1`, taskID, position).Scan(&next)
 	switch err {
 	case nil:
 		out.Advanced = true
 		out.NextProfileID = &next
-		if _, err := tx.Exec(`UPDATE tasks
+		if _, err := tx.ExecContext(ctx, `UPDATE tasks
 				SET active_llm_profile_id=$2, llm_profile_id=$2, llm_chain_revision=llm_chain_revision+1
 				WHERE id=$1`, taskID, next); err != nil {
 			return out, err
@@ -533,7 +540,7 @@ ORDER BY position LIMIT 1`, taskID, position).Scan(&next)
 	case sql.ErrNoRows:
 		out.Advanced = true
 		out.ChainExhausted = true
-		if _, err := tx.Exec(`UPDATE tasks
+		if _, err := tx.ExecContext(ctx, `UPDATE tasks
 				SET active_llm_profile_id=NULL, llm_profile_id=NULL, llm_chain_revision=llm_chain_revision+1
 				WHERE id=$1`, taskID); err != nil {
 			return out, err
@@ -575,4 +582,21 @@ WHERE exploration_id=$1 AND kind='intent' AND state='blocked' AND blocked_reason
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// TaskLLMSelectionContext reads only the registry and profile chain needed by routing.
+func (d *DB) TaskLLMSelectionContext(ctx context.Context, id int64) (*Task, error) {
+	t, err := scanTask(d.QueryRowContext(ctx, `SELECT `+taskCols+` FROM tasks WHERE id=$1 AND deleted_at IS NULL`, id))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	legacy, active, revision, chain, err := d.taskLLMContextContext(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	applyTaskLLMContext(t, legacy, active, revision, chain)
+	return t, nil
 }
