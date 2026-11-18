@@ -10,6 +10,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/norma/transcript"
 )
 
 // The SDK can execute a streaming tool before committing that turn to the
@@ -43,15 +44,19 @@ func (t *workerRetryTrace) record(a db.Activity) {
 }
 
 func (t *workerRetryTrace) check(worker *agent.Worker, explorationID, intentID int64) error {
+	_, err := t.verifiedRecords(worker, explorationID, intentID)
+	return err
+}
+func (t *workerRetryTrace) verifiedRecords(worker *agent.Worker, explorationID, intentID int64) ([]transcript.Record, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if len(t.pending) > 0 {
-		return fmt.Errorf("worker model recovery has unfinished tool executions")
+		return nil, fmt.Errorf("worker model recovery has unfinished tool executions")
 	}
 	if t.checkpointErr != nil {
-		return t.checkpointErr
+		return nil, t.checkpointErr
 	}
-	return worker.CheckModelRetryTranscriptSince(explorationID, intentID, t.checkpoint, t.completed)
+	return worker.VerifiedModelRetryTranscriptSince(explorationID, intentID, t.checkpoint, t.completed)
 }
 
 // deferWorkerModelRetry returns true once a recoverable intent is parked. No
@@ -61,13 +66,7 @@ func (e *Engine) deferWorkerModelRetry(ctx context.Context, t *Task, name string
 	retries, interval := e.modelErrorRetryPolicy()
 	stop := "disabled"
 	if retries > 0 {
-		records, verifyErr := worker.VerifiedModelRetryTranscriptSince(t.Store.ID(), intent.ID, trace.checkpoint, trace.completed)
-		if trace.checkpointErr != nil {
-			verifyErr = trace.checkpointErr
-		}
-		if len(trace.pending) > 0 {
-			verifyErr = fmt.Errorf("unfinished tool executions")
-		}
+		records, verifyErr := trace.verifiedRecords(worker, t.Store.ID(), intent.ID)
 		if err := verifyErr; err != nil {
 			stop = "transcript_unavailable"
 			log.Printf("[worker %s] task %s intent #%d recovery refused: %v", name, t.ID, intent.ID, err)

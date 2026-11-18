@@ -1251,7 +1251,7 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 					return actool.Errorf(e), nil
 				}
 				if outcomes[0].Reused {
-					return actool.Text(fmt.Sprintf("intent reused: %d (state=%s); explicit human reruns use reopen_intent", ids[0], outcomes[0].State)), nil
+					return actool.Text(fmt.Sprintf("intent reused: %d (state=%s); automatic reopening is disabled; use existing manual rerun controls after inspection", ids[0], outcomes[0].State)), nil
 				}
 				return actool.Text(fmt.Sprintf("intent created: %d (state=%s)", ids[0], outcomes[0].State)), nil
 			}
