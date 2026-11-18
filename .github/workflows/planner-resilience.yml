@@ -70,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           go test -race -count=1 -p=1 -timeout=8m -json ./db ./agent ./server \
-            -run '^(TestWaitBackgroundWorkersWaitsForSideSnapshotFlush|TestPOCFollowup|TestReportFindingValidation|TestIntentDedup|TestAddIntentConcurrent|TestIntentArguments|TestAddIntentWrapped|TestReportFindingWrapped|TestPlannerWrappedIntent|TestOpenAIWireWrappedIntent|TestAccessVulnCandidateFact|TestIntentLooksLikePOC|TestRenderPOCFollowup|TestBuildPOCFollowup|TestGraphOverviewPOC|TestGraphOverviewBlockedPOC|TestTransientModelError|TestProviderContextOverflow|TestProviderStalledStream|TestLLMTransport|TestCallTimeout|TestPlannerTransientRetry|TestPlannerOutage|TestTaskLLMRetryShares|TestIntentModelRetry|TestWorkerModelRetry|TestWorkerModelRecovery)' \
+            -run '^(TestWaitBackgroundWorkersWaitsForSideSnapshotFlush|TestPOCFollowup|TestReportFindingValidation|TestIntentDedup|TestAddIntentConcurrent|TestIntentArguments|TestAddIntentWrapped|TestReportFindingWrapped|TestPlannerWrappedIntent|TestOpenAIWireWrappedIntent|TestAccessVulnCandidateFact|TestIntentLooksLikePOC|TestRenderPOCFollowup|TestBuildPOCFollowup|TestGraphOverviewPOC|TestGraphOverviewBlockedPOC|TestTransientModelError|TestProviderContextOverflow|TestProviderStalledStream|TestLLMTransport|TestCallTimeout|TestPlannerTransientRetry|TestPlannerOutage|TestTaskLLMRetryShares|TestTaskLLMStreamRetriesLlmwire|TestIntentModelRetry|TestWorkerModelRetry|TestWorkerModelRecovery)' \
             | tee "$RUNNER_TEMP/planner-resilience.jsonl"
           python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-resilience.jsonl" \
             github.com/Autumn-27/artex/agent \
@@ -88,6 +88,8 @@ jobs:
             TestReportFindingWrappedCallsPersist \
             TestAccessVulnCandidateFactClassification \
             TestBuildPOCFollowupSnapshotUnit \
+            TestBuildPOCFollowupSnapshotCompletedVerificationFinding \
+            TestBuildPOCFollowupSnapshotCompletedVerificationNoFinding \
             TestGraphOverviewPOCFollowupIntegration \
             TestGraphOverviewBlockedPOCRetryHints \
             TestTransientModelErrorClassification \
@@ -118,6 +120,7 @@ jobs:
             TestPlannerTransientRetrySchedule \
             TestPlannerOutageNotificationsRespectCooldown \
             TestTaskLLMRetrySharesCallBudget \
+            TestTaskLLMStreamRetriesLlmwireTransientPreCommit \
             TestWorkerModelRecoveryResumesWithoutRepeatingCommittedTools \
             TestWorkerModelRecoveryBudgetSurvivesEngineRestart \
             TestWorkerModelRecoveryRejectsPermanentFailuresAndUnpersistedEffects

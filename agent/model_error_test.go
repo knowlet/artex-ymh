@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Autumn-27/artex/internal/llmwire"
 	"github.com/Autumn-27/norma/compaction"
 	"github.com/Autumn-27/norma/llm"
 )
@@ -39,6 +40,10 @@ func TestTransientModelErrorClassification(t *testing.T) {
 		{errors.New("litellm.ContextWindowExceededError"), false},
 		{errors.New("status 502: Context_Window_Exceeded"), false},
 		{errors.New("context length exceeded"), false},
+		{&llmwire.ProtocolError{Code: "missing_finish_reason", Cause: llmwire.ErrStreamEndedWithoutFinish}, true},
+		{&llmwire.ProtocolError{Code: "upstream_stream_error", Cause: llmwire.ErrUpstreamStreamInterrupted}, true},
+		{&llmwire.ProtocolError{Code: "invalid_tool_arguments"}, false},
+		{&llmwire.ProtocolError{Code: "unparsed_dsml_tool_call"}, false},
 		{errors.New("unparsed_dsml_tool_call"), false},
 		{errors.New("invalid tool call arguments"), false},
 		{errors.New("unknown provider error"), false},

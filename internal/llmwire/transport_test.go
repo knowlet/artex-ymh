@@ -120,6 +120,21 @@ func TestDelayedAndFragmentedName(t *testing.T) {
 		})
 	}
 }
+func TestProtocolErrorTransientClassification(t *testing.T) {
+	transient := []string{"missing_finish_reason", "upstream_stream_error"}
+	for _, code := range transient {
+		if err := protocolTransientError(code, io.EOF); err.(*ProtocolError).Transient() != true {
+			t.Fatalf("%s must be transient", code)
+		}
+	}
+	nonTransient := []string{"invalid_tool_arguments", "unparsed_dsml_tool_call", "missing_required_tool_argument"}
+	for _, code := range nonTransient {
+		if err := protocolError(code); err.(*ProtocolError).Transient() {
+			t.Fatalf("%s must not be transient", code)
+		}
+	}
+}
+
 func TestStreamFailuresNeverReleaseToolCalls(t *testing.T) {
 	good := callsFrame(testCall(0, "a", "get_worker_trace", `{"intent_id":4}`))
 	cases := []struct{ name, input, code string }{

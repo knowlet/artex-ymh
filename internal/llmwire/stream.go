@@ -123,7 +123,7 @@ func (b *streamBody) frame(data string) error {
 		return err
 	}
 	if e := envelope["error"]; len(e) > 0 && string(e) != "null" {
-		return protocolError("upstream_stream_error")
+		return protocolTransientError("upstream_stream_error", ErrUpstreamStreamInterrupted)
 	}
 	var choices []object
 	if raw := envelope["choices"]; len(raw) > 0 && json.Unmarshal(raw, &choices) != nil {
@@ -254,7 +254,7 @@ func (b *streamBody) finalize() error {
 	// A clean socket EOF is not a completed model turn. In particular, never
 	// release even syntactically valid tool arguments without a terminal frame.
 	if !b.sawFinish {
-		return protocolError("missing_finish_reason")
+		return protocolTransientError("missing_finish_reason", ErrStreamEndedWithoutFinish)
 	}
 	indices := make([]int, 0, len(b.calls))
 	for index := range b.calls {

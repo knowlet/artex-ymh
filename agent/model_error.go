@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Autumn-27/artex/internal/llmwire"
 	"github.com/Autumn-27/norma/llm"
 )
 
@@ -22,6 +23,13 @@ var modelHTTPStatus = regexp.MustCompile(`(?i)(?:status(?:\s+code)?|http(?:\s+st
 // or user cancellation is not. Unknown errors fail closed.
 func IsTransientModelError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var wireErr *llmwire.ProtocolError
+	if errors.As(err, &wireErr) {
+		if wireErr.Transient() || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return true
+		}
 		return false
 	}
 	s := strings.ToLower(err.Error())

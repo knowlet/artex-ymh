@@ -127,15 +127,56 @@ func intentLooksLikePOCVerification(summary string, exploration map[string]any) 
 	return false
 }
 
-func intentCoversPOCFact(openRunning []*db.Node, parentsOf map[int64][]int64, factID int64) bool {
-	for _, n := range openRunning {
+func intentDerivesFromFact(intentID, factID int64, parentsOf map[int64][]int64) bool {
+	for _, pid := range parentsOf[intentID] {
+		if pid == factID {
+			return true
+		}
+	}
+	return false
+}
+
+func pocVerificationDescendants(allIntents []*db.Node, parentsOf map[int64][]int64, factID int64) []*db.Node {
+	var out []*db.Node
+	for _, n := range allIntents {
 		if n.Kind != db.KindIntent {
 			continue
 		}
-		for _, pid := range parentsOf[n.ID] {
-			if pid == factID {
-				return true
-			}
+		if intentDerivesFromFact(n.ID, factID, parentsOf) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// factHasVerificationFinding is true when a verification intent derived from the
+// fact recorded a finding (including via a child intent, not only the enum parent).
+func factHasVerificationFinding(
+	yieldsOf map[int64][]int64,
+	kindByID map[int64]string,
+	allIntents []*db.Node,
+	parentsOf map[int64][]int64,
+	factID int64,
+) bool {
+	for _, child := range pocVerificationDescendants(allIntents, parentsOf, factID) {
+		if intentYieldsFinding(yieldsOf, kindByID, child.ID) {
+			return true
+		}
+	}
+	return false
+}
+
+func intentCoversPOCFact(intents []*db.Node, parentsOf map[int64][]int64, factID int64) bool {
+	for _, n := range intents {
+		if n.Kind != db.KindIntent {
+			continue
+		}
+		if !intentDerivesFromFact(n.ID, factID, parentsOf) {
+			continue
+		}
+		switch n.State {
+		case "open", "running", "done", "blocked", "exhausted", "stopped", "paused":
+			return true
 		}
 	}
 	return false
@@ -200,6 +241,9 @@ func buildPOCFollowupSnapshot(
 		if fromIntent > 0 && intentYieldsFinding(yieldsOf, kindByID, fromIntent) {
 			continue
 		}
+		if factHasVerificationFinding(yieldsOf, kindByID, allIntents, parentsOf, n.ID) {
+			continue
+		}
 		// Any existing follow-up is a decision already made for this evidence.
 		// Terminal outcomes and manual pauses must not become fresh retry budgets.
 		covered := intentCoversPOCFact(allIntents, parentsOf, n.ID)
@@ -254,17 +298,10 @@ func buildPOCFollowupSnapshot(
 		}
 		covered := false
 		for _, fid := range parentFacts {
-			if intentCoversPOCFact(openRunning, parentsOf, fid) {
+			if factHasVerificationFinding(yieldsOf, kindByID, allIntents, parentsOf, fid) ||
+				intentCoversPOCFact(allIntents, parentsOf, fid) {
 				covered = true
 				break
-			}
-		}
-		if !covered && looksVerify {
-			for _, fid := range parentFacts {
-				if intentCoversPOCFact(openRunning, parentsOf, fid) {
-					covered = true
-					break
-				}
 			}
 		}
 		retry := map[string]any{
