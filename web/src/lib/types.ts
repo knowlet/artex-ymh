@@ -1590,8 +1590,6 @@ export type UpdateChannel = "stable" | "nightly" | "main";
 export interface UpdateCheck {
   channel: UpdateChannel;
   source_only?: boolean;
-  release_status?: "available" | "no_release";
-  message?: string;
   current_commit?: string;
   target_commit?: string;
   source_url?: string;
