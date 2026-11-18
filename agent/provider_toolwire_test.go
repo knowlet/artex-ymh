@@ -201,12 +201,14 @@ func TestOpenAIWireRejectsDSMLAndBrokenArguments(t *testing.T) {
 				if mode == "dsml" {
 					message["content"] = `<｜DSML｜tool_calls <｜DSML｜invoke name="get_worker_trace">`
 					finish = "stop"
+				} else if mode == "wrapped" {
+					message["tool_calls"] = []any{map[string]any{"index": 0, "id": "a", "type": "function", "function": map[string]string{
+						"name": "get_worker_trace", "arguments": `{"arguments":{"intent_id":4}}`,
+					}}}
 				} else {
-					args := `{"intent_id":`
-					if mode == "wrapped" {
-						args = `{"arguments":{"intent_id":4}}`
-					}
-					message["tool_calls"] = []any{map[string]any{"index": 0, "id": "a", "type": "function", "function": map[string]string{"name": "get_worker_trace", "arguments": args}}}
+					message["tool_calls"] = []any{map[string]any{"index": 0, "id": "a", "type": "function", "function": map[string]string{
+						"name": "get_worker_trace", "arguments": `{"intent_id":`,
+					}}}
 				}
 				var raw string
 				if stream {
@@ -217,6 +219,31 @@ func TestOpenAIWireRejectsDSMLAndBrokenArguments(t *testing.T) {
 					raw = string(body)
 				}
 				prov, _, ctx := toolWireFixture(t, raw, stream)
+				if mode == "wrapped" {
+					if stream {
+						acc := llm.NewAccumulator()
+						for ev, err := range prov.Stream(ctx, toolWireRequest()) {
+							if err != nil {
+								t.Fatal(err)
+							}
+							acc.Add(ev)
+						}
+						calls := acc.Message().ToolUses()
+						if len(calls) != 1 || string(calls[0].Input) != `{"intent_id":4}` {
+							t.Fatalf("unwrap failed: %+v", calls)
+						}
+						return
+					}
+					msg, _, _, err := prov.Complete(ctx, toolWireRequest())
+					if err != nil {
+						t.Fatal(err)
+					}
+					calls := msg.ToolUses()
+					if len(calls) != 1 || string(calls[0].Input) != `{"intent_id":4}` {
+						t.Fatalf("unwrap failed: %+v", calls)
+					}
+					return
+				}
 				var gotErr error
 				if stream {
 					for ev, err := range prov.Stream(ctx, toolWireRequest()) {
