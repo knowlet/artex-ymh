@@ -36,16 +36,45 @@ func (s *Server) startApprovalAdvisoryWorker(ctx context.Context) {
 	}()
 }
 
+// backgroundWorkerShutdownGrace bounds how long restart waits for in-flight archive
+// work after the server root context is cancelled. Snapshot paths observe that context,
+// but a blocked advisory lock or orphaned goroutine must not hold the process open forever.
+const backgroundWorkerShutdownGrace = 45 * time.Second
+
+func waitBackgroundWork(ctx context.Context, grace time.Duration, label string, work func()) {
+	if work == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		work()
+		close(done)
+	}()
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		log.Printf("[shutdown] %s still running after stop: %v", label, ctx.Err())
+	case <-timer.C:
+		log.Printf("[shutdown] %s grace period expired", label)
+	}
+}
+
 // WaitBackgroundWorkers blocks until ctx-scoped background loops exit. Call after
 // cancelling the Server root context and before closing the database.
 func (s *Server) WaitBackgroundWorkers() {
 	if s == nil {
 		return
 	}
-	s.advisoryWG.Wait()
-	s.archiveWG.Wait()
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitBackgroundWork(ctx, backgroundWorkerShutdownGrace, "advisory-auto", s.advisoryWG.Wait)
+	waitBackgroundWork(ctx, backgroundWorkerShutdownGrace, "task-archive", s.archiveWG.Wait)
 	if s.side != nil {
-		<-s.side.done
+		waitBackgroundWork(ctx, backgroundWorkerShutdownGrace, "side-snapshot", func() { <-s.side.done })
 	}
 }
 
