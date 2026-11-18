@@ -16,7 +16,12 @@ import (
 // Stage only the new skills so unrelated legacy parse failures cannot mask them.
 func TestDiscoverySkillsLoadAndInvoke(t *testing.T) {
 	root := t.TempDir()
-	names := []string{"projectdiscovery-recon", "vulnerability-triage"}
+	names := []string{"projectdiscovery-recon", "vulnerability-triage", "one-day-validation", "dependency-cve-audit", "vulnerability-tooling-maintenance"}
+	references := map[string]string{
+		"projectdiscovery-recon": "commands.md", "vulnerability-triage": "triage.md",
+		"one-day-validation": "validation.md", "dependency-cve-audit": "osv.md",
+		"vulnerability-tooling-maintenance": "ci.md",
+	}
 	for _, name := range names {
 		source := filepath.Join("..", "skills", name)
 		if err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
@@ -56,10 +61,7 @@ func TestDiscoverySkillsLoadAndInvoke(t *testing.T) {
 			if len(loaded.MCPs) != 0 {
 				t.Fatal("guidance must not unlock MCP tools")
 			}
-			ref := "commands.md"
-			if name == "vulnerability-triage" {
-				ref = "triage.md"
-			}
+			ref := references[name]
 			if _, err := os.Stat(filepath.Join(loaded.Dir, "references", ref)); err != nil {
 				t.Fatal(err)
 			}

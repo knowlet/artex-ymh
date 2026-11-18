@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+      time: '08:10'
+      timezone: Asia/Taipei
+    allow:
+      - dependency-name: google/osv-scanner-action
+      - dependency-name: peter-evans/create-pull-request
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'ci(deps)'
