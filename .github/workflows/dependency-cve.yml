@@ -9,6 +9,7 @@ on:
       - 'web/package-lock.json'
       - '.github/workflows/dependency-cve.yml'
       - '.github/dependabot.yml'
+      - 'web/osv-scanner.toml'
   push:
     branches: [main]
     paths:
@@ -17,6 +18,7 @@ on:
       - 'web/package.json'
       - 'web/package-lock.json'
       - '.github/workflows/dependency-cve.yml'
+      - 'web/osv-scanner.toml'
   schedule:
     - cron: '47 23 * * *' # 07:47 Asia/Taipei; advisories can change without a code change.
   workflow_dispatch:
