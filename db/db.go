@@ -282,7 +282,10 @@ ON CONFLICT (name) DO NOTHING`,
 	// NOTE: the placeholder ScopeSentry data-source MCP (empty URL + empty X-API-Key,
 	// disabled) is seeded directly in schema.sql §F so a raw `psql < schema.sql` init
 	// also gets it. schema.sql is Exec'd on every startup, so it stays idempotent.
-	if err := d.seedBuiltinSkillVisibility(); err != nil {
+	if err := d.migrateAntiFoxSkillLibraryIDs(); err != nil {
+		return fmt.Errorf("migrate antifox skill visibility: %w", err)
+	}
+	if err := d.seedBuiltinSkillVisibility(config.SkillDir()); err != nil {
 		return fmt.Errorf("seed skill visibility: %w", err)
 	}
 	if err := d.seedDefaultInterceptRules(); err != nil {
@@ -358,21 +361,80 @@ ON CONFLICT DO NOTHING`, r.kind, r.pattern, r.note); err != nil {
 // declares `mcps: ScopeSentry`, which only takes effect once it's made visible and
 // that MCP is enabled/configured.
 var builtinSkillVisibility = map[string][]string{
-	"api-recon": {"auto", "pentest", "worker"},
+	"api-recon":                           {"auto", "pentest", "worker"},
+	"antifox-api-security-testing":        {"planner", "worker", "pentest"},
+	"antifox-business-logic-testing":      {"planner", "worker", "pentest"},
+	"antifox-cloud-security-audit":        {"planner", "worker", "pentest"},
+	"antifox-command-injection-testing":   {"planner", "worker", "pentest"},
+	"antifox-container-security-testing":  {"planner", "worker", "pentest"},
+	"antifox-csrf-testing":                {"planner", "worker", "pentest"},
+	"antifox-deserialization-testing":     {"planner", "worker", "pentest"},
+	"antifox-file-upload-testing":         {"planner", "worker", "pentest"},
+	"antifox-idor-testing":                {"planner", "worker", "pentest"},
+	"antifox-incident-response":           {"planner", "worker", "pentest"},
+	"antifox-ldap-injection-testing":      {"planner", "worker", "pentest"},
+	"antifox-mobile-app-security-testing": {"planner", "worker", "pentest"},
+	"antifox-network-penetration-testing": {"planner", "worker", "pentest"},
+	"antifox-report-generation":           {"reporter"},
+	"antifox-secure-code-review":          {"planner", "worker", "pentest"},
+	"antifox-security-automation":         {"planner", "worker", "pentest"},
+	"antifox-security-awareness-training": {"planner", "worker", "pentest"},
+	"antifox-sql-injection-testing":       {"planner", "worker", "pentest"},
+	"antifox-ssrf-testing":                {"planner", "worker", "pentest"},
+	"antifox-vulnerability-assessment":    {"planner", "worker", "pentest"},
+	"antifox-xpath-injection-testing":     {"planner", "worker", "pentest"},
+	"antifox-xss-testing":                 {"planner", "worker", "pentest"},
+	"antifox-xxe-testing":                 {"planner", "worker", "pentest"},
 }
 
-// seedBuiltinSkillVisibility binds the shipped built-in skills to their default
-// agents. Insert-if-absent (ON CONFLICT DO NOTHING) so a user's later toggle-off is
-// never resurrected on restart — matches the browser-MCP / intercept-rule seed policy.
-func (d *DB) seedBuiltinSkillVisibility() error {
+// seedBuiltinSkillVisibility binds verified shipped skills to their default agents.
+// Insert-if-absent (ON CONFLICT DO NOTHING) so a user's later toggle-off is never
+// resurrected on restart. Unverified same-named directories require an explicit grant.
+
+// SeedBuiltinSkillVisibilityKeys inserts default visibility for the named shipped skills
+// once their target agents exist (used when an agent is created after DB.Open seeding).
+func (d *DB) SeedBuiltinSkillVisibilityKeys(skillRoot string, skillNames ...string) error {
+	if len(skillNames) == 0 {
+		return nil
+	}
+	want := make(map[string]struct{}, len(skillNames))
+	for _, name := range skillNames {
+		want[name] = struct{}{}
+	}
 	for skillName, agentKeys := range builtinSkillVisibility {
-		for _, key := range agentKeys {
-			if _, err := d.Exec(`
-INSERT INTO agent_skill_visibility(agent_id, skill_name, enabled)
-SELECT id, $2, true FROM agents WHERE key=$1
-ON CONFLICT (agent_id, skill_name) DO NOTHING`, key, skillName); err != nil {
-				return fmt.Errorf("skill %s → agent %s: %w", skillName, key, err)
-			}
+		if _, ok := want[skillName]; !ok {
+			continue
+		}
+		if err := d.seedBuiltinSkillVisibilityBinding(skillRoot, skillName, agentKeys); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *DB) seedBuiltinSkillVisibility(skillRoot string) error {
+	for skillName, agentKeys := range builtinSkillVisibility {
+		if err := d.seedBuiltinSkillVisibilityBinding(skillRoot, skillName, agentKeys); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *DB) seedBuiltinSkillVisibilityBinding(skillRoot, skillName string, agentKeys []string) error {
+	libraryID := shippedSkillLibraryID(skillRoot, skillName)
+	if libraryID == "" && strings.HasPrefix(skillName, "antifox-") {
+		return nil
+	}
+	if libraryID == "" && !builtinSkillDirPresent(skillRoot, skillName) {
+		return nil
+	}
+	for _, key := range agentKeys {
+		if _, err := d.Exec(`
+INSERT INTO agent_skill_visibility(agent_id, skill_name, library_id, enabled)
+SELECT id, $2, $3, true FROM agents WHERE key=$1
+ON CONFLICT (agent_id, library_id, skill_name) DO NOTHING`, key, skillName, libraryID); err != nil {
+			return fmt.Errorf("skill %s → agent %s: %w", skillName, key, err)
 		}
 	}
 	return nil

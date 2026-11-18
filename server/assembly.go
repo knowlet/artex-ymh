@@ -10,7 +10,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/skillprovider"
+	"github.com/Autumn-27/artex/skillknowledge"
 	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/skill"
 	actool "github.com/Autumn-27/norma/tool"
@@ -34,11 +34,9 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 		// --- skills: load visible skills into reg (used for the Skill meta-tool
 		// and to know which MCP servers are skill-gated). ---
 		var reg *skill.Registry
-		libraryID, identityErr := skillprovider.LibraryIdentity(skillDir)
-		if identityErr != nil {
-			log.Printf("[skills] library identity: %v", identityErr)
-		}
-		if names, _ := pg.AgentSkillNamesInLibrary(a.ID, libraryID); identityErr == nil && len(names) > 0 {
+		if names, err := pg.AgentSkillNamesForRuntime(a.ID, skillDir); err != nil {
+			log.Printf("[skills] visibility: %v", err)
+		} else if len(names) > 0 {
 			nameSet := make(map[string]bool, len(names))
 			for _, n := range names {
 				nameSet[n] = true
@@ -46,13 +44,32 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 			if allReg, err := skill.LoadDir(skillDir); err == nil && allReg != nil {
 				reg = skill.NewRegistry()
 				for _, s := range allReg.List() {
-					// match by directory name (Base of Dir), not by skill display Name
-					if s.Dir != "" && nameSet[filepath.Base(s.Dir)] {
+					dirName := filepath.Base(s.Dir)
+					if s.Dir != "" && nameSet[dirName] {
 						reg.Add(s)
 					}
 				}
 				if len(reg.List()) == 0 {
 					reg = nil
+				}
+			}
+		}
+		// Search uses exactly the same library/visibility-filtered registry as Skill.
+		// It returns reference text without invoking reg.OnInvoke or unlocking MCPs.
+		// Raw augmentation must not expose tools an agent was never bound to.
+		// ToolResolve still applies the final bindings, overrides and disable flag.
+		knowledgeBindings := map[string]bool{}
+		if rows, err := pg.ListTools(); err == nil {
+			for _, row := range rows {
+				if row.System && row.Kind == "builtin" && row.Enabled && contains(row.Agents, a.Key) && (row.Key == "search_knowledge" || row.Key == "list_knowledge_categories") {
+					knowledgeBindings[row.Key] = true
+				}
+			}
+		}
+		if len(knowledgeBindings) > 0 {
+			for _, tool := range skillknowledge.Tools(reg) {
+				if knowledgeBindings[tool.Name()] {
+					extra = append(extra, tool)
 				}
 			}
 		}

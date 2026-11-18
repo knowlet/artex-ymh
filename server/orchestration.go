@@ -502,11 +502,12 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedWorkerReadToolsUnbind() // list_facts/node_detail/list_companies/跨 work 检索从 worker 默认解绑(一次性)
 	s.seedAutoReportFindingBinding()
 	s.unbindGoalMetDefault()
-	s.reseedGoalsPrompt()             // goals 提示词加入「抽操作约束」步 → 旧库追加一版新默认(一次性)
-	s.reseedMainAgentPrompt()         // mainagent 提示词加入「目标达成后 add_intent 反问是否建目标」(一次性)
-	s.reseedPlannerPrompt()           // planner 提示词:重写「0 意图」正当理由 + 加量化验收核对(一次性)
-	s.reseedWorkerPrompt()            // worker 提示词:加否定结论证据门槛(一次性)
-	s.seedReporterAgent()             // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)
+	s.reseedGoalsPrompt()     // goals 提示词加入「抽操作约束」步 → 旧库追加一版新默认(一次性)
+	s.reseedMainAgentPrompt() // mainagent 提示词加入「目标达成后 add_intent 反问是否建目标」(一次性)
+	s.reseedPlannerPrompt()   // planner 提示词:重写「0 意图」正当理由 + 加量化验收核对(一次性)
+	s.reseedWorkerPrompt()    // worker 提示词:加否定结论证据门槛(一次性)
+	s.seedReporterAgent()     // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)
+	s.ensureReporterBuiltinSkillVisibility()
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
 	s.seedFindingTrafficTools()       // 增加可选证据参数及只读证据工具，保留用户配置
 	s.seedFindingWorkflowTools()
@@ -785,6 +786,21 @@ func (s *Server) seedReporterAgent() {
 		log.Printf("[reporter] 创建触发器失败: %v", err)
 	}
 	log.Printf("[reporter] 已预置「报告撰写」agent + finding 触发器")
+	s.ensureReporterBuiltinSkillVisibility()
+}
+
+// ensureReporterBuiltinSkillVisibility grants reporter-only shipped skills after the
+// reporter agent row exists (reporter is not part of db.builtinAgents seed).
+func (s *Server) ensureReporterBuiltinSkillVisibility() {
+	if s.m == nil || s.m.pg == nil {
+		return
+	}
+	if _, err := s.m.pg.GetAgentByKey("reporter"); err != nil {
+		return
+	}
+	if err := s.m.pg.SeedBuiltinSkillVisibilityKeys(s.skillDir, "antifox-report-generation"); err != nil {
+		log.Printf("[reporter] 默认 skill 可见性补齐失败: %v", err)
+	}
 }
 
 // seedAutoReportFindingBinding adds "auto" to report_finding's binding ONCE so

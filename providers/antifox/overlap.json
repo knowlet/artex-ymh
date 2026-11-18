@@ -1,0 +1,17 @@
+[
+  {
+    "name": "api-recon",
+    "sha256": "f49b3168635148a0168df8af9c99e5b2ce06aa5ef7c1714706b6e8eae3d63b61",
+    "resolution": "reuse-existing-identical-skill"
+  },
+  {
+    "name": "playwright-cli",
+    "sha256": "29c0b669a524d42b51934d7db9144c1c07a566d0549ae6fb6ccd810e5a3cf61b",
+    "resolution": "reuse-existing-identical-skill"
+  },
+  {
+    "name": "scopesentry",
+    "sha256": "7653202f58317264771c46c8dd3c81d67b3aa1e0f81a8fba33380de83e8e7026",
+    "resolution": "reuse-existing-identical-skill"
+  }
+]

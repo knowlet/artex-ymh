@@ -47,6 +47,8 @@ COPY dist/${TARGETARCH}/artex /app/artex
 COPY start.sh /app/start.sh
 RUN chmod +x /app/artex /app/start.sh
 COPY skills/ /app/skills/
+COPY providers/antifox/ /app/providers/antifox/
+COPY scripts/sync_antifox.py /app/scripts/
 # Reviewed offline intelligence and maintenance commands; no tool installation
 # or update runs during the image build or server startup.
 COPY packaging/discovery-data-manifest.json packaging/vulnerability-intel.json packaging/projectdiscovery-lock.json packaging/nuclei-cve-index.json packaging/tools-manifest.json /app/packaging/

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Autumn-27/artex/config"
 	"github.com/Autumn-27/artex/internal/endpoint"
 )
 
@@ -984,9 +985,10 @@ func (d *DB) DeleteMCP(id int64) error {
 
 // ---------- Skill visibility (agent × skill_name) ----------
 
-// AgentSkillNames returns the skill directory names visible to an agent.
+// AgentSkillNames returns visible skills for the configured skill root, merging
+// legacy and bundled provider libraries when the root has no import receipt.
 func (d *DB) AgentSkillNames(agentID int64) ([]string, error) {
-	return d.AgentSkillNamesInLibrary(agentID, "")
+	return d.AgentSkillNamesForRuntime(agentID, config.SkillDir())
 }
 
 // AgentSkillNamesInLibrary excludes grants made for another library identity.
@@ -1040,12 +1042,14 @@ func (d *DB) SetAgentSkillVisibilityInLibrary(agentID int64, names []string, lib
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM agent_skill_visibility WHERE agent_id=$1 AND library_id=$2`, agentID, libraryID); err != nil {
+	// Retain disabled rows as explicit choices. Deleting them lets startup's
+	// insert-if-absent defaults silently re-enable shipped skills on the next boot.
+	if _, err := tx.Exec(`UPDATE agent_skill_visibility SET enabled=false WHERE agent_id=$1 AND library_id=$2`, agentID, libraryID); err != nil {
 		return err
 	}
 	for _, name := range names {
 		if _, err := tx.Exec(`INSERT INTO agent_skill_visibility(agent_id,skill_name,library_id,enabled) VALUES ($1,$2,$3,true)
-ON CONFLICT (agent_id,skill_name) DO UPDATE SET enabled=true,library_id=EXCLUDED.library_id`, agentID, name, libraryID); err != nil {
+ON CONFLICT (agent_id, library_id, skill_name) DO UPDATE SET enabled=true`, agentID, name, libraryID); err != nil {
 			return err
 		}
 	}
@@ -1054,21 +1058,47 @@ ON CONFLICT (agent_id,skill_name) DO UPDATE SET enabled=true,library_id=EXCLUDED
 
 // ToggleSkillVisibility sets one (agent, skill_name) visibility on/off.
 func (d *DB) ToggleSkillVisibility(agentID int64, skillName string, on bool) error {
-	return d.ToggleSkillVisibilityInLibrary(agentID, skillName, on, "")
+	libraryID := ""
+	if id := shippedSkillLibraryID(config.SkillDir(), skillName); id != "" {
+		libraryID = id
+	}
+	return d.ToggleSkillVisibilityInLibrary(agentID, skillName, on, libraryID)
 }
 
-// A fresh explicit grant replaces any former library's same-name binding.
 func (d *DB) ToggleSkillVisibilityInLibrary(agentID int64, skillName string, on bool, libraryID string) error {
 	if on {
+		// An explicit grant in the active library supersedes enabled rows elsewhere
+		// for the same skill name; disabled rows in other libraries stay disabled.
+		if _, err := d.Exec(`UPDATE agent_skill_visibility SET enabled=false WHERE agent_id=$1 AND skill_name=$2 AND library_id<>$3 AND enabled`, agentID, skillName, libraryID); err != nil {
+			return err
+		}
 		_, err := d.Exec(`INSERT INTO agent_skill_visibility(agent_id,skill_name,library_id,enabled) VALUES ($1,$2,$3,true)
-ON CONFLICT (agent_id,skill_name) DO UPDATE SET enabled=true,library_id=EXCLUDED.library_id`, agentID, skillName, libraryID)
+ON CONFLICT (agent_id, library_id, skill_name) DO UPDATE SET enabled=true`, agentID, skillName, libraryID)
 		return err
 	}
-	_, err := d.Exec(`DELETE FROM agent_skill_visibility WHERE agent_id=$1 AND skill_name=$2 AND library_id=$3`, agentID, skillName, libraryID)
+	_, err := d.Exec(`INSERT INTO agent_skill_visibility(agent_id,skill_name,library_id,enabled) VALUES ($1,$2,$3,false)
+ON CONFLICT (agent_id, library_id, skill_name) DO UPDATE SET enabled=false`, agentID, skillName, libraryID)
 	return err
 }
 
-// DeleteSkillVisibility removes all visibility rows for a skill (called on skill delete).
+// DeleteSkillVisibilityInLibrary drops grants in one library. Shipped defaults keep a
+// disabled row so startup does not resurrect them after filesystem removal.
+func (d *DB) DeleteSkillVisibilityInLibrary(skillName, libraryID string, shippedBuiltin bool) error {
+	if shippedBuiltin {
+		_, err := d.Exec(`UPDATE agent_skill_visibility SET enabled=false WHERE skill_name=$1 AND library_id=$2`, skillName, libraryID)
+		return err
+	}
+	_, err := d.Exec(`DELETE FROM agent_skill_visibility WHERE skill_name=$1 AND library_id=$2`, skillName, libraryID)
+	return err
+}
+
+// RemoveSkillLibraryGrants deletes all visibility rows for a skill in one library.
+func (d *DB) RemoveSkillLibraryGrants(skillName, libraryID string) error {
+	_, err := d.Exec(`DELETE FROM agent_skill_visibility WHERE skill_name=$1 AND library_id=$2`, skillName, libraryID)
+	return err
+}
+
+// DeleteSkillVisibility removes all visibility rows for a skill across libraries.
 func (d *DB) DeleteSkillVisibility(skillName string) error {
 	_, err := d.Exec(`DELETE FROM agent_skill_visibility WHERE skill_name=$1`, skillName)
 	return err

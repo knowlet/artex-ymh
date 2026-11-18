@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/Autumn-27/artex/skillknowledge"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -33,7 +34,7 @@ type ToolSeed struct {
 // 原样放行、不覆盖，行为与从前一致。只有 artex 自己的领域工具入表可管。
 func builtinToolsByAgent() map[string][]actool.CoreTool {
 	ts := NewToolSet(nil, "")
-	return map[string][]actool.CoreTool{
+	byAgent := map[string][]actool.CoreTool{
 		"mainagent": ts.MainAgentTools(),
 		// cancel_intent 不在 PlannerTools()(tools.go)里——它是 planner 装配层
 		// (Plan 的 capFrontierTools)追加的工具;seed 这里补上,DB 绑定才覆盖 planner,
@@ -50,6 +51,12 @@ func builtinToolsByAgent() map[string][]actool.CoreTool {
 		// 新库由此 seed 写入；老库由 seedPentestDefaultBindings 迁移。
 		"pentest": {ts.listAssets(), ts.insertAssets(), ts.addFinding(), ts.listFindings(), ts.listCompanies()},
 	}
+	// Runtime instances are added by ToolAugment from that agent's already-filtered
+	// skill registry. These empty instances supply only editable catalog defaults.
+	for _, key := range []string{"planner", "worker", "auto", "pentest", "reporter"} {
+		byAgent[key] = append(byAgent[key], skillknowledge.Tools(nil)...)
+	}
+	return byAgent
 }
 
 // defaultUnbound：这些 system 工具会照常入目录（web 端可见、可手动按 agent 勾选），但
@@ -65,7 +72,7 @@ var defaultUnbound = map[string]bool{"goal_met": true}
 // 多个 agent 都有）合成一条，Agents 取并集；defaultUnbound 里的工具则强制绑定为空。
 func BuiltinToolSeeds() []ToolSeed {
 	byAgent := builtinToolsByAgent()
-	order := []string{"mainagent", "goals", "planner", "worker", "auto", "pentest"}
+	order := []string{"mainagent", "goals", "planner", "worker", "auto", "pentest", "reporter"}
 
 	type acc struct {
 		tool   actool.CoreTool

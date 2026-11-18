@@ -182,6 +182,8 @@ package_binary() {
     chmod +x "$package_root/start.sh"
   fi
   cp -R skills "$package_root/"
+  mkdir -p "$package_root/providers"
+  cp -R providers/antifox "$package_root/providers/"
   # Offline discovery/intelligence is part of the application distribution.
   # Keep reviewed resources outside data/, which operators persist or mount.
   # Do not bundle downloaded binaries/templates or fetch anything here.
@@ -196,7 +198,7 @@ package_binary() {
     scripts/install_projectdiscovery.py \
     scripts/update_vulnerability_intel.py \
     scripts/update_nuclei_index.py \
-    scripts/build_intel_pack.py "$package_root/scripts/"
+    scripts/build_intel_pack.py scripts/sync_antifox.py "$package_root/scripts/"
   cp config.example.json "$package_root/"
   if [ -f README.md ]; then cp README.md "$package_root/"; fi
   if [ -f README-FORK.md ]; then cp README-FORK.md "$package_root/"; fi

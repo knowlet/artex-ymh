@@ -1,0 +1,615 @@
+{
+  "schema_version": 1,
+  "provider": "antifox",
+  "namespace": "antifox",
+  "source": {
+    "repository": "https://github.com/AntiFox-AI/antifox",
+    "revision": "070f798bf590667bc2a0a13c687dd87d8a4413bf",
+    "license": {
+      "path": "LICENSE",
+      "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+      "spdx": "AGPL-3.0"
+    }
+  },
+  "skills": [
+    {
+      "id": "api-security-testing",
+      "category": "web",
+      "source_path": "skills/api-security-testing/SKILL.md",
+      "source_sha256": "9cdd1db1da39467561f324587c59cf22c27b2f1a3e5de3864b96de9084313ac6",
+      "source_bytes": 4466,
+      "format": "frontmatter",
+      "description": "檢查 API 認證、授權、輸入驗證與錯誤處理（API authentication authorization）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "tool-burp",
+        "tool-gobuster",
+        "tool-python",
+        "tool-zap"
+      ]
+    },
+    {
+      "id": "business-logic-testing",
+      "category": "web",
+      "source_path": "skills/business-logic-testing/SKILL.md",
+      "source_sha256": "b45adaaa9f6f89e40f7093e0a324079d758c9088260d60a5fcd93f5b2727b6b4",
+      "source_bytes": 7467,
+      "format": "frontmatter",
+      "description": "檢查業務邏輯、狀態轉換、流程與競態條件（business logic race condition）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "native-report-finding",
+        "tool-burp",
+        "tool-python"
+      ]
+    },
+    {
+      "id": "cloud-security-audit",
+      "category": "cloud",
+      "source_path": "skills/cloud-security-audit/SKILL.md",
+      "source_sha256": "4ff8c2ea092733b66885da2fef311e5703744f901e5f30dddf6e7d736d6cf63f",
+      "source_bytes": 5246,
+      "format": "frontmatter",
+      "description": "稽核 AWS、Azure、GCP 的雲端設定、IAM 與儲存權限（cloud security audit）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "tool-aws",
+        "tool-azure",
+        "tool-gcp",
+        "tool-prowler"
+      ]
+    },
+    {
+      "id": "command-injection-testing",
+      "category": "web",
+      "source_path": "skills/command-injection-testing/SKILL.md",
+      "source_sha256": "3fd1d3145ceb5e8f28e86c29190a0101e21dbbc01bbbdda72e7143ee82c84c52",
+      "source_bytes": 5816,
+      "format": "frontmatter",
+      "description": "驗證命令注入與輸入至作業系統命令的資料流（command injection）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "native-report-finding",
+        "tool-burp",
+        "tool-curl",
+        "tool-python"
+      ]
+    },
+    {
+      "id": "container-security-testing",
+      "category": "cloud",
+      "source_path": "skills/container-security-testing/SKILL.md",
+      "source_sha256": "0089887074cbc8da11e5b6d7ba181de606bfe68196f151568e054f0b3f10eca6",
+      "source_bytes": 6517,
+      "format": "frontmatter",
+      "description": "稽核 Docker、Kubernetes、容器映像與執行權限（container security）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "tool-curl",
+        "tool-docker",
+        "tool-kube-bench",
+        "tool-kube-hunter",
+        "tool-kubernetes",
+        "tool-trivy"
+      ]
+    },
+    {
+      "id": "csrf-testing",
+      "category": "web",
+      "source_path": "skills/csrf-testing/SKILL.md",
+      "source_sha256": "790ea37df76ce7d66b614daa4b08ba1f125899ca6d3b9e40221f8d791296e5d1",
+      "source_bytes": 4724,
+      "format": "frontmatter",
+      "description": "驗證跨站請求偽造、權杖與來源驗證（CSRF）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "native-report-finding",
+        "tool-burp",
+        "tool-zap"
+      ]
+    },
+    {
+      "id": "deserialization-testing",
+      "category": "web",
+      "source_path": "skills/deserialization-testing/SKILL.md",
+      "source_sha256": "10ed6a406bddc0b12c71cdbab2beedcde359ef277b5dc3e90d4d7926ce0e2d9d",
+      "source_bytes": 5419,
+      "format": "frontmatter",
+      "description": "檢查不安全反序列化與物件輸入的可信任邊界（deserialization）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "native-report-finding",
+        "tool-burp",
+        "tool-phpggc",
+        "tool-python",
+        "tool-ysoserial"
+      ]
+    },
+    {
+      "id": "file-upload-testing",
+      "category": "web",
+      "source_path": "skills/file-upload-testing/SKILL.md",
+      "source_sha256": "e7c7d6fb5ed971c51fdf5a5fb79e80aa4996a48f6d205e84e1da24223ad15cd5",
+      "source_bytes": 5582,
+      "format": "frontmatter",
+      "description": "檢查檔案上傳的型別、路徑、存取與執行限制（file upload）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "native-report-finding",
+        "tool-burp",
+        "tool-python"
+      ]
+    },
+    {
+      "id": "idor-testing",
+      "category": "web",
+      "source_path": "skills/idor-testing/SKILL.md",
+      "source_sha256": "0a591864467ba962c521977d3c3aa37447fd9da5b25a9361b91c006a7dce37ae",
+      "source_bytes": 6062,
+      "format": "frontmatter",
+      "description": "用不同身分與資源對照驗證直接物件參照與越權（IDOR BOLA access control）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "native-report-finding",
+        "tool-burp",
+        "tool-curl",
+        "tool-python",
+        "tool-zap"
+      ]
+    },
+    {
+      "id": "incident-response",
+      "category": "operations",
+      "source_path": "skills/incident-response/SKILL.md",
+      "source_sha256": "71534ce0482172451cbee4b466c43bdcd06d5c54a43745c3eebc2271ab4260ac",
+      "source_bytes": 3989,
+      "format": "frontmatter",
+      "description": "規劃資安事件分流、證據保存、圍堵、復原與後續調查（incident response）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": []
+    },
+    {
+      "id": "ldap-injection-testing",
+      "category": "web",
+      "source_path": "skills/ldap-injection-testing/SKILL.md",
+      "source_sha256": "da8745c158459fb4c7f0973ed3396ac1cedf47bc53186fb06944117c665cb458",
+      "source_bytes": 5530,
+      "format": "frontmatter",
+      "description": "驗證 LDAP 查詢組合與特殊字元處理（LDAP injection）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "native-report-finding",
+        "tool-burp",
+        "tool-python"
+      ]
+    },
+    {
+      "id": "mobile-app-security-testing",
+      "category": "mobile",
+      "source_path": "skills/mobile-app-security-testing/SKILL.md",
+      "source_sha256": "21246c795b74193d95b13e5847044eb1b1fc8fae9144930c6204c99201fad884",
+      "source_bytes": 6586,
+      "format": "frontmatter",
+      "description": "檢查 Android、iOS 的儲存、網路、認證與行動應用程式風險（mobile security）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "tool-apktool",
+        "tool-burp",
+        "tool-docker",
+        "tool-frida",
+        "tool-jadx",
+        "tool-mobsf",
+        "tool-objection"
+      ]
+    },
+    {
+      "id": "network-penetration-testing",
+      "category": "network",
+      "source_path": "skills/network-penetration-testing/SKILL.md",
+      "source_sha256": "8033e0b93685f6118d745ae17fe4b293418f2947dfefc805dda6da554ea7a0fc",
+      "source_bytes": 5773,
+      "format": "frontmatter",
+      "description": "規劃授權網路服務盤點與協定安全驗證（network penetration testing）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "tool-burp",
+        "tool-masscan",
+        "tool-metasploit",
+        "tool-nessus",
+        "tool-nmap",
+        "tool-openvas",
+        "tool-python"
+      ]
+    },
+    {
+      "id": "report-generation",
+      "category": "report",
+      "source_path": "skills/report-generation/SKILL.md",
+      "source_sha256": "316942e6c3355fb2a134d21b8a6ad5c20463c7b1f2611fbb2dee737175430246",
+      "source_bytes": 1864,
+      "format": "frontmatter",
+      "description": "依已確認漏洞與真實流量整理證據、重現步驟、修復建議與 ARTEX 報告（evidence report）。",
+      "provenance": "verified",
+      "import_policy": "metadata-only",
+      "dependencies": [
+        "antifox-report-engine"
+      ]
+    },
+    {
+      "id": "secure-code-review",
+      "category": "operations",
+      "source_path": "skills/secure-code-review/SKILL.md",
+      "source_sha256": "3d6ee9ac396d93ba487e3d671c25afdd1d9683774c13fa039877e12f48efa144",
+      "source_bytes": 4679,
+      "format": "frontmatter",
+      "description": "追蹤輸入至敏感操作的資料流，審查認證、授權、編碼與金鑰使用（secure code review）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "tool-checkmarx",
+        "tool-docker",
+        "tool-fortify",
+        "tool-python",
+        "tool-semgrep",
+        "tool-sonarqube"
+      ]
+    },
+    {
+      "id": "security-automation",
+      "category": "operations",
+      "source_path": "skills/security-automation/SKILL.md",
+      "source_sha256": "0ffb9476c1461a98e72fcf9eca0db90c3cfb7cbe7f0efed8ddac3857799554a2",
+      "source_bytes": 8340,
+      "format": "frontmatter",
+      "description": "規劃安全檢查自動化、工具串接、持續整合與結果管理（security automation CI）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "tool-aws",
+        "tool-burp",
+        "tool-nessus",
+        "tool-nmap",
+        "tool-openvas",
+        "tool-python",
+        "tool-sonarqube",
+        "tool-zap"
+      ]
+    },
+    {
+      "id": "security-awareness-training",
+      "category": "operations",
+      "source_path": "skills/security-awareness-training/SKILL.md",
+      "source_sha256": "65fe05d5912c7b96707a61e1900dd6ffd1ac2e1d487e47974aac91e91585247e",
+      "source_bytes": 3840,
+      "format": "frontmatter",
+      "description": "設計資安意識教材、演練情境與成效衡量（security awareness training）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": []
+    },
+    {
+      "id": "sql-injection-testing",
+      "category": "web",
+      "source_path": "skills/sql-injection-testing/SKILL.md",
+      "source_sha256": "477d3fba2f796be18fb021874dd5290550dca584e691333b64779a87a1fcf3fc",
+      "source_bytes": 2978,
+      "format": "frontmatter",
+      "description": "驗證 SQL 注入、查詢參數與資料庫錯誤，記錄最小證據（SQL injection SQLi）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "native-report-finding",
+        "tool-burp",
+        "tool-python",
+        "tool-sqlmap"
+      ]
+    },
+    {
+      "id": "ssrf-testing",
+      "category": "web",
+      "source_path": "skills/ssrf-testing/SKILL.md",
+      "source_sha256": "18accfef0f08ee1e22b919e7ed48ab1f4752c1d68e3e89cba6bd4293b7b30219",
+      "source_bytes": 5349,
+      "format": "frontmatter",
+      "description": "驗證伺服器端請求偽造、URL 解析與目的位址限制（SSRF）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "native-report-finding",
+        "tool-aws",
+        "tool-azure",
+        "tool-python"
+      ]
+    },
+    {
+      "id": "vulnerability-assessment",
+      "category": "operations",
+      "source_path": "skills/vulnerability-assessment/SKILL.md",
+      "source_sha256": "7d0aacbd12e06dafece0703864ea6f23f3ba8a0e6bfcaece2680e941d3df3431",
+      "source_bytes": 4147,
+      "format": "frontmatter",
+      "description": "整理弱點盤點、證據核對、嚴重度與修復優先順序（vulnerability assessment）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "tool-burp",
+        "tool-checkmarx",
+        "tool-nessus",
+        "tool-nmap",
+        "tool-openvas",
+        "tool-sonarqube",
+        "tool-zap"
+      ]
+    },
+    {
+      "id": "xpath-injection-testing",
+      "category": "web",
+      "source_path": "skills/xpath-injection-testing/SKILL.md",
+      "source_sha256": "7e5fb549876f4766fbc541df260d70b40e517c4c4b1835938bcd94813a4298b6",
+      "source_bytes": 6069,
+      "format": "frontmatter",
+      "description": "驗證 XPath 查詢組合、輸入處理與 XML 查詢授權（XPath injection）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "native-report-finding",
+        "tool-burp",
+        "tool-python"
+      ]
+    },
+    {
+      "id": "xss-testing",
+      "category": "web",
+      "source_path": "skills/xss-testing/SKILL.md",
+      "source_sha256": "5c4609c1743a9193b655f1f99e7b3beeba605f40ec38f8bc277cffdca44e3c1d",
+      "source_bytes": 3108,
+      "format": "frontmatter",
+      "description": "驗證跨站指令碼、輸出編碼與瀏覽器執行脈絡（XSS cross site scripting）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "native-report-finding",
+        "tool-burp"
+      ]
+    },
+    {
+      "id": "xxe-testing",
+      "category": "web",
+      "source_path": "skills/xxe-testing/SKILL.md",
+      "source_sha256": "c564d17036e1c7a6791a60abdc36785b26eb962f1a2424196776466173d3c7a2",
+      "source_bytes": 5690,
+      "format": "frontmatter",
+      "description": "驗證 XML 外部實體與解析器設定（XXE XML external entity）。",
+      "provenance": "verified",
+      "import_policy": "allowed",
+      "dependencies": [
+        "native-report-finding",
+        "tool-burp"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "id": "antifox-report-engine",
+      "aliases": [
+        "report-generation engine"
+      ]
+    },
+    {
+      "id": "native-report-finding",
+      "aliases": [
+        "report_finding"
+      ]
+    },
+    {
+      "id": "tool-apktool",
+      "aliases": [
+        "apktool"
+      ]
+    },
+    {
+      "id": "tool-aws",
+      "aliases": [
+        "AWS",
+        "boto3"
+      ]
+    },
+    {
+      "id": "tool-azure",
+      "aliases": [
+        "Azure"
+      ]
+    },
+    {
+      "id": "tool-burp",
+      "aliases": [
+        "Burp Suite",
+        "burpsuite"
+      ]
+    },
+    {
+      "id": "tool-checkmarx",
+      "aliases": [
+        "Checkmarx"
+      ]
+    },
+    {
+      "id": "tool-curl",
+      "aliases": [
+        "curl"
+      ]
+    },
+    {
+      "id": "tool-docker",
+      "aliases": [
+        "Docker"
+      ]
+    },
+    {
+      "id": "tool-fortify",
+      "aliases": [
+        "Fortify",
+        "sourceanalyzer"
+      ]
+    },
+    {
+      "id": "tool-frida",
+      "aliases": [
+        "frida"
+      ]
+    },
+    {
+      "id": "tool-gcp",
+      "aliases": [
+        "GCP"
+      ]
+    },
+    {
+      "id": "tool-gobuster",
+      "aliases": [
+        "gobuster"
+      ]
+    },
+    {
+      "id": "tool-jadx",
+      "aliases": [
+        "jadx"
+      ]
+    },
+    {
+      "id": "tool-kube-bench",
+      "aliases": [
+        "kube-bench"
+      ]
+    },
+    {
+      "id": "tool-kube-hunter",
+      "aliases": [
+        "kube-hunter"
+      ]
+    },
+    {
+      "id": "tool-kubernetes",
+      "aliases": [
+        "kubectl",
+        "Kubernetes"
+      ]
+    },
+    {
+      "id": "tool-masscan",
+      "aliases": [
+        "masscan"
+      ]
+    },
+    {
+      "id": "tool-metasploit",
+      "aliases": [
+        "Metasploit",
+        "msfconsole"
+      ]
+    },
+    {
+      "id": "tool-mobsf",
+      "aliases": [
+        "MobSF"
+      ]
+    },
+    {
+      "id": "tool-nessus",
+      "aliases": [
+        "Nessus"
+      ]
+    },
+    {
+      "id": "tool-nmap",
+      "aliases": [
+        "nmap"
+      ]
+    },
+    {
+      "id": "tool-objection",
+      "aliases": [
+        "objection"
+      ]
+    },
+    {
+      "id": "tool-openvas",
+      "aliases": [
+        "OpenVAS"
+      ]
+    },
+    {
+      "id": "tool-phpggc",
+      "aliases": [
+        "phpggc"
+      ]
+    },
+    {
+      "id": "tool-prowler",
+      "aliases": [
+        "prowler"
+      ]
+    },
+    {
+      "id": "tool-python",
+      "aliases": [
+        "python3",
+        "Python",
+        "requests"
+      ]
+    },
+    {
+      "id": "tool-semgrep",
+      "aliases": [
+        "semgrep"
+      ]
+    },
+    {
+      "id": "tool-sonarqube",
+      "aliases": [
+        "SonarQube",
+        "sonar-scanner"
+      ]
+    },
+    {
+      "id": "tool-sqlmap",
+      "aliases": [
+        "sqlmap"
+      ]
+    },
+    {
+      "id": "tool-trivy",
+      "aliases": [
+        "trivy"
+      ]
+    },
+    {
+      "id": "tool-ysoserial",
+      "aliases": [
+        "ysoserial"
+      ]
+    },
+    {
+      "id": "tool-zap",
+      "aliases": [
+        "OWASP ZAP",
+        "zap-cli",
+        "zap.py",
+        "ZAPv2"
+      ]
+    }
+  ]
+}
