@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -63,7 +64,7 @@ func argumentObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
 		return nil, fmt.Errorf("expected a JSON object")
 	}
 	fields := make(map[string]json.RawMessage)
-	seen := []string{}
+	seen := make(map[string]bool)
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
@@ -73,16 +74,14 @@ func argumentObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
 		if !ok {
 			return nil, fmt.Errorf("invalid argument object key")
 		}
-		folded := strings.ToLower(key)
-		if folded == "arguments" && key != "arguments" {
+		folded := foldArgumentName(key)
+		if strings.EqualFold(key, "arguments") && key != "arguments" {
 			return nil, fmt.Errorf("arguments wrapper must use the exact lowercase field name")
 		}
-		for _, prior := range seen {
-			if strings.EqualFold(prior, key) {
-				return nil, fmt.Errorf("duplicate argument field %q", key)
-			}
+		if seen[folded] {
+			return nil, fmt.Errorf("duplicate argument field %q", key)
 		}
-		seen = append(seen, key)
+		seen[folded] = true
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
 			return nil, fmt.Errorf("invalid argument object")
@@ -97,4 +96,20 @@ func argumentObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
 		return nil, fmt.Errorf("unexpected data after argument object")
 	}
 	return fields, nil
+}
+
+// Canonicalize the Unicode SimpleFold equivalence class, as encoding/json does,
+// while keeping duplicate checks linear in the size of a bounded input object.
+func foldArgumentName(key string) string {
+	var b strings.Builder
+	for _, r := range key {
+		smallest := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < smallest {
+				smallest = next
+			}
+		}
+		b.WriteRune(smallest)
+	}
+	return b.String()
 }
