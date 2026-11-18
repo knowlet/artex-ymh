@@ -17,10 +17,7 @@ func newLifecycleTestServer(t *testing.T, m *Manager, skillDir, dataDir, keyDir 
 		for _, task := range m.List() {
 			s.engine.StopTask(task.ID)
 		}
-		s.archiveWG.Wait()
-		if s.side != nil {
-			<-s.side.done
-		}
+		s.WaitBackgroundWorkers()
 	})
 	return s
 }

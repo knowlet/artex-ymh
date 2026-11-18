@@ -459,6 +459,7 @@ func TestApprovalAdvisoryWorkerSkipsPoisonThenReviewsNext(t *testing.T) {
 	if _, err := s.m.pg.Exec(`UPDATE intercept_pending SET tool_input=$2 WHERE id=$1`, poison, big); err != nil {
 		t.Fatal(err)
 	}
+	advisoryWorkerTestCleanup(t, s)
 	s.startApprovalAdvisoryWorker(t.Context())
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
