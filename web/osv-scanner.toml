@@ -1,11 +1,11 @@
-# OSV ignore list for web/package-lock.json (dev/tooling transitives). Revisit effectiveUntil.
+# OSV ignore list for web/package-lock.json (dev/tooling transitives). Revisit ignoreUntil.
 
 [[IgnoredVulns]]
 id = "GHSA-fc5q-39xc-vjpf"
-effectiveUntil = 2026-12-18
+ignoreUntil = 2026-12-18
 reason = "picomatch@4.0.7: dev/tooling-only transitive (lint-staged, @dotenvx/dotenvx/fdir); GHSA-fc5q-39xc-vjpf/CVE-2026-112366; no released fix (npm latest still 4.0.7; fix PR micromatch/picomatch#194 unreleased)."
 
 [[IgnoredVulns]]
 id = "GHSA-fc5q-39xc-vjpf"
-effectiveUntil = 2026-12-18
+ignoreUntil = 2026-12-18
 reason = "picomatch@2.3.2: dev/tooling-only transitive (shadcn→fast-glob→micromatch); same GHSA-fc5q-39xc-vjpf/CVE-2026-112366; no released fix for this 2.x lockfile pin."
