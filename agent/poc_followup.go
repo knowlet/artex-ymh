@@ -127,14 +127,6 @@ func intentLooksLikePOCVerification(summary string, exploration map[string]any) 
 	return false
 }
 
-func parentSet(parentsOf map[int64][]int64, intentID int64) map[int64]bool {
-	out := map[int64]bool{}
-	for _, id := range parentsOf[intentID] {
-		out[id] = true
-	}
-	return out
-}
-
 func intentCoversPOCFact(openRunning []*db.Node, parentsOf map[int64][]int64, factID int64) bool {
 	for _, n := range openRunning {
 		if n.Kind != db.KindIntent {
