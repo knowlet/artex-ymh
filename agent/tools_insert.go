@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/honeydetect"
 	actool "github.com/Autumn-27/norma/tool"
+	"golang.org/x/net/idna"
 )
 
 // assetInterceptCandidates 提取一条待插入资产输入项的 域名/IP/URL 候选串，用于资产拦截匹配。
@@ -41,6 +44,40 @@ func assetInterceptCandidates(item assetInputItem) (domains, ips, urls []string)
 		}
 	}
 	return domains, ips, urls
+}
+
+// Reject repeated root separators before storage can remove one and change the
+// host's policy identity. Valid candidates retain the existing rule semantics.
+func evaluateAssetInputGate(blockRules, allowRules []db.AssetInterceptRule, item assetInputItem) db.AssetGateDecision {
+	domains, ips, urls := assetInterceptCandidates(item)
+	invalid := db.AssetGateDecision{Allowed: false, Reason: "域名或 URL 主机名末尾不能有多个连续的根分隔符"}
+	for _, host := range domains {
+		if repeatedAssetRootSeparators(host) {
+			return invalid
+		}
+	}
+	for _, raw := range urls {
+		if u, err := url.Parse(strings.TrimSpace(raw)); err == nil && repeatedAssetRootSeparators(u.Hostname()) {
+			return invalid
+		}
+	}
+	return db.EvaluateAssetGate(blockRules, allowRules, domains, ips, urls)
+}
+
+func repeatedAssetRootSeparators(host string) bool {
+	host = strings.TrimSpace(host)
+	// A valid IP zone may contain dots; it has no DNS root suffix to validate.
+	if _, err := netip.ParseAddr(host); err == nil {
+		return false
+	}
+	host = strings.ToLower(host)
+	// Inspect successful lookup mappings before removing any root separator;
+	// IDNA may ignore characters between dots. Discard partial error results.
+	if ascii, err := idna.Lookup.ToASCII(host); err == nil {
+		host = ascii
+	}
+	prefix := strings.TrimRight(host, ".。．｡")
+	return utf8.RuneCountInString(host[len(prefix):]) > 1
 }
 
 // assetInputLabel 返回一条待插入资产的简短标识，用于拦截说明消息。
@@ -251,8 +288,7 @@ func (t *ToolSet) insertAssets() actool.CoreTool {
 
 			for i, item := range a.Assets {
 				// 资产闸门：先拦截后允许，被拒的资产禁止插入（跳过 Upsert 及后续副作用）。
-				domains, ips, urls := assetInterceptCandidates(item)
-				if d := db.EvaluateAssetGate(blockRules, allowRules, domains, ips, urls); !d.Allowed {
+				if d := evaluateAssetInputGate(blockRules, allowRules, item); !d.Allowed {
 					errs = append(errs, errEntry{
 						Index: i,
 						Error: fmt.Sprintf("资产 %s %s，已禁止插入", assetInputLabel(item), d.Reason),

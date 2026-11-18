@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/internal/endpoint"
+	"github.com/Autumn-27/artex/internal/llmwire"
 	"github.com/Autumn-27/artex/llmrec"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/compaction"
@@ -263,6 +264,11 @@ func (c Config) NewProvider() (llm.Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	if c.Format == llm.FormatOpenAI {
+		// llmwire sits outside quotaAwareTransport: llmrec tees the upstream raw
+		// SSE here, while Norma reads the normalized response body from llmwire.
+		client.Transport = llmwire.Wrap(client.Transport)
+	}
 	lc := llm.Config{
 		Format:     c.Format,
 		BaseURL:    dest.BaseURL,
@@ -342,7 +348,7 @@ func IsQuotaExhaustedMessage(message string) bool {
 type quotaAwareTransport struct {
 	base http.RoundTripper
 	// sessionHeaderKey, when non-empty, is the HTTP header name each request
-	// carries; its value is the session id read from the request context. Empty
+	// carries; its value is THIS run's session id read from the request context. Empty
 	// disables it. See Config.SessionHeaderKey.
 	sessionHeaderKey string
 }

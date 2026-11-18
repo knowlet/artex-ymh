@@ -1,7 +1,7 @@
 # Managed local OSV / Trivy scanners — first integration slice
 
 Stacked follow-up to #10, not a replacement intelligence/source updater. Pins:
-**OSV-Scanner v2.7.0**, **Trivy v0.76.1**, Linux amd64. The original refresh,
+**OSV-Scanner v2.7.1**, **Trivy v0.76.2**, Linux amd64. The original refresh,
 ProjectDiscovery bundle, installer, discovery runner and server permissions are
 unchanged. Installation fails if these reviewed pins drift from #10's registry;
 a registry refresh cannot silently upgrade this execution lane.

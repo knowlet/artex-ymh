@@ -24,6 +24,9 @@ func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64) []map[
 		var p map[string]any
 		_ = json.Unmarshal(n.Payload, &p)
 		m := map[string]any{"id": n.ID, "summary": p["summary"], "state": n.State}
+		if exploration := compactIntentExploration(n.Payload); exploration != nil {
+			m["exploration"] = exploration
+		}
 		if n.Inherited {
 			m["source_task_id"] = n.SourceTaskID
 			m["inherited"] = true
@@ -449,7 +452,7 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 	// via node_detail(id).
 	vulnNodes, _ := t.ts.ListByKind(db.KindFinding, 1000)
 	factNodes, _ := t.ts.ListByKind(db.KindFact, 1000) // newest first
-	out["facts"] = len(factNodes) // 探索事实/结论数（含否定结论）
+	out["facts"] = len(factNodes)                      // 探索事实/结论数（含否定结论）
 	// findings 是任务里最高价值的产物 → 概览带最新一窗（≤10 条，vulnNodes 已按 id 降序即最新在前），
 	// 让 planner 每轮判目标时一眼看到最近确认的漏洞；全量/更早的用 list_findings 取。
 	// 每条只留 {id, summary, status?, from_intent?}：status 是 triage 状态(pending=待验证,C4)；
@@ -546,6 +549,14 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 		recentDone = recentDone[:recentDoneCap]
 	}
 	out["recent_done_intents"] = compactIntents(recentDone, parentsOf, yieldsOf)
+	// Refresh actual outcomes on every wake-up, including heartbeats where the
+	// original completion trigger is absent. Counts are a bounded recent sample,
+	// not a claim that a route succeeded or has been exhausted.
+	if feedback, err := recentWorkerFeedback(t.ts); err == nil {
+		out["recent_worker_feedback"] = feedback
+	} else {
+		out["worker_feedback_unavailable"] = true
+	}
 	// cold-digest §6.1: 折叠冷区的 digest body，按最新成员时间降序取前 N；被截的更旧 digest
 	// 只给裸 id（仍可 expand_digest 展开），避免冷区唯一出口被无限拉长。
 	const coldDigestsCap = 15
@@ -1067,11 +1078,12 @@ func (t *ToolSet) nodeDetail() actool.CoreTool {
 
 // intentItem 是 add_intent 批量/单条的一条探索方向。
 type intentItem struct {
-	Summary   string            `json:"summary"`
-	AssetIDs  []json.RawMessage `json:"asset_ids"`
-	ParentIDs []json.RawMessage `json:"parent_ids"`
-	Priority  int               `json:"priority"`
-	ChainTags []string          `json:"chain_tags"`
+	Summary     string             `json:"summary"`
+	AssetIDs    []json.RawMessage  `json:"asset_ids"`
+	ParentIDs   []json.RawMessage  `json:"parent_ids"`
+	Priority    int                `json:"priority"`
+	ChainTags   []string           `json:"chain_tags"`
+	Exploration *intentExploration `json:"exploration,omitempty"`
 }
 
 // addOneIntent 创建一条意图节点并连上游血缘，返回 id。
@@ -1085,6 +1097,10 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	// chain_tags(L3 反问骨架路由标签):取值 ∈ chainskel.Categories,至多 2 个。
 	tags := chainskel.NormalizeChainTags(it.ChainTags)
 	if err := chainskel.ValidateChainTags(tags); err != nil {
+		return 0, err
+	}
+	exploration, err := t.prepareIntentExploration(it.Exploration)
+	if err != nil {
 		return 0, err
 	}
 	// 先校验锚点（建节点前，避免坏锚点留下孤儿意图）。
@@ -1119,6 +1135,9 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 		}
 	}
 	payload := map[string]any{"summary": it.Summary}
+	if exploration != nil {
+		payload["exploration"] = exploration
+	}
 	if len(anchors) > 0 {
 		payload["asset_ids"] = anchors
 	}
@@ -1147,21 +1166,25 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 
 func (t *ToolSet) addIntent() actool.CoreTool {
 	return t.writeExpTool("add_intent", "生成【探索方向】写入 frontier，并连入探索链路。意图是开放的探索方向，不是固定类型——用 summary 一句话自由描述要探索/验证/利用什么。\n"+
+		"信息不足时可建立获取新证据的探索意图；可选 exploration 记录待回答的问题、方法、可区分假设的观察与停止条件，不把假设当事实。"+
 		"★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors）。单条则省略 intents 直接给顶层 summary。",
 		obj(map[string]any{
-			"intents":    map[string]any{"type": "array", "description": "【优先用这个】要新增的探索方向数组，按顺序处理。每个元素字段同下方顶层字段（summary/asset_ids/parent_ids/priority/chain_tags）。返回 ids 与本数组等长、同序。", "items": map[string]any{"type": "object"}},
-			"summary":    str("[单条] 一句话描述这个探索方向：做什么+为什么。已写清方向即可，不依赖资产 id。"),
-			"asset_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "本方向要测试/攻击的【目标资产 id】（**尽量传**，0/1/多个；是 list_assets 返回的资产 id，不是探索节点 id）：这条探索方向针对哪些资产（站点/接口/参数/主机等）。只要方向围绕某些具体资产就务必传上——它是「这条探索打哪些目标」的结构化标记，用于覆盖去重、把意图连入资产链路。仅当纯全局侦察、确实没有具体目标资产时才留空。"},
-			"parent_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "上游锚点 id（可选，0/1/多个）：本方向由哪些【已确认的事实(fact)/发现(finding)】综合得出。**只能填已存在的 fact/finding 节点 id,不能填意图/目标/提示**——意图必须锚在已确认知识上,发现驱动而非凭空规划。多个事实共同产生一个新意图就传多个;顶层全新侦察方向请留空（会自动挂到任务起点 origin fact）。"},
-			"priority":   intp("优先级 0-10，默认5"),
-			"chain_tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "攻击面链标签（可选，1-2 个，取值仅限 web/ad/app/priv/pwn/recon/rev/pivot/meta）：按该方向的主要攻击面打标，引擎据此给执行 worker 注入对应场景的反问决策骨架（场景→判据→转向）。拿不准按关键词选（sql/注入→web、域/kerberos→ad、提权→priv、隧道/代理/横向→pivot、逆向/脱壳→rev、堆/栈/ctf→pwn、侦察/指纹→recon、apk/frida/小程序→app）；实在拿不准留空，引擎按 summary 关键词自动匹配。"},
+			"intents":     map[string]any{"type": "array", "description": "【优先用这个】要新增的探索方向数组，按顺序处理。每个元素字段同下方顶层字段（summary/asset_ids/parent_ids/priority/chain_tags/exploration）。返回 ids 与本数组等长、同序。", "items": map[string]any{"type": "object"}},
+			"exploration": intentExplorationSchema(),
+			"summary":     str("[单条] 一句话描述这个探索方向：做什么+为什么。已写清方向即可，不依赖资产 id。"),
+			"asset_ids":   map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "本方向要测试/攻击的【目标资产 id】（**尽量传**，0/1/多个；是 list_assets 返回的资产 id，不是探索节点 id）：这条探索方向针对哪些资产（站点/接口/参数/主机等）。只要方向围绕某些具体资产就务必传上——它是「这条探索打哪些目标」的结构化标记，用于覆盖去重、把意图连入资产链路。仅当纯全局侦察、确实没有具体目标资产时才留空。"},
+			"parent_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "上游锚点 id（可选，0/1/多个）：本方向由哪些【已确认的事实(fact)/发现(finding)】综合得出。**只能填已存在的 fact/finding 节点 id,不能填意图/目标/提示**——意图必须锚在已确认知识上,发现驱动而非凭空规划。多个事实共同产生一个新意图就传多个;顶层全新侦察方向请留空（会自动挂到任务起点 origin fact）。"},
+			"priority":    intp("优先级 0-10，默认5"),
+			"chain_tags":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "攻击面链标签（可选，1-2 个，取值仅限 web/ad/app/priv/pwn/recon/rev/pivot/meta）：按该方向的主要攻击面打标，引擎据此给执行 worker 注入对应场景的反问决策骨架（场景→判据→转向）。拿不准按关键词选（sql/注入→web、域/kerberos→ad、提权→priv、隧道/代理/横向→pivot、逆向/脱壳→rev、堆/栈/ctf→pwn、侦察/指纹→recon、apk/frida/小程序→app）；实在拿不准留空，引擎按 summary 关键词自动匹配。"},
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
 				Intents    []intentItem `json:"intents"`
 				intentItem              // 单条模式：顶层 summary/asset_ids/parent_ids/priority
 			}
-			_ = json.Unmarshal(in, &a)
+			if err := json.Unmarshal(in, &a); err != nil {
+				return actool.Errorf("Invalid add_intent input: " + err.Error()), nil
+			}
 			batch := len(a.Intents) > 0
 			items := a.Intents
 			if !batch {
@@ -1958,23 +1981,9 @@ func (t *ToolSet) getWorkerOutput() actool.CoreTool {
 			if intentNode == nil || intentNode.Kind != db.KindIntent {
 				return actool.Errorf("intent_id 不属于本任务或其直接关联任务"), nil
 			}
-			acts, _, err := t.ts.ActivityListWithSources(id, 0, 1000)
+			pick, err := latestWorkerOutput(t.ts, id)
 			if err != nil {
 				return actool.Errorf(err.Error()), nil
-			}
-			var chosen, fallback *db.Activity
-			for i := range acts {
-				switch acts[i].Kind {
-				case "result":
-					chosen = &acts[i]
-					fallback = &acts[i]
-				case "text":
-					fallback = &acts[i]
-				}
-			}
-			pick := chosen
-			if pick == nil {
-				pick = fallback
 			}
 			if pick == nil {
 				if intentNode.Inherited {
@@ -1984,16 +1993,16 @@ func (t *ToolSet) getWorkerOutput() actool.CoreTool {
 				}
 				return actool.Text("（该 work 尚无任何输出）"), nil
 			}
-			detail, _ := t.ts.ActivityDetailWithSources(pick.ID)
+			detail := pick.Detail
 			if detail == "" {
 				detail = pick.Summary
 			}
 			result := map[string]any{
 				"intent_id": id, "final_text": detail,
-				"summary": pick.Summary, "is_error": pick.IsError,
+				"step_id": pick.ID, "summary": pick.Summary, "is_error": pick.IsError,
 			}
-			if intentNode.Inherited {
-				inheritedMap(result, intentNode.SourceTaskID)
+			if pick.Inherited {
+				inheritedMap(result, pick.SourceTaskID)
 			}
 			return jsonResult(result)
 		})

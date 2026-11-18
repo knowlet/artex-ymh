@@ -246,6 +246,8 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		s.seedTunnelTools()        // 隧道工具 seed 进 tools 表(默认绑 worker)
 		s.initReverse(dataDir)     // 期 5 反弹 handler:penelope 受管进程 + 上期 reverse 会话诚实标 dead
 		s.seedReverseTools()       // reverse_listen 工具 seed 进 tools 表(默认绑 worker)
+
+		s.seedWorkerCapabilitiesTool() // planner 只读查询 worker 的配置能力,不改变执行绑定
 		if err := s.seedFindingRetester(); err != nil {
 			log.Printf("[retester] seed: %v", err)
 		}
