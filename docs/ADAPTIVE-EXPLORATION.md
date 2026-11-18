@@ -112,7 +112,7 @@ inherited output read, with explicit source attribution. Reopened or deleted
 source work is not exposed by a stale prior node lookup.
 
 Feedback excerpts are bounded and marked as untrusted data. Existing
-`get_worker_trace` pagination remains unchanged; the supplied step IDs support
+`get_worker_trace` read behavior remains unchanged; the supplied step IDs support
 targeted full-detail reads. The new partial activity index is additive and is
 created by the existing startup schema migration.
 
