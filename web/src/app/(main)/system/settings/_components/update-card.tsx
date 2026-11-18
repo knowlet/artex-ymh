@@ -41,6 +41,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export function UpdateCard() {
   const [info, setInfo] = React.useState<UpdateCheck | null>(null);
   const [checking, setChecking] = React.useState(true);
+  const [requestError, setRequestError] = React.useState<string | null>(null);
   const [progress, setProgress] = React.useState<UpdateProgress | null>(null);
   // 与 progress 分开：暂存完成后进程就没了，SSE 会断，此时要切到轮询 /api/health。
   const [restarting, setRestarting] = React.useState(false);
@@ -50,19 +51,25 @@ export function UpdateCard() {
   // 用户手动点「检查更新」则强制回源，否则刚发布的版本要等缓存过期才看得到。
   const check = React.useCallback((quiet = false) => {
     setChecking(true);
+    setRequestError(null);
     api
       .checkUpdate(!quiet)
       .then((r) => {
         setInfo(r);
         if (!quiet) {
-          if (r.error) toast.error("检查更新失败：" + r.error);
+          if (r.release_status === "no_release" || r.error_code === "no_release")
+            toast.info(r.message ?? r.error ?? "此仓库尚未发布正式版本。");
+          else if (r.error) toast.error("检查更新失败：" + r.error);
           else if (r.has_update && r.install_enabled) toast.success(`发现新版本 ${r.latest}`);
           else if (r.has_update) toast.message(`发现新版本 ${r.latest}（一键安装未启用，请从源码编译升级）`);
           else if (r.comparable) toast.success("当前已是最新版本");
         }
       })
       .catch((e) => {
-        if (!quiet) toast.error("检查更新失败：" + (e as Error).message);
+        const message = e instanceof Error ? e.message : "无法读取服务器的更新状态";
+        setInfo(null);
+        setRequestError(message);
+        if (!quiet) toast.error("检查更新失败：" + message);
       })
       .finally(() => setChecking(false));
   }, []);
@@ -134,7 +141,7 @@ export function UpdateCard() {
   );
 
   const doUpdate = () => {
-    if (!info?.install_enabled) return;
+    if (checking || !info?.install_enabled) return;
     const from = info.current;
     const ok = window.confirm(
       `确定更新到 ${info.latest}？\n\n` +
@@ -197,6 +204,7 @@ export function UpdateCard() {
   const pct = downloading ? Math.max(progress?.percent ?? 0, 0) : 100;
   // html_url 来自 GitHub API 响应,只允许 http(s) 进 href;异常值时不渲染链接。
   const changelogHref = safeHref(info?.html_url);
+  const noRelease = info?.release_status === "no_release" || info?.error_code === "no_release";
 
   return (
     // 设置页是多列瀑布流布局，卡片自己负责行间距并禁止跨列断开（见 page.tsx 的注释）。
@@ -255,7 +263,30 @@ export function UpdateCard() {
           <p className="text-xs text-muted-foreground">{info.install_reason}</p>
         )}
 
-        {info?.error && (
+        {noRelease && (
+          <p className="rounded-md border bg-muted/50 p-2 text-xs text-muted-foreground">
+            {info?.message ?? info?.error ?? "此仓库尚未发布正式版本。"}
+            {" 可继续使用当前版本，发布情况请查看 "}
+            <a
+              href="https://github.com/knowlet/artex-ymh/releases"
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-4"
+            >
+              knowlet/artex-ymh Releases
+            </a>
+            。
+          </p>
+        )}
+
+        {requestError && (
+          <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+            <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+            无法读取服务器的更新状态：{requestError}
+          </p>
+        )}
+
+        {info?.error && !noRelease && (
           <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
             <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
             检查更新：{info.error}
@@ -313,7 +344,12 @@ export function UpdateCard() {
             size="sm"
             onClick={doUpdate}
             disabled={
-              busy || restarting || !info?.install_enabled || !info?.has_update || info?.asset_available === false
+              checking ||
+              busy ||
+              restarting ||
+              !info?.install_enabled ||
+              !info?.has_update ||
+              info?.asset_available === false
             }
           >
             <DownloadIcon className="size-4" />
