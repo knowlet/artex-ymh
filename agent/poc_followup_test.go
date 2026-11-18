@@ -81,6 +81,39 @@ func TestRenderPOCFollowupGuidanceOnlyOpenItems(t *testing.T) {
 	}
 }
 
+func TestBuildPOCFollowupSnapshotCompletedVerificationFinding(t *testing.T) {
+	fact := &db.Node{ID: 10, Kind: db.KindFact, Payload: []byte(`{"summary":"登录成功并取得 session cookie","confidence":"observed"}`)}
+	enum := &db.Node{ID: 5, Kind: db.KindIntent, State: "done", Payload: []byte(`{"summary":"枚举登录"}`)}
+	verify := &db.Node{ID: 30, Kind: db.KindIntent, State: "done", Payload: []byte(`{"summary":"验证 session 越权 PoC"}`)}
+	finding := &db.Node{ID: 40, Kind: db.KindFinding, Payload: []byte(`{"summary":"session hijack confirmed"}`)}
+	parentsOf := map[int64][]int64{30: {10}}
+	yieldsOf := map[int64][]int64{5: {10}, 30: {40}}
+	factFrom := map[int64]int64{10: 5}
+	all := []*db.Node{enum, verify}
+	snap := buildPOCFollowupSnapshot([]*db.Node{fact}, []*db.Node{finding}, all, parentsOf, yieldsOf, factFrom, nil)
+	if len(snap.Candidates) != 0 {
+		t.Fatalf("finding via verification child must not re-open candidate: %+v", snap.Candidates)
+	}
+}
+
+func TestBuildPOCFollowupSnapshotCompletedVerificationNoFinding(t *testing.T) {
+	fact := &db.Node{ID: 10, Kind: db.KindFact, Payload: []byte(`{"summary":"authenticated session established","confidence":"observed"}`)}
+	verify := &db.Node{ID: 30, Kind: db.KindIntent, State: "done", Payload: []byte(`{"summary":"verify session PoC"}`)}
+	parentsOf := map[int64][]int64{30: {10}}
+	yieldsOf := map[int64][]int64{30: {99}}
+	factFrom := map[int64]int64{10: 5}
+	snap := buildPOCFollowupSnapshot([]*db.Node{fact}, nil, []*db.Node{verify}, parentsOf, yieldsOf, factFrom, nil)
+	if len(snap.Candidates) != 1 {
+		t.Fatalf("negative closure should remain visible: %+v", snap.Candidates)
+	}
+	if snap.Candidates[0]["needs_followup"] != false {
+		t.Fatalf("completed verification without finding is terminal closure: %+v", snap.Candidates[0])
+	}
+	if g := renderPOCFollowupGuidance(map[string]any{"poc_verification_candidates": snap.Candidates}); g != "" {
+		t.Fatalf("terminal negative verification must not nag planner: %q", g)
+	}
+}
+
 func TestBuildPOCFollowupSnapshotUnit(t *testing.T) {
 	fact := &db.Node{ID: 10, Kind: db.KindFact, Payload: []byte(`{"summary":"登录成功并取得 session cookie","confidence":"observed"}`)}
 	open := []*db.Node{{ID: 20, Kind: db.KindIntent, State: "open", Payload: []byte(`{"summary":"verify poc"}`)}}
@@ -145,6 +178,24 @@ func TestGraphOverviewPOCFollowupIntegration(t *testing.T) {
 	}
 	if renderPOCFollowupGuidance(overview2) != "" {
 		t.Fatalf("covered chain should not nag planner")
+	}
+
+	if err := store.SetIntentState(verifyID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	findingID, err := store.AddNode(db.KindFinding, map[string]any{"summary": "session hijack with reproducible PoC"}, 0, "confirmed", "worker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Link(verifyID, db.RelYields, findingID); err != nil {
+		t.Fatal(err)
+	}
+	overview3 := ts.graphOverviewData()
+	if cands3, _ := overview3["poc_verification_candidates"].([]map[string]any); len(cands3) != 0 {
+		t.Fatalf("completed verification finding must drop candidate: %#v", cands3)
+	}
+	if renderPOCFollowupGuidance(overview3) != "" {
+		t.Fatalf("successful PoC must not request another verification")
 	}
 }
 

@@ -123,7 +123,10 @@ func (b *streamBody) frame(data string) error {
 		return err
 	}
 	if e := envelope["error"]; len(e) > 0 && string(e) != "null" {
-		return &ProtocolError{Code: "upstream_stream_error", transient: transientStreamError(e)}
+		if transientStreamError(e) {
+			return protocolTransientError("upstream_stream_error", ErrUpstreamStreamInterrupted)
+		}
+		return protocolError("upstream_stream_error")
 	}
 	var choices []object
 	if raw := envelope["choices"]; len(raw) > 0 && json.Unmarshal(raw, &choices) != nil {
@@ -259,8 +262,10 @@ func (b *streamBody) finalize() error {
 		// No tool frame can be released without a finish marker. A truncated
 		// tool turn stays a permanent protocol failure; a text-only premature
 		// EOF retains transport classification for the caller's safe retry gate.
-		return &ProtocolError{Code: "missing_finish_reason", transient: len(b.calls) == 0 &&
-			len(contentCalls) == 0 && len(refusalCalls) == 0 && contentErr == nil && refusalErr == nil}
+		if len(b.calls) == 0 && len(contentCalls) == 0 && len(refusalCalls) == 0 && contentErr == nil && refusalErr == nil {
+			return protocolTransientError("missing_finish_reason", ErrStreamEndedWithoutFinish)
+		}
+		return protocolError("missing_finish_reason")
 	}
 	indices := make([]int, 0, len(b.calls))
 	for index := range b.calls {

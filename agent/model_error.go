@@ -25,6 +25,10 @@ func IsTransientModelError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
+	var wireErr *llmwire.ProtocolError
+	if errors.As(err, &wireErr) {
+		return wireErr.Transient()
+	}
 	s := strings.ToLower(err.Error())
 	// Gateways use several names for the same context overflow. Replaying an
 	// unchanged request cannot repair it, even when an outer gateway emits 5xx.
@@ -35,10 +39,6 @@ func IsTransientModelError(err error) bool {
 	}
 	if IsQuotaExhaustedMessage(s) {
 		return false
-	}
-	var wireErr *llmwire.ProtocolError
-	if errors.As(err, &wireErr) {
-		return wireErr.Transient()
 	}
 	if match := modelHTTPStatus.FindStringSubmatch(s); len(match) == 2 {
 		code, _ := strconv.Atoi(match[1])

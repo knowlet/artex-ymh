@@ -6,6 +6,7 @@ package llmwire
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,26 +15,48 @@ import (
 	"github.com/Autumn-27/artex/internal/toolargs"
 )
 
+// ErrUpstreamStreamInterrupted marks an upstream SSE error frame before the turn
+// completed. It is attached to ProtocolError for transient retry classification.
+var ErrUpstreamStreamInterrupted = errors.New("upstream stream interrupted")
+
+// ErrStreamEndedWithoutFinish marks a clean socket close without finish_reason.
+var ErrStreamEndedWithoutFinish = errors.New("stream ended without finish_reason")
+
 const (
 	maxBodyBytes = 16 << 20
 	maxToolCalls = 128
 	dsmlMarker   = "<｜DSML｜"
 )
 
-// ProtocolError is a sanitized wire failure. Malformed responses are permanent;
-// only recognized transport failures carry Transient. Do not include prompt text,
-// arguments, or response bodies here: errors enter ordinary logs.
+// ProtocolError is a malformed or incomplete model response at the wire boundary.
+// Do not include prompt text, arguments, or response bodies here: errors enter
+// ordinary logs. Some codes wrap ErrUpstreamStreamInterrupted or io.EOF so
+// transient retry classifiers can recognize transport failures without treating
+// malformed tool output as recoverable.
 type ProtocolError struct {
-	Code      string
-	transient bool
+	Code  string
+	Cause error
 }
 
-// Transient preserves only a sanitized transport classification, never the
-// upstream error body or credentials. Other protocol failures remain permanent.
-func (e *ProtocolError) Transient() bool { return e.transient }
-
 func (e *ProtocolError) Error() string { return "openai tool protocol: " + e.Code }
-func protocolError(code string) error  { return &ProtocolError{Code: code} }
+func (e *ProtocolError) Unwrap() error { return e.Cause }
+
+// Transient reports whether the failure is an upstream transport dropout that can
+// recover on an unchanged replay. Malformed tool turns stay non-transient.
+func (e *ProtocolError) Transient() bool {
+	switch e.Code {
+	case "upstream_stream_error", "missing_finish_reason":
+		return errors.Is(e.Cause, ErrUpstreamStreamInterrupted) || errors.Is(e.Cause, ErrStreamEndedWithoutFinish) || errors.Is(e.Cause, io.EOF) || errors.Is(e.Cause, io.ErrUnexpectedEOF)
+	default:
+		return false
+	}
+}
+
+func protocolError(code string) error { return &ProtocolError{Code: code} }
+
+func protocolTransientError(code string, cause error) error {
+	return &ProtocolError{Code: code, Cause: cause}
+}
 
 type toolSpec struct {
 	Type     string `json:"type"`

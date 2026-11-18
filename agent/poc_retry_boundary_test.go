@@ -112,7 +112,7 @@ func TestPOCFollowupCompletedFindingChildNotRedispatched(t *testing.T) {
 	child := &db.Node{ID: 2, Kind: db.KindIntent, State: "done"}
 	finding := &db.Node{ID: 20, Kind: db.KindFinding}
 	snap := buildPOCFollowupSnapshot([]*db.Node{fact}, []*db.Node{finding}, []*db.Node{enumeration, child}, map[int64][]int64{2: {10}}, map[int64][]int64{2: {20}}, map[int64]int64{10: 1}, nil)
-	if len(snap.Candidates) != 1 || snap.Candidates[0]["needs_followup"] != false {
+	if len(snap.Candidates) != 0 {
 		t.Fatalf("completed finding child requested another verification: %+v", snap)
 	}
 }
