@@ -1,0 +1,507 @@
+{
+  "schema": "artex-upgrade-inventory/v1",
+  "generated_at": "2026-11-11T12:00:06+00:00",
+  "repo": "knowlet/artex-ymh",
+  "reference_date": "2026-11-11",
+  "toolchains": {
+    "go": "go version go1.27.4 linux/amd64",
+    "node": "v22.23.4",
+    "npm": "10.9.9"
+  },
+  "go_direct_modules": [
+    {
+      "name": "github.com/Autumn-27/norma",
+      "version": "v0.4.4",
+      "indirect": false
+    },
+    {
+      "name": "github.com/golang-jwt/jwt/v5",
+      "version": "v5.3.1",
+      "indirect": false
+    },
+    {
+      "name": "github.com/google/uuid",
+      "version": "v1.6.0",
+      "indirect": false
+    },
+    {
+      "name": "github.com/jackc/pgx/v5",
+      "version": "v5.12.0",
+      "indirect": false
+    },
+    {
+      "name": "github.com/klauspost/compress",
+      "version": "v1.20.4",
+      "indirect": false
+    },
+    {
+      "name": "github.com/lqqyt2423/go-mitmproxy",
+      "version": "v1.9.4",
+      "indirect": false
+    },
+    {
+      "name": "github.com/miekg/dns",
+      "version": "v1.1.73",
+      "indirect": false
+    },
+    {
+      "name": "github.com/projectdiscovery/dnsx",
+      "version": "v1.2.3",
+      "indirect": false
+    },
+    {
+      "name": "golang.org/x/crypto",
+      "version": "v0.58.0",
+      "indirect": false
+    },
+    {
+      "name": "golang.org/x/net",
+      "version": "v0.62.0",
+      "indirect": false
+    },
+    {
+      "name": "golang.org/x/sys",
+      "version": "v0.50.0",
+      "indirect": false
+    },
+    {
+      "name": "golang.org/x/text",
+      "version": "v0.44.0",
+      "indirect": false
+    },
+    {
+      "name": "gopkg.in/yaml.v3",
+      "version": "v3.0.1",
+      "indirect": false
+    },
+    {
+      "name": "modernc.org/sqlite",
+      "version": "v1.52.0",
+      "indirect": false
+    },
+    {
+      "name": "mvdan.cc/sh/v3",
+      "version": "v3.14.1",
+      "indirect": false
+    }
+  ],
+  "npm_packages": [
+    {
+      "name": "@antv/g6",
+      "version": "5.1.1"
+    },
+    {
+      "name": "@antv/graphin",
+      "version": "3.0.5"
+    },
+    {
+      "name": "@base-ui/react",
+      "version": "1.9.0"
+    },
+    {
+      "name": "@biomejs/biome",
+      "version": "2.6.6"
+    },
+    {
+      "name": "@dnd-kit/core",
+      "version": "6.3.1"
+    },
+    {
+      "name": "@dnd-kit/modifiers",
+      "version": "9.0.0"
+    },
+    {
+      "name": "@dnd-kit/sortable",
+      "version": "10.0.0"
+    },
+    {
+      "name": "@fullcalendar/react",
+      "version": "7.1.4"
+    },
+    {
+      "name": "@hookform/resolvers",
+      "version": "7.0.5"
+    },
+    {
+      "name": "@shadcn/react",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@tailwindcss/postcss",
+      "version": "4.3.5"
+    },
+    {
+      "name": "@tanstack/react-table",
+      "version": "9.3.1"
+    },
+    {
+      "name": "@types/d3-geo",
+      "version": "3.1.1"
+    },
+    {
+      "name": "@types/node",
+      "version": "22.20.5"
+    },
+    {
+      "name": "@types/react",
+      "version": "19.3.0"
+    },
+    {
+      "name": "@types/react-dom",
+      "version": "19.3.0"
+    },
+    {
+      "name": "@types/topojson-client",
+      "version": "3.1.5"
+    },
+    {
+      "name": "@xyflow/react",
+      "version": "12.12.1"
+    },
+    {
+      "name": "babel-plugin-react-compiler",
+      "version": "1.0.0"
+    },
+    {
+      "name": "class-variance-authority",
+      "version": "0.7.1"
+    },
+    {
+      "name": "clsx",
+      "version": "2.1.1"
+    },
+    {
+      "name": "cmdk",
+      "version": "1.1.1"
+    },
+    {
+      "name": "d3-geo",
+      "version": "3.1.2"
+    },
+    {
+      "name": "date-fns",
+      "version": "4.4.0"
+    },
+    {
+      "name": "embla-carousel-react",
+      "version": "8.6.0"
+    },
+    {
+      "name": "geist",
+      "version": "1.9.2"
+    },
+    {
+      "name": "husky",
+      "version": "9.1.7"
+    },
+    {
+      "name": "input-otp",
+      "version": "1.5.0"
+    },
+    {
+      "name": "lint-staged",
+      "version": "16.4.0"
+    },
+    {
+      "name": "lucide-react",
+      "version": "1.72.0"
+    },
+    {
+      "name": "next",
+      "version": "16.4.6"
+    },
+    {
+      "name": "next-themes",
+      "version": "0.4.6"
+    },
+    {
+      "name": "postcss",
+      "version": "8.5.32"
+    },
+    {
+      "name": "radix-ui",
+      "version": "1.8.1"
+    },
+    {
+      "name": "react",
+      "version": "19.3.1"
+    },
+    {
+      "name": "react-day-picker",
+      "version": "10.0.2"
+    },
+    {
+      "name": "react-dom",
+      "version": "19.3.1"
+    },
+    {
+      "name": "react-hook-form",
+      "version": "7.92.0"
+    },
+    {
+      "name": "react-is",
+      "version": "19.3.1"
+    },
+    {
+      "name": "react-markdown",
+      "version": "10.1.0"
+    },
+    {
+      "name": "react-resizable-panels",
+      "version": "4.21.0"
+    },
+    {
+      "name": "recharts",
+      "version": "3.10.1"
+    },
+    {
+      "name": "remark-gfm",
+      "version": "4.0.1"
+    },
+    {
+      "name": "shadcn",
+      "version": "4.23.0"
+    },
+    {
+      "name": "simple-icons",
+      "version": "16.37.0"
+    },
+    {
+      "name": "sonner",
+      "version": "2.0.8"
+    },
+    {
+      "name": "tailwind-merge",
+      "version": "3.7.0"
+    },
+    {
+      "name": "tailwindcss",
+      "version": "4.3.5"
+    },
+    {
+      "name": "temporal-polyfill",
+      "version": "1.0.8"
+    },
+    {
+      "name": "topojson-client",
+      "version": "3.1.0"
+    },
+    {
+      "name": "ts-node",
+      "version": "10.9.2"
+    },
+    {
+      "name": "tw-animate-css",
+      "version": "1.4.0"
+    },
+    {
+      "name": "typescript",
+      "version": "5.9.3"
+    },
+    {
+      "name": "vaul",
+      "version": "1.1.2"
+    },
+    {
+      "name": "zod",
+      "version": "4.6.7"
+    },
+    {
+      "name": "zustand",
+      "version": "5.1.0"
+    }
+  ],
+  "docker_base_images": [
+    {
+      "file": "Dockerfile.source",
+      "from": "node:22-alpine"
+    },
+    {
+      "file": "Dockerfile.source",
+      "from": "golang:1.27.4-alpine"
+    },
+    {
+      "file": "Dockerfile.source",
+      "from": "python:3.12-slim-bookworm"
+    },
+    {
+      "file": "Dockerfile",
+      "from": "python:3.12-slim-bookworm"
+    }
+  ],
+  "github_actions_uses": [
+    {
+      "workflow": "discovery-tests.yml",
+      "uses": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+    },
+    {
+      "workflow": "discovery-tests.yml",
+      "uses": "actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5"
+    },
+    {
+      "workflow": "discovery-tests.yml",
+      "uses": "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+    },
+    {
+      "workflow": "provider-tests.yml",
+      "uses": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+    },
+    {
+      "workflow": "provider-tests.yml",
+      "uses": "actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5"
+    },
+    {
+      "workflow": "selfupdate-safety.yml",
+      "uses": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+    },
+    {
+      "workflow": "selfupdate-safety.yml",
+      "uses": "actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5"
+    },
+    {
+      "workflow": "selfupdate-safety.yml",
+      "uses": "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020"
+    },
+    {
+      "workflow": "claude-red-skills.yml",
+      "uses": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+    },
+    {
+      "workflow": "claude-red-skills.yml",
+      "uses": "actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5"
+    },
+    {
+      "workflow": "hardening.yml",
+      "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+    },
+    {
+      "workflow": "local-scanners.yml",
+      "uses": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+    },
+    {
+      "workflow": "local-scanners.yml",
+      "uses": "actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5"
+    },
+    {
+      "workflow": "local-scanners.yml",
+      "uses": "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+    },
+    {
+      "workflow": "traffic-tests.yml",
+      "uses": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+    },
+    {
+      "workflow": "traffic-tests.yml",
+      "uses": "actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5"
+    },
+    {
+      "workflow": "tools-bundle.yml",
+      "uses": "actions/checkout@v4"
+    },
+    {
+      "workflow": "tools-bundle.yml",
+      "uses": "actions/setup-python@v5"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/checkout@v4"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/setup-go@v5"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/checkout@v4"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/setup-node@v4"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/upload-artifact@v4"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/checkout@v4"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/setup-go@v5"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/download-artifact@v4"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/upload-artifact@v4"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/download-artifact@v4"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/download-artifact@v4"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "softprops/action-gh-release@v2"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/checkout@v4"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/download-artifact@v4"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "actions/download-artifact@v4"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "docker/setup-qemu-action@v3"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "docker/setup-buildx-action@v3"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "docker/login-action@v3"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "docker/metadata-action@v5"
+    },
+    {
+      "workflow": "release.yml",
+      "uses": "docker/build-push-action@v6"
+    },
+    {
+      "workflow": "security-regressions.yml",
+      "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+    },
+    {
+      "workflow": "security-regressions.yml",
+      "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff"
+    },
+    {
+      "workflow": "security-regressions.yml",
+      "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+    },
+    {
+      "workflow": "security-regressions.yml",
+      "uses": "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020"
+    }
+  ],
+  "ci_postgres_image": "postgres:17",
+  "pr_integration_notes": {
+    "pr15": "Adds intercept advisory Playwright e2e; no go.mod diff vs main at fetch time.",
+    "pr17": "Audn URL validation; no dependency manifest diff vs main at fetch time."
+  }
+}

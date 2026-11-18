@@ -307,6 +307,8 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 		"install_reason":  selfupdate.InstallDisabledReason,
 		"boot_notice":     boot.Detail,
 		"rolled_back":     boot.RolledBack,
+		"release_status":  "error",
+		"asset_available": false,
 	}
 
 	// 顶栏提示走缓存（默认）；用户点"检查更新"时带 force=1 强制回源。
@@ -314,17 +316,19 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	client := selfupdate.NewClient(s.m.GlobalProxy())
 	rel, err := relCache.getChannel(r.Context(), client, force, channel)
 	if err != nil {
-		out["error_code"] = selfupdate.CheckErrorCode(err)
 		if selfupdate.CheckErrorCode(err) == "no_release" {
+			// 仓库可访问但没有正式版本，是正常查询结果，不是连接失败。
 			out["release_status"] = "no_release"
 			out["message"] = err.Error()
 		} else {
 			out["error"] = err.Error()
+			out["error_code"] = selfupdate.CheckErrorCode(err)
 		}
 		writeJSON(w, 200, out)
 		return
 	}
 
+	out["release_status"] = "available"
 	latest := rel.TagName
 	out["latest"] = latest
 	out["release_status"] = "available"

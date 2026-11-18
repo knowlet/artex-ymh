@@ -44,7 +44,7 @@ cd artex-ymh
 
 ### 方式二：从源码编译单二进制
 
-> 前置要求：Go ≥ 1.26、Node ≥ 20（前端构建内存建议 ≥ 4G)。
+> 前置要求：Go ≥ 1.27、Node ≥ 20（前端构建内存建议 ≥ 4G)。
 > **老发行版注意**:Node ≥ 18 官方构建要求 glibc ≥ 2.28,Ubuntu 18.04(glibc 2.27）无法运行——需用 [unofficial-builds 的 glibc-217 构建](https://unofficial-builds.nodejs.org/download/release/)或换更新的系统。
 > **国内网络**：克隆 GitHub、npm、Go 模块可能需要代理/镜像，参考：`git config --global http.proxy socks5h://127.0.0.1:7890`、`npm config set registry https://registry.npmmirror.com`、`go env -w GOPROXY=https://goproxy.cn,direct`。
 

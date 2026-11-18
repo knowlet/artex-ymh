@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 50
     services:
       postgres:
-        image: postgres:16
+        image: postgres:17
         env:
           POSTGRES_USER: artex_test
           POSTGRES_PASSWORD: disposable_test_password

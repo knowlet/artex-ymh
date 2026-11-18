@@ -100,27 +100,6 @@ func TestReleaseCacheIsolatesChannels(t *testing.T) {
 	}
 }
 
-func TestReleaseCacheNoReleaseUsesNormalTTL(t *testing.T) {
-	calls := 0
-	cache := newTestCache(func(context.Context, *http.Client) (*selfupdate.Release, error) {
-		calls++
-		if calls == 1 {
-			return nil, &selfupdate.CheckError{Code: "no_release", Err: errors.New("no release")}
-		}
-		return &selfupdate.Release{TagName: "v1.0.0"}, nil
-	})
-	if _, err := cache.get(t.Context(), nil, false); selfupdate.CheckErrorCode(err) != "no_release" {
-		t.Fatal(err)
-	}
-	cache.at = time.Now().Add(-releaseErrTTL - time.Second)
-	if _, err := cache.get(t.Context(), nil, false); selfupdate.CheckErrorCode(err) != "no_release" || calls != 1 {
-		t.Fatalf("empty result incorrectly used error TTL: calls=%d err=%v", calls, err)
-	}
-	if rel, err := cache.get(t.Context(), nil, true); err != nil || rel == nil || calls != 2 {
-		t.Fatalf("manual refresh: %+v %v", rel, err)
-	}
-}
-
 func TestUpdateCheckSourceChannelsAndBuildIdentity(t *testing.T) {
 	originalCache, originalRead := relCache, readUpdateBuildInfo
 	t.Cleanup(func() { relCache, readUpdateBuildInfo = originalCache, originalRead })

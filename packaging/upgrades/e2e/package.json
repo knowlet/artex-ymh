@@ -1,0 +1,11 @@
+{
+  "name": "artex-upgrade-e2e",
+  "private": true,
+  "description": "Isolated browser smoke checks for upgrade branch (not PR15 advisory suite)",
+  "devDependencies": {
+    "@playwright/test": "1.65.0"
+  },
+  "scripts": {
+    "test": "playwright test"
+  }
+}

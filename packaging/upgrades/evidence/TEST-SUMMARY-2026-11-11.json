@@ -1,0 +1,45 @@
+{
+  "branch": "cursor/comprehensive-upgrades-a947",
+  "pg_major_migration": {
+    "script": "scripts/rehearse_pg16_to_pg17_major.sh",
+    "evidence": "pg-major-migration-evidence.json",
+    "pre": "PG16 + main baseline binary (go1.26.3)",
+    "cutover": "pg_dump Fc (PG16 client) \u2192 pg_restore on PG17",
+    "post_verify": "upgrade binary go1.27.4 preserves companies/tasks/auth",
+    "rollback": "same pre-cutover dump \u2192 fresh PG16 + baseline binary",
+    "pg17_dump_to_pg16": "unsupported (documented error in evidence)"
+  },
+  "go_test_pg17": {
+    "pass": 2098,
+    "fail": 0,
+    "skip": 6,
+    "artifact": "go-test-pg17-summary.txt"
+  },
+  "browser_e2e": {
+    "tests_passed": 13,
+    "includes": "findings JSON export + UI download, task/finding report markers, staging upload SHA256 round-trip, task create, settings, auth denial",
+    "artifact": "playwright-findings-report-20261111T123837Z.log",
+    "prior_full_run_9_tests_sha": "ad0e64c3534208b10237dc813279ccac33e93e2b",
+    "llm": "none"
+  },
+  "security": {
+    "artifact": "security-advisory-resolution.json",
+    "govulncheck_reachable": 0
+  },
+  "findings_report_e2e": {
+    "stamp": "20261111T123837Z",
+    "seed": {
+      "task_id": "1",
+      "finding_id": 1,
+      "finding_node_id": 2,
+      "summary_marker": "UPGRADE-E2E-FINDING-a947",
+      "report_marker": "UPGRADE-E2E-REPORT-a947",
+      "task_desc": "upgrade-e2e-disposable-findings-a947",
+      "upload_fixture_sha256": "676296ac6d52c46accbf305d812ee2c8f48c6bdf4952536131a75aee5c2b283b"
+    },
+    "fixture_sha256": "676296ac6d52c46accbf305d812ee2c8f48c6bdf4952536131a75aee5c2b283b",
+    "artifact": "findings-report-e2e-20261111T123837Z.log",
+    "playwright_log": "playwright-findings-report-20261111T123837Z.log",
+    "pg_upgrade_note": "logical dump/restore only; pg_upgrade not supported in this pack"
+  }
+}
