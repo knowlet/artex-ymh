@@ -189,6 +189,9 @@ func TestGraphOverviewBlockedPOCRetryHints(t *testing.T) {
 		t.Fatalf("wrong intent in retry hint: %#v", retries[0])
 	}
 	b, _ := json.Marshal(overview["blocked_poc_retries"])
+	if retries[0]["needs_followup"] != false || retries[0]["manual_review_required"] != true || renderPOCFollowupGuidance(overview) != "" {
+		t.Fatalf("blocked work must not request automatic replacement: %s", b)
+	}
 	if !strings.Contains(string(b), "planner_action") {
 		t.Fatalf("expected planner_action in blocked hint")
 	}

@@ -77,7 +77,10 @@ evidence edges together. Identity requires the same complete JSON payload,
 asset set, parent-evidence set and origin; priority changes do not reset work.
 Open (including cooling), running and paused work retain their state and retry
 budget. Different evidence, assets or exploration metadata remains independent.
-Terminal work is not reopened, and historical duplicates are not rewritten.
+Repeated planner admissions also reuse terminal work without reopening it.
+Only new evidence or explicit human reruns may initiate further work; terminal
+PoC follow-ups and pauses no longer emit replacement-work instructions.
+Historical duplicates are not rewritten.
 This is exact admission idempotency, not semantic deduplication or a general
 exactly-once guarantee for tool execution.
 

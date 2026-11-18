@@ -128,8 +128,8 @@ func TestIntentDedupPreservesIdentityAndControl(t *testing.T) {
 			t.Fatal(err)
 		}
 		next := add(payload, nil, []int64{parent})
-		if next == id {
-			t.Fatalf("terminal %s work reopened", state)
+		if next != id {
+			t.Fatalf("planner replaced terminal %s work with a fresh budget", state)
 		}
 		id = next
 	}

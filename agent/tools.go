@@ -616,8 +616,25 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 		}
 	}
 	if plannerPOCFollowupEnabled() {
+		ids := make([]int64, 0, len(factNodes))
+		for _, n := range factNodes {
+			ids = append(ids, n.ID)
+		}
+		followed, err := t.ts.FollowedFactIDs(ids)
+		if err != nil {
+			// Coverage is a retry boundary: storage failure cannot authorize new work.
+			out["poc_followup_unavailable"] = true
+			return out
+		}
 		openRunning := append(append([]*db.Node{}, fr...), running...)
 		snap := buildPOCFollowupSnapshot(factNodes, vulnNodes, all, parentsOf, yieldsOf, factFrom, openRunning)
+		for _, candidate := range snap.Candidates {
+			if id, ok := candidate["fact_id"].(int64); ok && followed[id] {
+				candidate["needs_followup"] = false
+				candidate["covered_by"] = "existing_intent_with_parent"
+				delete(candidate, "planner_action")
+			}
+		}
 		if len(snap.Candidates) > 0 {
 			out["poc_verification_candidates"] = snap.Candidates
 		}

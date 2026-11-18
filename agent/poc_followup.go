@@ -174,7 +174,7 @@ type pocFollowupSnapshot struct {
 // plannerPOCFollowupRules is a static planner addendum; per-round candidates live in graph_overview.
 const plannerPOCFollowupRules = `
 
-【枚举→漏洞验证链】graph_overview 的 poc_verification_candidates 列出 access/session 等事实支撑的验证候选；needs_followup=true 时必须 add_intent 派 worker 索取可复现 PoC（parent_ids 绑定 fact_id），不得以 record_fact 代替 report_finding 收官。blocked_poc_retries 覆盖模型故障后仍可规划的验证意图；永久 llm_quota_exhausted 除外。worker 侧 report_finding 门槛不变。`
+【验证跟进边界】候选事实不等于已确认漏洞。仅未曾跟进的新证据可在既有授权内考虑工作；同一证据已有 done/blocked/exhausted/stopped/paused 意图时，不得另建 ID 重派或重置重试预算。blocked_poc_retries 仅供人工检查，恢复由既有有界 model_retry 或明确人工重跑处理。阴性或无 finding 的结果是合法结束，不要求产出 finding；worker 侧 report_finding 门槛不变。`
 
 func buildPOCFollowupSnapshot(
 	factNodes, findingNodes, allIntents []*db.Node,
@@ -200,7 +200,9 @@ func buildPOCFollowupSnapshot(
 		if fromIntent > 0 && intentYieldsFinding(yieldsOf, kindByID, fromIntent) {
 			continue
 		}
-		covered := intentCoversPOCFact(openRunning, parentsOf, n.ID)
+		// Any existing follow-up is a decision already made for this evidence.
+		// Terminal outcomes and manual pauses must not become fresh retry budgets.
+		covered := intentCoversPOCFact(allIntents, parentsOf, n.ID)
 		item := map[string]any{
 			"fact_id": n.ID, "kind": kind, "summary": sum, "needs_followup": !covered,
 		}
@@ -208,7 +210,7 @@ func buildPOCFollowupSnapshot(
 			item["from_intent"] = fromIntent
 		}
 		if covered {
-			item["covered_by"] = "open_or_running_intent_with_parent"
+			item["covered_by"] = "existing_intent_with_parent"
 		} else {
 			item["planner_action"] = "add_intent: parent_ids=[fact_id], worker obtains reproducible PoC; record_fact alone does not close the chain"
 		}
@@ -266,8 +268,9 @@ func buildPOCFollowupSnapshot(
 			}
 		}
 		retry := map[string]any{
-			"intent_id": n.ID, "summary": summary, "needs_followup": !covered,
-			"model_retry_exhausted": n.ModelRetryCount > 0,
+			"intent_id": n.ID, "summary": summary, "needs_followup": false,
+			"manual_review_required": true,
+			"model_retry_exhausted":  n.ModelRetryCount > 0,
 		}
 		if n.BlockedReason != "" {
 			retry["blocked_reason"] = n.BlockedReason
@@ -276,7 +279,7 @@ func buildPOCFollowupSnapshot(
 			retry["access_fact_ids"] = parentFacts
 		}
 		if !covered {
-			retry["planner_action"] = "dispatch NEW PoC verification add_intent (parent_ids on access facts; prior_intent_ids+change if continuing blocked work); model_retry may reopen the same intent when scheduled—do not duplicate blindly"
+			retry["planner_action"] = "inspect prior outcome; do not create replacement work from the same evidence or reset its retry budget; require new evidence or explicit human rerun"
 		}
 		out.BlockedRetries = append(out.BlockedRetries, retry)
 	}
