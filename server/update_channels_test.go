@@ -17,6 +17,40 @@ import (
 
 const updateTestSHA = "0123456789abcdef0123456789abcdef01234567"
 
+func TestReleaseCacheStableFetchDoesNotBlockOtherChannels(t *testing.T) {
+	stableStarted := make(chan struct{})
+	stableRelease := make(chan struct{})
+	cache := &releaseCache{
+		fetch: func(context.Context, *http.Client) (*selfupdate.Release, error) {
+			close(stableStarted)
+			<-stableRelease
+			return &selfupdate.Release{TagName: "v1.0.0"}, nil
+		},
+		fetchChannel: func(_ context.Context, _ *http.Client, channel selfupdate.Channel) (*selfupdate.Release, error) {
+			return &selfupdate.Release{TagName: string(channel)}, nil
+		},
+	}
+	if _, err := cache.getChannel(t.Context(), nil, false, selfupdate.ChannelNightly); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_, _ = cache.getChannel(t.Context(), nil, false, selfupdate.ChannelStable)
+	}()
+	select {
+	case <-stableStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stable fetch did not start")
+	}
+	start := time.Now()
+	if _, err := cache.getChannel(t.Context(), nil, false, selfupdate.ChannelNightly); err != nil {
+		t.Fatal(err)
+	}
+	if waited := time.Since(start); waited > 200*time.Millisecond {
+		t.Fatalf("nightly blocked on stable fetch for %v", waited)
+	}
+	close(stableRelease)
+}
+
 func TestReleaseCacheIsolatesChannels(t *testing.T) {
 	var mu sync.Mutex
 	calls := map[selfupdate.Channel]int{}

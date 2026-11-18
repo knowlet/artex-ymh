@@ -65,6 +65,7 @@ type releaseCache struct {
 	at  time.Time
 	// fetch 是取数函数，仅为测试留的注入点；为 nil 时走真正的 GitHub 查询。
 	fetch        func(context.Context, *http.Client) (*selfupdate.Release, error)
+	channelsMu   sync.Mutex
 	channels     map[selfupdate.Channel]*releaseCache
 	fetchChannel func(context.Context, *http.Client, selfupdate.Channel) (*selfupdate.Release, error)
 }
@@ -123,7 +124,7 @@ func (c *releaseCache) getChannel(ctx context.Context, client *http.Client, forc
 	if channel != selfupdate.ChannelNightly && channel != selfupdate.ChannelMain {
 		return nil, errors.New("invalid update channel")
 	}
-	c.mu.Lock()
+	c.channelsMu.Lock()
 	if c.channels == nil {
 		c.channels = make(map[selfupdate.Channel]*releaseCache)
 	}
@@ -138,7 +139,7 @@ func (c *releaseCache) getChannel(ctx context.Context, client *http.Client, forc
 		}}
 		c.channels[channel] = cache
 	}
-	c.mu.Unlock()
+	c.channelsMu.Unlock()
 	return cache.get(ctx, client, force)
 }
 
