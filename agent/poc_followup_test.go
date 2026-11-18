@@ -243,7 +243,7 @@ func TestGraphOverviewBlockedPOCRetryHints(t *testing.T) {
 	if retries[0]["needs_followup"] != false || retries[0]["manual_review_required"] != true || renderPOCFollowupGuidance(overview) != "" {
 		t.Fatalf("blocked work must not request automatic replacement: %s", b)
 	}
-	if !strings.Contains(string(b), "planner_action") {
-		t.Fatalf("expected planner_action in blocked hint")
+	if strings.Contains(string(b), "planner_action") {
+		t.Fatalf("covered blocked work must not request planner action: %s", b)
 	}
 }
