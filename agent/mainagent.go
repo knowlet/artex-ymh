@@ -37,6 +37,7 @@ type MainAgent struct {
 	nonStreamingFn  func() bool                            // resolver: use non-streaming (Complete) path? (nil = streaming)
 	maxTokensFn     func() int                             // resolver: per-reply output cap (nil/0 = send no cap)
 	guard           *guard.Guard                           // optional; nil disables intercept hooks for main-agent tool calls
+	uaFn            func(taskID int64) string              // per-task client UA for WebFetch (nil = no override)
 }
 
 // SetNonStreaming wires a resolver deciding whether runs use the non-streaming
@@ -72,6 +73,16 @@ func (m *MainAgent) compactionWindow() int {
 // SetProxy points the main agent's WebFetch at the recording proxy plus the CA
 // cert it trusts to verify HTTPS through it (empty addr = direct).
 func (m *MainAgent) SetProxy(addr, caCert string) { m.proxyAddr, m.proxyCACert = addr, caCert }
+
+// SetUAResolver wires the per-task client User-Agent for WebFetch (same pool as ARTEX_UA).
+func (m *MainAgent) SetUAResolver(fn func(taskID int64) string) { m.uaFn = fn }
+
+func (m *MainAgent) uaForTask(taskID int64) string {
+	if m.uaFn == nil {
+		return ""
+	}
+	return m.uaFn(taskID)
+}
 
 // SetWebSearch selects the web_search backend for the main agent (off by default).
 func (m *MainAgent) SetWebSearch(o WebSearchOpts) { m.webSearch = o }
@@ -139,6 +150,7 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	// 领域工具 + 基础默认工具集（Read/Write/Edit/MultiEdit/LS/Glob/Grep/Bash）
 	// 资产覆盖度功能关闭时剔除 add_task_scope/list_untested_assets（不入 prompt）。
 	base := append(tsx.DropCoverageTools(tsx.MainAgentTools()), actool.DefaultTools()...)
+	base = append(base, newWebFetch(m.proxyAddr, m.proxyCACert, m.guard, m.uaForTask))
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts)})
 	tools, def, cleanup := AugmentTools(ctx, "mainagent", base)
 	defer cleanup()
@@ -154,9 +166,6 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
 		PermissionMode:  permission.ModeBypass,
-		EnableWebFetch:  true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
-		WebFetchProxy:   m.proxyAddr,
-		WebFetchCACert:  m.proxyCACert,
 		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
 		// WebSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
 		EnableWebSearch:       m.webSearch.Enabled,

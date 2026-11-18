@@ -1,0 +1,110 @@
+name: Planner progress and scoped WebFetch
+on:
+  pull_request:
+    paths:
+      - 'agent/**'
+      - 'db/**'
+      - 'guard/**'
+      - 'server/task_llm.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/planner-webfetch.yml'
+      - 'scripts/assert_go_test_results.py'
+  push:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - 'db/**'
+      - 'guard/**'
+      - 'server/task_llm.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/planner-webfetch.yml'
+      - 'scripts/assert_go_test_results.py'
+permissions:
+  contents: read
+concurrency:
+  group: planner-webfetch-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
+        env:
+          POSTGRES_USER: artex_test
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: artex_progress
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U artex_test -d artex_progress"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Disposable fixtures only; no production targets or model credentials.
+      ARTEX_PG_DSN: postgres://artex_test:fixture-only@127.0.0.1:5432/artex_progress?sslmode=disable
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Formatting
+        run: |
+          set -euo pipefail
+          unformatted=$(gofmt -l agent/planner*.go agent/webfetch*.go agent/chat.go agent/mainagent.go agent/worker.go agent/wrapup.go db/planner_progress*.go guard/roe.go guard/tls_scope_test.go server/task_llm.go)
+          test -z "$unformatted"
+      - name: Local TLS and real PostgreSQL regressions
+        run: |
+          set -euo pipefail
+          go test -race -count=1 -p=1 -timeout=8m -json ./guard ./db ./agent \
+            -run '^(TestInsecureTLS|TestWebFetch|TestPlanner)' \
+            | tee "$RUNNER_TEMP/planner-webfetch.jsonl"
+          python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-webfetch.jsonl" \
+            github.com/Autumn-27/artex/guard \
+            TestInsecureTLSRequiresExplicitTaskScope \
+            TestInsecureTLSResolvedAddressScope
+          python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-webfetch.jsonl" \
+            github.com/Autumn-27/artex/db TestPlannerProgressThresholdOneDeduplicatesHints
+          python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-webfetch.jsonl" \
+            github.com/Autumn-27/artex/agent \
+            TestWebFetchScopedTLSOptIn \
+            TestWebFetchTLSRedirectScope \
+            TestWebFetchProxyRequiresExplicitDirectException \
+            TestWebFetchRecordingProxyTLSException \
+            TestWebFetchProxyCATrustAndRedirectGuard \
+            TestWebFetchContentAndSchema \
+            TestWebFetchDeclaredHTMLCharsets \
+            TestWebFetchReconSurvivesOutputLimit \
+            TestWebFetchContentOutputBudget \
+            TestWebFetchRedirectEgressDoesNotLeakSecret \
+            TestWebFetchScopedDNSDial \
+            TestWebFetchLocalHostnameRequiresIPScope \
+            TestWebFetchMalformedRedirectDoesNotLeakSecret \
+            TestWebFetchStrictTLSDowngrade \
+            TestWebFetchRawResponseLimitReported \
+            TestWebFetchUsesTaskUserAgent \
+            TestPlannerProgressRecoveryCreatesIntent \
+            TestPlannerProgressFailedCallsEscalateDurably \
+            TestPlannerProgressCommittedActionsDoNotRetry \
+            TestPlannerProgressExclusionsAndProviderErrors \
+            TestPlannerProgressRecoveryBudget \
+            TestPlannerProgressCorrectionTurnLimit \
+            TestPlannerProgressNoopProofAndCancelledIntent
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: planner-webfetch-test-results
+          path: ${{ runner.temp }}/planner-webfetch.jsonl
+          if-no-files-found: error
+          retention-days: 7

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent/chainskel"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/guard"
 	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/harness"
@@ -59,7 +60,8 @@ type Worker struct {
 	model           string
 	workDir         string
 	proxyAddr       string
-	proxyCACert     string // recording proxy's CA cert path (for WebFetch HTTPS verify)
+	proxyCACert     string       // recording proxy's CA cert path (for WebFetch HTTPS verify)
+	webFetchGuard   *guard.Guard // same task guard as Execute's hooks; authorizes explicit TLS exceptions
 	// taskProxyFn, when set, resolves the task's own MITM instance (期 3b 按任务
 	// 绑定上游:任务 MITM → 任务隧道 socks → 内网). Called per run with the task
 	// id; empty addr = fall back to proxyAddr/proxyCACert.
@@ -212,6 +214,10 @@ func (w *Worker) compactionWindow() int {
 // traffic through, plus the CA cert path WebFetch trusts to verify HTTPS through
 // that MITM proxy. Empty addr disables the hint.
 func (w *Worker) SetProxy(addr, caCert string) { w.proxyAddr, w.proxyCACert = addr, caCert }
+
+// SetWebFetchGuard supplies the task's scope and redirect checks to WebFetch.
+// A nil guard preserves strict TLS and cannot authorize any TLS exception.
+func (w *Worker) SetWebFetchGuard(g *guard.Guard) { w.webFetchGuard = g }
 
 // SetTaskProxyResolver installs the per-task proxy resolver (期 3b): each run
 // asks it for the task's own MITM instance; empty result falls back to SetProxy.
@@ -467,6 +473,8 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// worker 刻意不给 MultiEdit/Glob/Grep：文件精改用 Edit、检索走 Bash(grep/find)，
 	// 收敛工具面、减少低价值调用。其余 SDK 默认工具(Read/Write/Edit/LS/Bash/Sleep)照常。
 	base = append(base, defaultToolsExcept("MultiEdit", "Glob", "Grep")...)
+	proxyAddr, proxyCA := w.proxyForTask(taskID)
+	base = append(base, newWebFetch(proxyAddr, proxyCA, w.webFetchGuard, w.uaForTask))
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts), IntentID: intent.ID})
 	tools, def, cleanup := AugmentTools(ctx, "worker", base)
 	defer cleanup()
@@ -479,9 +487,6 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// worker 有。仅【全局态势 overview】留在启动 user 消息里——它可降级、容忍 stale，压掉无碍。
 	// 本次意图的专属工作目录 <workDir>/tasks/<taskID>/i<intentID>，引擎侧先建好。
 	runDir := ensureRunDir(w.workDir, taskID, intent.ID)
-	// 期 3b:本任务有独立 MITM 实例时用它的地址+CA(上游=任务隧道 socks);
-	// 否则回落全局记录代理/全局出口代理。
-	proxyAddr, proxyCA := w.proxyForTask(taskID)
 	// The run-wide intent is not the current tool action. Do not forward it or
 	// inherit a parent run's background into the action reviewer.
 	ctx = intercept.WithReviewContext(ctx, runDir, intercept.ReviewBackground{})
@@ -534,11 +539,6 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
 		PermissionMode:  permission.ModeBypass,
-		// WebFetch 走记录代理，其 HTTP 与 curl 一样被留痕；载入代理 CA 让经 MITM
-		// 重签的 HTTPS 证书能【正常校验通过】（而非关掉校验）。proxy 空则直连。
-		EnableWebFetch: true,
-		WebFetchProxy:  proxyAddr,
-		WebFetchCACert: proxyCA,
 		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
 		// WebSearchProxy 是独立的出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
 		EnableWebSearch:       w.webSearch.Enabled,

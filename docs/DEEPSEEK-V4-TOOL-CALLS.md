@@ -105,6 +105,76 @@ from one closed issue. Relevant primary references:
 - https://github.com/vllm-project/vllm/issues/40801
 - https://github.com/Autumn-27/Norma/blob/v0.4.3/llm/openai.go
 - https://github.com/Autumn-27/Norma/blob/v0.4.3/llm/accumulate.go
+- https://api-docs.deepseek.com/guides/tool_calls/
+
+## Correlate a stalled planner with wire evidence
+
+The client fixes above are already present in merged PRs
+[#24](https://github.com/knowlet/artex-ymh/pull/24) and
+[#25](https://github.com/knowlet/artex-ymh/pull/25). Confirm the **running binary's
+revision**, not just the checkout's revision, before attributing a later incident
+to the old accumulator. They do not establish what happened in an earlier
+production run, or guarantee that a model will decide to call `add_intent`.
+
+The V4 encoding reference describes model-native DSML; the hosted API guide
+returns structured `message.tool_calls` through an OpenAI-compatible client.
+Using that API adapter is appropriate. For a self-hosted endpoint, its serving
+engine must convert the model's native format to the advertised wire format;
+the profile's model name alone does not identify that engine or its parser.
+
+For one failed planner round, correlate the `exp<N>-planner` session and time
+across activity, the transcript and the LLM record:
+
+1. Inspect the record's `status`/`error` and **HTTP raw** request and response.
+   In the request, verify that `add_intent` was actually offered in `tools` and
+   note the effective model, stream and output-limit settings. In the response,
+   distinguish a valid structured call from DSML in `content`/`refusal`, a
+   truncated turn, or a completed answer containing only analysis/read calls.
+2. If `add_intent` reached activity, inspect its paired `tool_result` by
+   `tool_use_id`, including `is_error`, and the resulting graph state. A tool-use
+   event proves an attempt, not successful creation. The absence of tool blocks
+   from the **normalized LLM-record response** proves nothing: that view omits
+   them by design.
+3. A wire error such as `unparsed_dsml_tool_call`, `invalid_tool_arguments` or
+   `incomplete_tool_turn` identifies a protocol failure. A complete, valid
+   response that never attempted a progress tool instead points to planner/model
+   behavior. Both can leave the graph idle; they require separate evidence.
+
+Recording is opt-in and does not recover exchanges made while it was off.
+`llmrec/capture.go` tees bytes read from the HTTP body before normalization;
+it does not drain a rejected stream's unread tail. In addition,
+`db/commands.go` caps each stored raw body to **1 MiB**, appending a truncation
+marker when exceeded. Neither a missing call after such a cutoff nor an absent
+finish frame in a prematurely closed capture proves the provider never sent it.
+To establish that a call was entirely absent, use a completed, untruncated
+exchange; otherwise retain the diagnosis as unresolved and use a bounded,
+harmless reproduction at the provider. Raw bodies can contain task data and
+tool output, so keep them in the existing access-controlled recording view and
+redact any excerpt shared in a bug report.
+
+### Check the actual planner turn budget
+
+In the current schema, runtime budgets belong to `agents`; `agent_prompts`
+contains versioned prompt templates. `agents.max_turns` defaults to `0`
+(unlimited), and `server.agentMaxTurns` also falls back to `0` when no row is
+available. The planner passes that value to Norma. This source default does
+**not** establish the value stored on a deployed instance. After verifying the
+deployed schema, the following read-only query reports the relevant settings:
+
+```sql
+SELECT key, max_turns, wrapup_max_turns, llm_profile_id
+FROM agents
+WHERE key = 'planner';
+```
+
+`wrapup_max_turns = 0` uses the separate built-in planner settlement budget
+(10 turns); it does not mean settlement is disabled. The previous generic
+settlement prompt permitted zero new intents without distinguishing idle
+heartbeats with unfinished goals. The planner progress guard and updated
+default settlement instruction handle that idle condition
+separately. Verify the terminal reason and effective configured budgets before
+claiming a turn cap caused the original failure; increasing a cap alone cannot
+fix unparsed DSML or enforce a graph state change.
 
 ## Verification
 
