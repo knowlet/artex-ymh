@@ -390,22 +390,51 @@ var builtinSkillVisibility = map[string][]string{
 // seedBuiltinSkillVisibility binds verified shipped skills to their default agents.
 // Insert-if-absent (ON CONFLICT DO NOTHING) so a user's later toggle-off is never
 // resurrected on restart. Unverified same-named directories require an explicit grant.
+
+// SeedBuiltinSkillVisibilityKeys inserts default visibility for the named shipped skills
+// once their target agents exist (used when an agent is created after DB.Open seeding).
+func (d *DB) SeedBuiltinSkillVisibilityKeys(skillRoot string, skillNames ...string) error {
+	if len(skillNames) == 0 {
+		return nil
+	}
+	want := make(map[string]struct{}, len(skillNames))
+	for _, name := range skillNames {
+		want[name] = struct{}{}
+	}
+	for skillName, agentKeys := range builtinSkillVisibility {
+		if _, ok := want[skillName]; !ok {
+			continue
+		}
+		if err := d.seedBuiltinSkillVisibilityBinding(skillRoot, skillName, agentKeys); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (d *DB) seedBuiltinSkillVisibility(skillRoot string) error {
 	for skillName, agentKeys := range builtinSkillVisibility {
-		libraryID := shippedSkillLibraryID(skillRoot, skillName)
-		if libraryID == "" && strings.HasPrefix(skillName, "antifox-") {
-			continue
+		if err := d.seedBuiltinSkillVisibilityBinding(skillRoot, skillName, agentKeys); err != nil {
+			return err
 		}
-		if libraryID == "" && !builtinSkillDirPresent(skillRoot, skillName) {
-			continue
-		}
-		for _, key := range agentKeys {
-			if _, err := d.Exec(`
+	}
+	return nil
+}
+
+func (d *DB) seedBuiltinSkillVisibilityBinding(skillRoot, skillName string, agentKeys []string) error {
+	libraryID := shippedSkillLibraryID(skillRoot, skillName)
+	if libraryID == "" && strings.HasPrefix(skillName, "antifox-") {
+		return nil
+	}
+	if libraryID == "" && !builtinSkillDirPresent(skillRoot, skillName) {
+		return nil
+	}
+	for _, key := range agentKeys {
+		if _, err := d.Exec(`
 INSERT INTO agent_skill_visibility(agent_id, skill_name, library_id, enabled)
 SELECT id, $2, $3, true FROM agents WHERE key=$1
 ON CONFLICT (agent_id, library_id, skill_name) DO NOTHING`, key, skillName, libraryID); err != nil {
-				return fmt.Errorf("skill %s → agent %s: %w", skillName, key, err)
-			}
+			return fmt.Errorf("skill %s → agent %s: %w", skillName, key, err)
 		}
 	}
 	return nil
