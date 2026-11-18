@@ -39,7 +39,20 @@ export function setUpdateChannel(channel: UpdateChannel): void {
 
 export function subscribeUpdateChannel(onChange: () => void): () => void {
   const onStorage = (event: StorageEvent) => {
-    if (event.key === storageKey || event.key === null) onChange();
+    if (event.key !== storageKey && event.key !== null) return;
+    try {
+      if (event.key === storageKey) {
+        const value = window.localStorage.getItem(storageKey);
+        if (isUpdateChannel(value)) {
+          memoryChannel = value;
+        }
+      } else {
+        memoryChannel = "stable";
+      }
+    } catch {
+      // Keep the local fallback when storage reads fail.
+    }
+    onChange();
   };
   window.addEventListener(changeEvent, onChange);
   window.addEventListener("storage", onStorage);

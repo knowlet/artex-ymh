@@ -66,6 +66,28 @@ test("other tabs and storage clearing notify subscribers; unrelated keys do not"
   stop();
 });
 
+test("cross-tab storage changes reconcile the memory fallback", () => {
+  const original = window.localStorage.setItem;
+  window.localStorage.setItem = () => {
+    throw new Error("quota exceeded");
+  };
+  setUpdateChannel("main");
+  assert.equal(getUpdateChannel(), "main");
+  window.localStorage.setItem = original;
+
+  let observed = "";
+  const stop = subscribeUpdateChannel(() => {
+    observed = getUpdateChannel();
+  });
+  store.set("artex_update_channel", "nightly");
+  const event = new Event("storage");
+  Object.defineProperty(event, "key", { value: "artex_update_channel" });
+  window.dispatchEvent(event);
+  assert.equal(observed, "nightly");
+  assert.equal(getUpdateChannel(), "nightly");
+  stop();
+});
+
 test("blocked writes keep the selection usable even when reads still work", () => {
   const original = window.localStorage.setItem;
   window.localStorage.setItem = () => {
