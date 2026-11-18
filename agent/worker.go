@@ -609,7 +609,11 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// restarting from scratch.
 	alreadyRecorded := false
 	var verifiedRetry []transcript.Record
-	if intent.ModelRetryCount > 0 {
+	if intent.ModelRetryCount > 0 && strings.HasPrefix(intent.ModelRetryRevision, db.ConsumedModelRetryRevisionPrefix) {
+		if err := w.CheckModelRetryTranscript(ts.ID(), intent.ID, nil); err != nil {
+			return harness.ReasonModelError, tsx.Writes(), err
+		}
+	} else if intent.ModelRetryCount > 0 {
 		var err error
 		verifiedRetry, err = w.VerifiedModelRetryTranscriptSince(ts.ID(), intent.ID, WorkerRetryCheckpoint{}, nil)
 		if err != nil {
@@ -631,6 +635,14 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 			if string(expected) != string(actual) || usage != s.Usage() {
 				return harness.ReasonModelError, tsx.Writes(), fmt.Errorf("worker retry resume differs from verified transcript; manual inspection required")
 			}
+			ok, err := ts.ConsumeIntentModelRetryRevision(ctx, intent.ID, intent.ModelRetryRevision)
+			if err != nil {
+				return harness.ReasonModelError, tsx.Writes(), fmt.Errorf("consume worker recovery revision: %w", err)
+			}
+			if !ok {
+				return harness.ReasonModelError, tsx.Writes(), fmt.Errorf("worker recovery revision or state changed before resume")
+			}
+
 		}
 		alreadyRecorded = requestID != "" && hasWorkerChatMessage(s.Messages(), requestID)
 		if len(s.Messages()) > 0 && message == "" {

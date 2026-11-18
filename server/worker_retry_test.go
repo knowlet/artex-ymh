@@ -217,3 +217,44 @@ func TestWorkerModelRecoveryRejectsRolledBackRevision(t *testing.T) {
 	}
 }
 func messagePtr(m llm.Message) *llm.Message { return &m }
+
+func TestWorkerModelRecoveryPauseAfterProgress(t *testing.T) {
+	m, task, id := workerRecoveryFixture(t)
+	var e *Engine
+	p := &workerRecoveryProvider{step: func(_ llm.CompletionRequest, turn int) (llm.Message, string, error) {
+		switch turn {
+		case 1:
+			return llm.Message{}, "", errors.New("HTTP 504 fixture")
+		case 2:
+			return llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockToolUse, ID: "progress-after-retry", Name: "record_fact", Input: []byte(fmt.Sprintf(`{"intent_id":%d,"summary":"fixture progress","evidence":"fixture observation","confidence":"observed"}`, id))}}}, "tool_use", nil
+		case 3:
+			e.Pause(task.ID, agent.AbortPausedByUser)
+			return llm.Message{}, "", context.Canceled
+		default:
+			return llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{llm.TextBlock("fixture finished")}}, "end_turn", nil
+		}
+	}}
+	w := newRecoveryWorker(t, m, p)
+	e = NewEngine(m)
+	if !e.runWorkerStep(t.Context(), task, "work#1", w) {
+		t.Fatal("first attempt missing")
+	}
+	if _, err := m.pg.Exec(`UPDATE exploration_nodes SET model_retry_at=now()-interval '1 second' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if !e.runWorkerStep(t.Context(), task, "work#2", w) {
+		t.Fatal("recovery missing")
+	}
+	n, err := task.Store.GetNode(id)
+	if err != nil || n.State != "open" || n.ModelRetryCount != 1 {
+		t.Fatalf("pause state=%+v %v", n, err)
+	}
+	e = NewEngine(m)
+	if !e.runWorkerStep(t.Context(), task, "work#3", w) {
+		t.Fatal("ordinary resume missing")
+	}
+	n, err = task.Store.GetNode(id)
+	if err != nil || n.State != "done" || n.ModelRetryCount != 1 || len(p.requests) != 4 {
+		t.Fatalf("legitimate progress blocked by stale recovery revision: %+v calls=%d err=%v", n, len(p.requests), err)
+	}
+}

@@ -138,6 +138,7 @@ jobs:
             TestPlannerOutageNotificationsRespectCooldown \
             TestTaskLLMRetrySharesCallBudget \
             TestTaskLLMStreamRetriesLlmwireTransientPreCommit \
+            TestWorkerModelRecoveryPauseAfterProgress \
             TestWorkerModelRecoveryRejectsRolledBackRevision \
             TestWorkerModelRecoveryResumesWithoutRepeatingCommittedTools \
             TestWorkerModelRecoveryBudgetSurvivesEngineRestart \

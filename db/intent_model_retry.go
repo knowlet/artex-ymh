@@ -93,3 +93,18 @@ WHERE id=$1 AND exploration_id=$2`, id, s.expID, out.Attempt, out.RetryAt, revis
 	out.Scheduled = true
 	return out, nil
 }
+
+// A revision guards admission to one scheduled recovery attempt. Once the
+// verified history has been loaded, ordinary pause/resume may advance it without
+// resetting the durable retry count. A later scheduled retry records a new hash.
+const ConsumedModelRetryRevisionPrefix = "validated:"
+
+func (s *ExplorationStore) ConsumeIntentModelRetryRevision(ctx context.Context, id int64, revision string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE exploration_nodes SET model_retry_revision=$3
+WHERE id=$1 AND exploration_id=$2 AND kind='intent' AND state='running' AND model_retry_revision=$4`, id, s.expID, ConsumedModelRetryRevisionPrefix+revision, revision)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
