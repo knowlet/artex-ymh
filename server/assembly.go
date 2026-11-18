@@ -59,10 +59,12 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 		// A server named by any visible skill's `mcps:` is skill-gated: its tools
 		// are deferred + locked (not in the global block) until that skill loads.
 		gated := map[string]bool{}
+		skillAlternatives := map[string][]string{}
 		if reg != nil {
 			for _, s := range reg.List() {
 				for _, srv := range s.MCPs {
 					gated[srv] = true
+					skillAlternatives[srv] = append(skillAlternatives[srv], s.Name)
 				}
 			}
 		}
@@ -100,6 +102,7 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 					continue
 				}
 				for _, t := range ts {
+					t = withSkillPrerequisites(t, skillAlternatives[m.Name])
 					extra = append(extra, t)
 					allNames = append(allNames, t.Name())
 					serverTools[m.Name] = append(serverTools[m.Name], t.Name())

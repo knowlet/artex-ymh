@@ -555,6 +555,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	if bundle := s.taskAgents[t.ID]; bundle != nil {
 		return bundle
 	}
+	taskID, _ := strconv.ParseInt(t.ID, 10, 64)
 	goalRuntime := &taskLLMRuntime{s: s, taskID: t.ID, agentKey: "goals"}
 	plannerRuntime := &taskLLMRuntime{s: s, taskID: t.ID, agentKey: "planner"}
 	workerRuntime := &taskLLMRuntime{s: s, taskID: t.ID, agentKey: "worker"}
@@ -563,11 +564,13 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	window := workerRuntime.CompactionWindow()
 	wk := agent.NewWorker(workerRuntime, "task-router", s.m.dir, tx, window, s.agentMaxTurns("worker"))
 	wk.SetFindingRecorder(s.evidenceStore())
+	wk.SetTrafficResolver(s.taskTrafficResolver(taskID))
 	wk.SetCompactionWindowResolver(workerRuntime.CompactionWindow)
 	wk.SetNonStreaming(workerRuntime.nonStreaming) // 按任务当前激活 profile 的流式开关(每轮读)
 	wk.SetMaxTokens(workerRuntime.maxTokens)       // 同上,输出上限也跟随当前激活 profile
 	wk.SetRunTimeout(time.Duration(s.agentRunSeconds("worker")) * time.Second)
 	wk.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
+	wk.SetWebFetchGuard(t.Guard)
 	wk.SetTaskProxyResolver(s.m.TaskProxyForTask) // 期 3b:按任务 MITM(经隧道时 任务实例→任务 socks)
 	wk.SetWebSearch(s.webSearchFor("worker"))
 	wk.SetConstraintInject(s.constraintInjectWorker) // 操作约束注入 worker(可配置,默认开)
@@ -575,6 +578,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	wk.SetUAResolver(s.uaForTask)                    // 批 5 B4:按任务稳定分配的客户端 UA → BashEnv ARTEX_UA
 	pl := agent.NewPlanner(plannerRuntime, "task-router", s.m.dir, tx, plannerRuntime.CompactionWindow(), s.agentMaxTurns("planner"))
 	pl.SetFindingRecorder(s.evidenceStore())
+	pl.SetTrafficResolver(s.taskTrafficResolver(taskID))
 	pl.SetCompactionWindowResolver(plannerRuntime.CompactionWindow)
 	pl.SetNonStreaming(plannerRuntime.nonStreaming)
 	pl.SetMaxTokens(plannerRuntime.maxTokens)
@@ -584,12 +588,14 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	pl.SetWebSearch(s.webSearchFor("planner"))
 	pl.SetConstraintInject(s.constraintInjectPlanner) // 操作约束注入 planner(可配置,默认开)
 	pl.SetGuard(s.agentGuard())                       // 审批门:planner 的工具调用同样过 PreToolUse 拦截
+	pl.SetUAResolver(s.uaForTask)                     // WebFetch 与 Bash 共用按任务稳定的客户端 UA
 	// cold-digest §7: 冷节点后台压缩。引擎经权威解析器实际驱动的就是这套 per-task planner
 	// (agentsForTask),Compactor 必须接在这里。走任务路由的 planner provider(§4:与 agent
 	// 同模型,随任务 LLM 链解析),压缩用 Complete 一次性生成 body。
 	pl.SetCompactor(agent.NewCompactor(plannerRuntime, "task-router"))
 	main := agent.NewMainAgent(mainRuntime, "task-router", s.m.dir, tx, mainRuntime.CompactionWindow(), s.agentMaxTurns("mainagent"))
 	main.SetFindingRecorder(s.evidenceStore())
+	main.SetTrafficResolver(s.taskTrafficResolver(taskID))
 	main.SetCompactionWindowResolver(mainRuntime.CompactionWindow)
 	main.SetNonStreaming(mainRuntime.nonStreaming)
 	main.SetMaxTokens(mainRuntime.maxTokens)
@@ -599,7 +605,8 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	main.SetKillWork(func(intentID int64) error {
 		return s.engine.KillWorkAs(intentID, agent.AbortKilledByMainagent)
 	}) // kill_work：人立即终止运行中 work(killed_by_mainagent)
-	main.SetGuard(s.agentGuard())         // 审批门:mainagent 的工具调用同样过 PreToolUse 拦截
+	main.SetGuard(s.agentGuard()) // 审批门:mainagent 的工具调用同样过 PreToolUse 拦截
+	main.SetUAResolver(s.uaForTask)
 	bundle := &taskAgentBundle{
 		runtime: goalRuntime, plannerRuntime: plannerRuntime, workerRuntime: workerRuntime,
 		mainRuntime: mainRuntime, pl: pl, wk: wk, main: main,

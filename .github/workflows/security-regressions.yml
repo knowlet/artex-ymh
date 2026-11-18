@@ -68,6 +68,7 @@ jobs:
 
           files = sorted(set(pathlib.Path('.').glob('**/*security*_test.go')) | {
               pathlib.Path('server/auth_test.go'),
+              pathlib.Path('internal/endpoint/asset_url_test.go'),
           })
           module = re.search(r'^module\s+(\S+)', pathlib.Path('go.mod').read_text(), re.M)[1]
           expected = set()
@@ -91,6 +92,9 @@ jobs:
               (module + '/db', 'TestSecurityPGDSLRestrictions'),
               (module + '/server', 'TestSecurityPGProfileRequiresReplacementKeyForDestinationChange'),
               (module + '/server', 'TestSecurityPGModelsAndTestCannotRedirectProfileKey'),
+              (module + '/db', 'TestSecurityPGHTTPServiceURLSchemeGate'),
+              (module + '/db', 'TestSecurityPGArchiveRestoreSkipsInvalidHTTPServiceURL'),
+              (module + '/db', 'TestSecurityPGArchiveRestoreDropsSkippedAssetReferences'),
           }
           if not required_pg <= expected:
               sys.exit('Required PostgreSQL regression tests are missing from selection')

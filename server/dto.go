@@ -157,6 +157,18 @@ type TrafficExchangeDTO struct {
 	RespLen     int    `json:"resp_len"`
 }
 
+// TrafficExchangeDetailDTO is one exchange's list metadata plus raw req/resp bodies.
+type TrafficExchangeDetailDTO struct {
+	TrafficExchangeDTO
+	Req  string `json:"req"`
+	Resp string `json:"resp"`
+}
+
+func trafficExchangeDetail(meta traffic.ExchangeMeta, req, resp string) TrafficExchangeDetailDTO {
+	d := trafficDTOs([]traffic.ExchangeMeta{meta})[0]
+	return TrafficExchangeDetailDTO{TrafficExchangeDTO: d, Req: req, Resp: resp}
+}
+
 func trafficDTOs(ex []traffic.ExchangeMeta) []TrafficExchangeDTO {
 	out := make([]TrafficExchangeDTO, 0, len(ex))
 	for _, e := range ex {
@@ -327,6 +339,7 @@ type FindingDTO struct {
 	Inherited       bool              `json:"inherited,omitempty"`
 	Assets          []FindingAssetDTO `json:"assets,omitempty"`
 	TS              string            `json:"ts"`
+	Reproduction    any               `json:"reproduction,omitempty"` // 结构化复现；仅详情接口填充
 }
 
 // FindingAssetDTO is one asset a finding is anchored to, pre-labelled for display.

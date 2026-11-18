@@ -806,7 +806,11 @@ export const api = {
         (opts.sort ? `&sort=${encodeURIComponent(opts.sort)}` : "") +
         (opts.order ? `&order=${encodeURIComponent(opts.order)}` : ""),
     ),
-  trafficExchange: (id: string) => get<TrafficDetail>(`/traffic/exchange?id=${encodeURIComponent(id)}`),
+  trafficExchange: (id: string, taskId?: number) =>
+    get<TrafficDetail>(
+      `/traffic/exchange?id=${encodeURIComponent(id)}` +
+        (taskId ? `&task_id=${encodeURIComponent(String(taskId))}` : ""),
+    ),
   trafficHosts: () => get<{ hosts: TrafficHost[] }>(`/traffic/hosts`),
   trafficDeleteHost: (host: string) => del<{ deleted: number }>(`/traffic?host=${encodeURIComponent(host)}`),
   trafficDeleteHosts: (hosts: string[]) => del<{ deleted: number }>(`/traffic/hosts`, { hosts }),

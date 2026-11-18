@@ -2,7 +2,9 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -240,6 +242,19 @@ func mergeFindingFields(old DBFinding, in RecordFindingInput, now time.Time) (se
 	return
 }
 
+// mergeReproductionEvidence archives a replaced reproduction recipe into evidence and
+// reports whether the incoming recipe should overwrite the stored column (false when
+// incoming is empty/unusable — keep the existing recipe).
+func mergeReproductionEvidence(existing, incoming json.RawMessage, evidence string, now time.Time, intentID int64, worker string) (string, bool) {
+	if !reproductionUsable(incoming) {
+		return evidence, false
+	}
+	if reproductionUsable(existing) && string(existing) != string(incoming) {
+		evidence = appendMergeSegment(evidence, "原结构化复现", string(existing), now, intentID, worker, "")
+	}
+	return evidence, true
+}
+
 // findMergeCandidateTx 在事务内(调用方须已持任务级证据锁)查可合并的既有
 // finding:同 task、status IN ('confirmed','pending')(终态排除,依据见文件头
 // 注释)、归一化 vulnclass 相同、主资产对等(候选 asset_ids->0 = 输入 AssetIDs
@@ -253,7 +268,7 @@ func findMergeCandidateTx(tx *sql.Tx, in RecordFindingInput) (*DBFinding, error)
 		return nil, nil
 	}
 	want := NormalizeVulnClass(in.VulnClass)
-	rows, err := tx.Query(`SELECT id, node_id, vulnclass, severity, summary, evidence
+	rows, err := tx.Query(`SELECT id, node_id, vulnclass, severity, summary, evidence, COALESCE(reproduction::text, '')
 FROM findings
 WHERE task_id=$1 AND status IN ($2, $3) AND node_id IS NOT NULL
   AND asset_ids->0 = to_jsonb($4::bigint)
@@ -265,8 +280,12 @@ FOR UPDATE`, in.TaskID, FindingConfirmed, FindingPending, in.AssetIDs[0])
 	defer rows.Close()
 	for rows.Next() {
 		var f DBFinding
-		if err := rows.Scan(&f.ID, &f.NodeID, &f.VulnClass, &f.Severity, &f.Summary, &f.Evidence); err != nil {
+		var repro string
+		if err := rows.Scan(&f.ID, &f.NodeID, &f.VulnClass, &f.Severity, &f.Summary, &f.Evidence, &repro); err != nil {
 			return nil, err
+		}
+		if repro != "" {
+			f.Reproduction = json.RawMessage(repro)
 		}
 		if NormalizeVulnClass(f.VulnClass) == want {
 			return &f, rows.Err()
@@ -278,17 +297,39 @@ FOR UPDATE`, in.TaskID, FindingConfirmed, FindingPending, in.AssetIDs[0])
 // mergeFindingTx 执行合并:更新既有 finding 行与节点 payload,追加血缘边与
 // 流量快照,返回指向既有记录的 RecordedFinding(Merged=true)。
 func mergeFindingTx(tx *sql.Tx, cand *DBFinding, in RecordFindingInput, prepared []PreparedTrafficEvidence) (*RecordedFinding, error) {
-	severity, summary, evidence := mergeFindingFields(*cand, in, time.Now())
-	if _, err := tx.Exec(`UPDATE findings SET severity=$2, summary=$3, evidence=$4 WHERE id=$1`,
-		cand.ID, severity, summary, evidence); err != nil {
+	now := time.Now()
+	severity, summary, evidence := mergeFindingFields(*cand, in, now)
+	var applyRepro bool
+	evidence, applyRepro = mergeReproductionEvidence(cand.Reproduction, in.Reproduction, evidence, now, in.IntentID, in.Worker)
+	mergeSQL := `UPDATE findings SET severity=$2, summary=$3, evidence=$4`
+	mergeArgs := []any{cand.ID, severity, summary, evidence}
+	reproArg := 0
+	if applyRepro {
+		reproArg = len(mergeArgs) + 1
+		mergeSQL += `, reproduction=$` + strconv.Itoa(reproArg)
+		mergeArgs = append(mergeArgs, string(in.Reproduction))
+	}
+	mergeSQL += ` WHERE id=$1`
+	if _, err := tx.Exec(mergeSQL, mergeArgs...); err != nil {
 		return nil, err
 	}
 	// 节点 payload 同步(与 setFindingCol 同款 jsonb_set),保持按任务 发现 Tab
 	// (读节点 payload)与 findings 表一致。
-	if _, err := tx.Exec(`UPDATE exploration_nodes
+	nodeArgs := []any{*cand.NodeID, severity, summary, evidence}
+	var nodeSQL string
+	if reproArg > 0 {
+		nodeSQL = `UPDATE exploration_nodes
+SET payload = jsonb_set(jsonb_set(jsonb_set(jsonb_set(payload, '{severity}', to_jsonb($2::text)),
+	'{summary}', to_jsonb($3::text)), '{evidence,poc}', to_jsonb($4::text)), '{reproduction}', $5::jsonb)
+WHERE id=$1 AND kind='finding'`
+		nodeArgs = append(nodeArgs, string(in.Reproduction))
+	} else {
+		nodeSQL = `UPDATE exploration_nodes
 SET payload = jsonb_set(jsonb_set(jsonb_set(payload, '{severity}', to_jsonb($2::text)),
 	'{summary}', to_jsonb($3::text)), '{evidence,poc}', to_jsonb($4::text))
-WHERE id=$1 AND kind='finding'`, *cand.NodeID, severity, summary, evidence); err != nil {
+WHERE id=$1 AND kind='finding'`
+	}
+	if _, err := tx.Exec(nodeSQL, nodeArgs...); err != nil {
 		return nil, err
 	}
 	// 血缘:新 intent 的 yields 边指向既有节点(保留"同一入口被反复加深"的历史)。

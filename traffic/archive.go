@@ -285,9 +285,10 @@ func (t *Traffic) importArchive(dir string, inspect func(string, string, int64) 
 	}
 	var imported int64
 	for _, item := range snapshot.Exchanges {
-		res, err := tx.Exec(`INSERT OR IGNORE INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path)
-VALUES(?,?,?,?,?,?,?,?,?,?,'')`, item.ID, item.TS, item.Host, item.Method, item.URLTemplate,
-			item.URL, item.Status, item.ContentType, item.ReqLen, item.RespLen)
+		reqPath := urlPathFromRaw(item.URL)
+		res, err := tx.Exec(`INSERT OR IGNORE INTO exchanges(id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path,req_path)
+VALUES(?,?,?,?,?,?,?,?,?,?,'',?)`, item.ID, item.TS, item.Host, item.Method, item.URLTemplate,
+			item.URL, item.Status, item.ContentType, item.ReqLen, item.RespLen, reqPath)
 		if err != nil {
 			return imported, err
 		}

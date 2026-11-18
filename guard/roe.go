@@ -35,6 +35,62 @@ func (g *Guard) SetRoE(cfg RoEConfig) {
 	g.mu.Unlock()
 }
 
+// AuthorizeInsecureTLS requires a positive match against a task's registered
+// host/network scope. Unlike ordinary RoE checks, warn/off, unknown scope and
+// the local-host convenience exemption cannot authorize a TLS exception. The
+// caller checks every requested/redirected URL before making a connection.
+func (g *Guard) AuthorizeInsecureTLS(ctx context.Context, host string) error {
+	matcher, err := g.insecureTLSScope(ctx)
+	if err != nil {
+		return err
+	}
+	if matcher.Check(host) != ScopeIn {
+		return fmt.Errorf("insecure_skip_verify denied: host %q is not in the task's explicitly registered scope", host)
+	}
+	g.record("WebFetch", "allow", "explicit in-scope TLS certificate verification exception", host)
+	return nil
+}
+
+// AuthorizeInsecureTLSAddress also checks the resolved destination before the
+// caller dials that exact IP. Domain scope continues to authorize ordinary
+// public/private target addresses; it cannot implicitly authorize loopback,
+// link-local, unspecified, multicast or other non-unicast destinations. Those
+// need an independently registered IP/CIDR rule, even when DNS names are scoped.
+func (g *Guard) AuthorizeInsecureTLSAddress(ctx context.Context, host string, ip net.IP) error {
+	matcher, err := g.insecureTLSScope(ctx)
+	if err != nil {
+		return err
+	}
+	if matcher.Check(host) != ScopeIn {
+		return fmt.Errorf("insecure_skip_verify denied: host %q is not in the task's explicitly registered scope", host)
+	}
+	if ip == nil {
+		return fmt.Errorf("insecure_skip_verify denied: resolved destination has no IP address")
+	}
+	if !ip.IsGlobalUnicast() && matcher.Check(ip.String()) != ScopeIn {
+		return fmt.Errorf("insecure_skip_verify denied: resolved local/non-unicast address %s requires an explicit task IP/CIDR scope rule", ip)
+	}
+	return nil
+}
+
+func (g *Guard) insecureTLSScope(ctx context.Context) (*ScopeMatcher, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if g == nil {
+		return nil, fmt.Errorf("insecure_skip_verify requires a task scope guard")
+	}
+	g.mu.Lock()
+	cfg := g.roe
+	g.mu.Unlock()
+	if cfg.Scope == nil || cfg.TaskIDOf == nil || cfg.TaskIDOf(ctx) <= 0 {
+		return nil, fmt.Errorf("insecure_skip_verify requires an explicitly registered task scope")
+	}
+	matcher := NewScopeMatcher(cfg.Scope(cfg.TaskIDOf(ctx)))
+	matcher.AllowLocal = false
+	return matcher, nil
+}
+
 // roeMode normalizes the configured mode; 默认 warn。
 func (c RoEConfig) mode() string {
 	if c.Mode == nil {

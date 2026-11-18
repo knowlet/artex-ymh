@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +84,27 @@ func TestMaxSeverity(t *testing.T) {
 		if got := MaxSeverity(c.a, c.b); got != c.want {
 			t.Errorf("MaxSeverity(%q,%q) = %q, want %q", c.a, c.b, got, c.want)
 		}
+	}
+}
+
+func TestMergeArchivesPriorReproduction(t *testing.T) {
+	now := time.Now()
+	old := json.RawMessage(`{"entry_point":"GET /old"}`)
+	incoming := json.RawMessage(`{"entry_point":"GET /new"}`)
+	_, _, evidence := mergeFindingFields(DBFinding{Evidence: "base", Reproduction: old}, RecordFindingInput{Reproduction: incoming}, now)
+	evidence, apply := mergeReproductionEvidence(old, incoming, evidence, now, 1, "w")
+	if !apply {
+		t.Fatal("incoming reproduction should replace stored recipe")
+	}
+	if !strings.Contains(evidence, "[原结构化复现]") || !strings.Contains(evidence, "/old") {
+		t.Fatalf("prior reproduction not archived:\n%s", evidence)
+	}
+	evidence, apply = mergeReproductionEvidence(old, nil, "base", now, 0, "")
+	if apply {
+		t.Fatal("empty incoming must keep existing reproduction")
+	}
+	if evidence != "base" {
+		t.Fatalf("evidence unchanged when incoming empty: %q", evidence)
 	}
 }
 

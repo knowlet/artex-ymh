@@ -39,16 +39,17 @@ func jsonResult(v any) (actool.Result, error) {
 //nolint:unused // used as the hostTools provider in wireAgentAugment
 func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 	tools := append(s.m.HostTools(), s.orchestrationTools()...)
+	tools = append(tools, s.toolListWorkerCapabilities())
 	tools = append(tools, s.findingRetestTools()...)
 	tools = append(tools, s.findingCheckTools()...) // 反证验证(verifier)host 工具
 	tools = append(tools, s.platformTools()...)     // 平台操作工具(建改 skill/工具/MCP，给 Auto 用)
 	if s.stage != nil {
 		tools = append(tools, s.stageShareTool()) // 受管文件投递(F13),默认绑 worker
 	}
-	tools = append(tools, s.sessionTools()...) // 立足点会话工具(期 1a),默认绑 worker
+	tools = append(tools, s.sessionTools()...)    // 立足点会话工具(期 1a),默认绑 worker
 	tools = append(tools, s.credentialTools()...) // 凭据工具(期 2),默认绑 worker
-	tools = append(tools, s.tunnelTools()...)    // 隧道四件套(期 3a),默认绑 worker
-	tools = append(tools, s.reverseTools()...)   // 反弹监听(期 5),默认绑 worker
+	tools = append(tools, s.tunnelTools()...)     // 隧道四件套(期 3a),默认绑 worker
+	tools = append(tools, s.reverseTools()...)    // 反弹监听(期 5),默认绑 worker
 	custom, err := s.customTools()
 	if err != nil {
 		log.Printf("[custom-tool] 加载失败: %v", err)
@@ -509,6 +510,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
 	s.seedFindingTrafficTools()       // 增加可选证据参数及只读证据工具，保留用户配置
 	s.seedFindingWorkflowTools()
+	s.seedFindingReproductionTools() // report_finding 结构化复现过程参数
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。

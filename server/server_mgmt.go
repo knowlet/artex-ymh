@@ -1106,11 +1106,21 @@ func (s *Server) fsMissingSkills(w http.ResponseWriter, r *http.Request) {
 func cleanStrs(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, s := range in {
-		if s = strings.TrimSpace(s); s != "" {
+		if s = sanitizeSkillFrontmatterScalar(s); s != "" {
 			out = append(out, s)
 		}
 	}
 	return out
+}
+
+// sanitizeSkillFrontmatterScalar folds multi-line API input into one frontmatter
+// scalar so a value cannot inject additional YAML keys (for example mcps:).
+func sanitizeSkillFrontmatterScalar(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	return strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(s))
 }
 
 func (s *Server) fsCreateSkill(w http.ResponseWriter, r *http.Request) {
@@ -1221,77 +1231,91 @@ func (s *Server) fsUpdateSkillMeta(w http.ResponseWriter, r *http.Request) {
 // fields given as non-nil pointers. The instruction body (after the closing ---) is
 // preserved verbatim. Returns an error if the file has no recognisable frontmatter.
 func rewriteSkillFrontmatter(content []byte, mcps *[]string, description, license, compatibility *string) ([]byte, error) {
-	lines := strings.Split(string(content), "\n")
-	if len(lines) < 2 || strings.TrimSpace(lines[0]) != "---" {
+	first, remaining, hasNewline := bytes.Cut(content, []byte{'\n'})
+	if !hasNewline || !bytes.Equal(bytes.TrimSpace(first), []byte("---")) {
 		return nil, fmt.Errorf("SKILL.md has no YAML frontmatter")
 	}
-	fmEnd := -1
-	for i := 1; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) == "---" {
-			fmEnd = i
+
+	// Locate the header/body boundary without allocating one entry per line.
+	// Invalid or unclosed headers must not allocate a copy of the whole file.
+	frontmatterStart := remaining
+	var frontmatter, body []byte
+	for {
+		line, rest, hasNext := bytes.Cut(remaining, []byte{'\n'})
+		if bytes.Equal(bytes.TrimSpace(line), []byte("---")) {
+			frontmatter = frontmatterStart[:len(frontmatterStart)-len(remaining)]
+			body = rest
 			break
 		}
-	}
-	if fmEnd < 0 {
-		return nil, fmt.Errorf("SKILL.md frontmatter is not closed")
-	}
-	// Collect existing key → value from frontmatter (preserve unknown keys)
-	type kv struct{ k, v string }
-	var pairs []kv
-	for _, l := range lines[1:fmEnd] {
-		if idx := strings.IndexByte(l, ':'); idx >= 0 {
-			pairs = append(pairs, kv{strings.TrimSpace(l[:idx]), strings.TrimSpace(l[idx+1:])})
-		} else if strings.TrimSpace(l) != "" {
-			pairs = append(pairs, kv{"", l}) // preserve non-key lines verbatim
+		if !hasNext {
+			return nil, fmt.Errorf("SKILL.md frontmatter is not closed")
 		}
+		remaining = rest
 	}
-	// Apply updates (nil pointer = no change)
-	applyStr := func(key string, val *string) {
-		if val == nil {
-			return
+
+	// Only three fields need first-occurrence tracking. Stream all other
+	// frontmatter directly, so many tiny nonblank lines cannot amplify memory
+	// through a per-line string/key-value container.
+	updates := [...]struct {
+		key     []byte
+		value   *string
+		applied bool
+	}{
+		{key: []byte("description"), value: description},
+		{key: []byte("license"), value: license},
+		{key: []byte("compatibility"), value: compatibility},
+	}
+
+	var out bytes.Buffer
+	out.Grow(len(content))
+	out.WriteString("---\n")
+	writePair := func(key, value []byte) {
+		if len(key) > 0 {
+			out.Write(key)
+			out.WriteString(": ")
 		}
-		for i, p := range pairs {
-			if p.k == key {
-				pairs[i].v = strings.TrimSpace(*val)
-				return
+		out.Write(value)
+		out.WriteByte('\n')
+	}
+	for len(frontmatter) > 0 {
+		line, rest, _ := bytes.Cut(frontmatter, []byte{'\n'})
+		frontmatter = rest
+		index := bytes.IndexByte(line, ':')
+		if index < 0 {
+			if len(bytes.TrimSpace(line)) > 0 {
+				out.Write(line)
+				out.WriteByte('\n')
+			}
+			continue
+		}
+
+		key, value := bytes.TrimSpace(line[:index]), bytes.TrimSpace(line[index+1:])
+		if mcps != nil && bytes.Equal(key, []byte("mcps")) {
+			continue
+		}
+		for i := range updates {
+			update := &updates[i]
+			if update.value != nil && !update.applied && bytes.Equal(key, update.key) {
+				value = []byte(sanitizeSkillFrontmatterScalar(*update.value))
+				update.applied = true
+				break
 			}
 		}
-		pairs = append(pairs, kv{key, strings.TrimSpace(*val)})
+		writePair(key, value)
 	}
-	applyStr("description", description)
-	applyStr("license", license)
-	applyStr("compatibility", compatibility)
+	for _, update := range updates {
+		if update.value != nil && !update.applied {
+			writePair(update.key, []byte(sanitizeSkillFrontmatterScalar(*update.value)))
+		}
+	}
 	if mcps != nil {
-		cleaned := cleanStrs(*mcps)
-		// Remove existing mcps line
-		filtered := pairs[:0]
-		for _, p := range pairs {
-			if p.k != "mcps" {
-				filtered = append(filtered, p)
-			}
-		}
-		pairs = filtered
-		if len(cleaned) > 0 {
-			pairs = append(pairs, kv{"mcps", strings.Join(cleaned, ", ")})
+		if cleaned := cleanStrs(*mcps); len(cleaned) > 0 {
+			writePair([]byte("mcps"), []byte(strings.Join(cleaned, ", ")))
 		}
 	}
-	// Reconstruct
-	var sb strings.Builder
-	sb.WriteString("---\n")
-	for _, p := range pairs {
-		if p.k == "" {
-			sb.WriteString(p.v)
-		} else {
-			fmt.Fprintf(&sb, "%s: %s", p.k, p.v)
-		}
-		sb.WriteByte('\n')
-	}
-	sb.WriteString("---\n")
-	// Body (lines after closing ---)
-	if fmEnd+1 < len(lines) {
-		sb.WriteString(strings.Join(lines[fmEnd+1:], "\n"))
-	}
-	return []byte(sb.String()), nil
+	out.WriteString("---\n")
+	out.Write(body)
+	return out.Bytes(), nil
 }
 
 // zip-upload safety caps (defeat zip bombs / runaway archives).

@@ -24,6 +24,7 @@ import (
 // into the frontier. It is the sole intent generator.
 type Planner struct {
 	findingRecorder   FindingRecorder
+	trafficResolver   func(taskID int64, repro json.RawMessage) json.RawMessage
 	prov              llm.Provider
 	model             string
 	tx                *transcript.Store                      // raw LLM conversation persistence (nil = off)
@@ -41,6 +42,7 @@ type Planner struct {
 	maxTokensFn       func() int                             // resolver: per-reply output cap (nil/0 = send no cap)
 	compactor         *Compactor                             // cold-node compaction (§7); nil = disabled
 	guard             *guard.Guard                           // optional; nil disables intercept hooks for planner tool calls
+	uaFn              func(taskID int64) string              // per-task client UA for WebFetch (nil = no override)
 
 	// todos keeps ONE plan-scratchpad per task (keyed by exploration id) so the
 	// planner's multi-step plan survives across wake-ups — each Plan() is a fresh
@@ -88,6 +90,16 @@ func (p *Planner) compactionWindow() int {
 // SetProxy points the planner's WebFetch at the recording proxy plus the CA cert
 // it trusts to verify HTTPS through it (empty addr = direct).
 func (p *Planner) SetProxy(addr, caCert string) { p.proxyAddr, p.proxyCACert = addr, caCert }
+
+// SetUAResolver wires the per-task client User-Agent for WebFetch (same pool as ARTEX_UA).
+func (p *Planner) SetUAResolver(fn func(taskID int64) string) { p.uaFn = fn }
+
+func (p *Planner) uaForTask(taskID int64) string {
+	if p.uaFn == nil {
+		return ""
+	}
+	return p.uaFn(taskID)
+}
 
 // SetWebSearch selects the web_search backend for the planner (off by default).
 func (p *Planner) SetWebSearch(o WebSearchOpts) { p.webSearch = o }
@@ -242,22 +254,14 @@ func intentSummary(ts *db.ExplorationStore, id int64) string {
 // workerOutput returns the finished worker's conclusion for an intent — the last
 // 'result' (else 'text') activity's full detail, truncated. Same source get_worker_output uses.
 func workerOutput(ts *db.ExplorationStore, id int64) string {
-	acts, _, err := ts.ActivityList(&id, 0, 1000)
+	pick, err := latestWorkerOutput(ts, id)
 	if err != nil {
 		return "(取输出失败)"
-	}
-	var pick *db.Activity
-	for i := range acts {
-		if acts[i].Kind == "result" {
-			pick = &acts[i]
-		} else if acts[i].Kind == "text" && pick == nil {
-			pick = &acts[i]
-		}
 	}
 	if pick == nil {
 		return "(该 work 尚无输出记录)"
 	}
-	out, _ := ts.ActivityDetail(pick.ID)
+	out := pick.Detail
 	if out == "" {
 		out = pick.Summary
 	}
@@ -295,13 +299,14 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 任务目标：{{.Goal}}
 
 **本轮该产出几个意图（先想清楚这条）**：
-- **硬底线（最高优先）**：只要【目标未达成】且【当前没有任何 open 或 running 意图】（frontier_open=0 且 running_intents 为空），本轮就【必须】产出至少一个向目标推进的意图——没有在跑的 work 可等、也没有在排队的方向时，产出 0 意图=任务停摆；哪怕已知方向都只在 recent_done 里，也要据下面 done/exhausted/blocked 的判断另开一条或续派一条。
-- 硬底线之外，**产出 0 个意图是正常结果，但要有正当理由**（不是"少派更稳"的默认）：①**已覆盖**——你想到的方向都已被仍在 open/running 的意图处理（换措辞重复生成已存在的意图是严重错误）；②**等待依赖**——下一步依赖当前在跑 work 的产出、而它还没出来（此时硬派会让下游拿不到前置而空转，应等下次唤醒图更新后再派）。
+- **推进底线（服从任务范围与操作约束）**：只要【目标未达成】且【当前没有任何 open 或 running 意图】（frontier_open=0 且 running_intents 为空），本轮应产出至少一个有根据、能推动目标的意图；信息不足时，识别一个会改变下一步决策的未知量，可派有验收信号和停止条件的信息收集意图，不必先猜中某个漏洞。哪怕已知方向都只在 recent_done 里，也要据下面 done/exhausted/blocked 的证据判断另开或续派；若无合法可行的下一步，明确说明具体阻碍，不编造意图、不越过约束。
+- 上述情形之外，**产出 0 个意图是正常结果，但要有正当理由**（不是"少派更稳"的默认）：①**已覆盖**——你想到的方向都已被仍在 open/running 的意图处理（换措辞重复生成已存在的意图是严重错误）；②**等待依赖**——下一步依赖当前在跑 work 的产出、而它还没出来（此时硬派会让下游拿不到前置而空转，应等下次唤醒图更新后再派）。
 - 反过来：确有【未覆盖、且不依赖在跑 work】的新方向，或目标未达成且范围内仍有未测面，就该派——别把 0 意图当偷懒的默认。
 
 **每次唤醒的决策流程**：
 
 1. **完整态势已附在本提示下方**（就是 graph_overview 的返回，无需再调它）：task（原始标题+目标/根节点）、资产计数、goals+状态、open/running/recent_done 意图、sites_without_endpoints（无端点的站点，提示可能待探的方向）、facts（探索事实数，与漏洞是两类）、recent_facts（{id,summary,confidence?}——confidence=inferred(待复核) 的事实未坐实，别当定论，可派复核意图或坐实后 confirm_fact）。
+   - recent_worker_feedback 已附最近终态意图的实际结论、工具结果/错误统计与错误摘录，带 step_id 和截断标记；先用这份反馈定位证据缺口，只在需要完整步骤时再读对应 trace/output，不要默认从头重读同一个 worker。
    - **范围**：探索节点（goals/意图/facts/findings）只含本任务；**资产图全局共享**（多任务同一份，资产计数是全局在范围内的、非本任务独有）——出现非本任务相关的资产时忽略。
    - **血缘**：每个意图带 parents（上游：派生自哪些事实/意图）和 yields（下游：产生了哪些事实/发现），recent_facts 每条带 from_intent；据此理解"哪些事实来自哪个方向、能否综合出新方向"。
    - **否定/存疑观察**（recent_facts 里"端口关闭/不可注入"等）是 worker 的观察、不是定论：采信前先 node_detail(id) 看 evidence——evidence 扎实、confidence=observed 且手段已穷尽的才视为该方向暂时封住；evidence 缺失、只是"看起来像/只探一次"、或 confidence=inferred(待复核) 的，按【尚未探明】处理，若在范围内且无其它意图覆盖，默认派一条复核意图去证实或推翻（**同一否定方向至多复核一次**；复核坐实后用 confirm_fact 升 confirmed，复核后仍为否定、且证据合理，就尊重该结论、不再派）。
@@ -310,18 +315,18 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 2. **判目标（核心职责）**：goals 字段已含目标与状态；对已被某发现/事实证明的未达成目标，调 prove_goal(goal_id, evidence_id, reason) 标 met。**当你标记的恰是最后一个未完成目标时，系统自动判定整个任务完成**——收官只由逐个 prove_goal 驱动，没有别的"一键完成"手段。
    - ⚠️ **量化验收核对（严禁提前盖章）**：目标含可量化条件（覆盖度达 X%、拿 N 个 flag、获得某权限）时，prove_goal 前【必须】核对上方 graph_overview 的实测值（coverage.pct、findings_total 计数等）：未达标就【禁止】prove_goal，改派意图补差；不得以"大体达成/核心已拿下"为由提前标 met。例：要求覆盖度 100% 而实测 coverage.pct=40% → 未达成，继续派补测意图。
 
-3. **（可选，仅开局、极轻量）探测理解**：仅当图里几乎还没有 fact（recent_facts 基本为空、任务刚开始）、仅凭态势无法把初始意图说具体时，才用 Bash 等对目标做极少量、只读的探测（如 1–2 次 curl 看首页/指纹）。**唯一合法产物是一句更精准的意图描述**——绝不是漏洞的发现/验证/利用，也不是端点/目录/参数的枚举结果（那些是 worker 的活，写成意图派下去）。三条硬边界：
-   - 图里已有 worker 产出的 fact（facts>0 / recent_facts 非空）→【禁止】再自己探测，一切判断基于已有 fact，本轮产物只能是"派新意图"或"结束"；想深挖某线索 → 派意图让 worker 去查，不是自己 curl。
-   - 即使开局也最多探 ≤3 次就收手，只为把初始意图说清；一旦发现自己在"深入查证"而非"快速定方向"（逐个枚举端点/目录、逐个试 id、解码链、反复探同一接口、任何注入/越权/漏洞的测试验证——全是 worker 的重活），立刻停手写成意图。
-   - 能从现有事实/态势判断的，根本不必探测。
+3. **（可选，有界）补足决策信息**：任务任何阶段都可能有尚未解决的问题；已有 fact 不代表所有路径都已探明。先指出哪个未知量会改变下一步选择，再从当前角色实际获准的工具、技能和证据中选择合适方法，不按固定工具顺序机械执行。
+   - 可以按需查新的证据、不同的节点/页码/查询，或发现当前角色获准的能力；相同参数、相同结果的重复读取不算新信息。已有证据足够时直接派意图。
+   - 直接对目标做轻量只读探测，仍须同时满足任务范围、操作约束和当前角色权限；每轮至多 3 次，只用于定方向。不能据此自行扩范围、解锁未授权工具或接管 worker 的完整工作。
+   - 若需要枚举、深入验证、利用或更多探测，把要解答的问题、预期可观察信号和停止条件写成信息收集/验证意图，由 worker 执行；不用因尚不确定漏洞类型而停在读旧结论。
 
 4. **决定补哪些新方向**：**这里的"克制"只指【不重复已存在的意图】，不是"能少派就少派"**——目标未达成时，默认追问是"为逼近目标，还有哪些更深、更狠、尚未覆盖的打法"，而不是"是否可以收尾"。意图是【开放的探索方向】（不是固定类型/菜单），结合已知事实、资产、目标自判方向，逐一与 open + running + recent_done 比对：
    - 已有 open/running 覆盖 → 不再生成（正在处理）。
    - 在 recent_done 里出现过 → **先看该意图的 state（每条都带）分辨怎么停的，再决定**：
-     · **done（正常跑完）**：已覆盖 → 不原样重派；是否死路看它 yields 出的 fact 结论、而非 state；仅出现【材料性新机理】（新事实/资产/参数/明显不同的打法）才重派，且 summary 写清与上次的不同；换措辞、"再试一次说不定行"不算，禁止重试。
-     · **exhausted（预算耗尽、探到一半被掐断，只写回部分）/ blocked（模型或网络失败、基本没探成）**：都是中途没善终、信息不全——先用 get_worker_trace / get_worker_output 看它实际做到哪、卡在哪，再从下列里选：接近突破被预算掐 → 派"接上次进度继续"；纯外部故障没跑成（blocked 常是）→ 直接重派同方向；每次卡同一处 → 换打法/方向。依据永远是 trace 里的真实进度，不是 state 本身。
+     · **done（执行结束）**：不等于该假设已验证成功，也不等于所有方法都已穷尽。结合 yields、recent_worker_feedback 的实际工具结果和结论，判断它回答了什么、还缺什么；工具报错、未取得证据不能当作目标不存在漏洞。不要原样重派；新的决策问题、新证据/资产或确有区别的方法才形成新方向，summary 写清实质差异。换措辞、重复相同输入碰运气不算新方向。
+     · **exhausted（预算耗尽）/ blocked（执行受阻）**：终态只说明如何停止，先结合已附 worker 反馈看实际做到哪、卡在哪；需要完整证据时再读具体 trace/output。可从已取得的中间结果继续有边界的取证；若是工具/网络失败，依据具体错误选获准的替代方法，或有依据确认故障已解除后再派。每次卡同一处而条件未变，不原样重试。依据是实际进度与错误，不是 state 本身。
    - 完全无任何意图覆盖的全新方向 → 生成。
-   - 所有已知方向都被仍在 open/running 的意图覆盖 → 不生成、直接结束（有在跑/在排队的 work，等它们推进）；但若只剩 recent_done 覆盖、已无 open/running 而目标未达成 → 按顶部硬底线必须另开或续派。
+   - 所有已知方向都被仍在 open/running 的意图覆盖 → 不生成、直接结束（有在跑/在排队的 work，等它们推进）；但若只剩 recent_done 覆盖、已无 open/running 而目标未达成 → 按顶部推进要求选择有根据的新方向或信息收集问题，确无合法路径时说明具体阻碍。
    - **深度优先于覆盖度**：coverage 是下限/验收项、不是探索目标本身；发现高价值入口（可能通向 RCE/提权/数据外泄）后，优先派意图把那条路【往深打穿】，而不是为拉平覆盖度去铺广、逐个资产浅测。
    - **保持路线多样、别过早收敛**：目标未达成时，若现有意图都挤在同一条路线/入口，而存在【本质不同】的未覆盖方向（另一入口面/另一类资产/另一条利用链），优先补那条分歧方向，而不是在同一线上加同义意图（看实质差异，不看措辞）；若该分歧方向已被现有意图覆盖，仍不生成。理想是 2–3 条机理不同的路线并存（如"从上传链打"与"从认证绕过打"），某条交出【目标逼近】的证据后才把资源集中过去。**但多样性永远服从顶部【操作约束】**：被约束排除的入口面/端口/主机/操作，即使本质不同也绝不生成意图。
 
@@ -330,7 +335,8 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 5. **提交**：用【一次】add_intent 批量提交筛出的新方向（intents 数组，最多 4 个最高价值的，不要逐条多次调）：
    - **summary**：一句话自然语言描述该方向（测试目标完整地址 + 做什么 + 为什么），不套固定分类；去重主要靠它与已有意图比对。
    - **asset_ids**：本方向要测试/攻击的目标资产 id（尽量传，0/1/多个，来自 list_assets）——只要方向围绕具体资产（站点/接口/参数/主机）就务必传，用于覆盖去重、连入资产链路，跨多资产就都传；纯全局侦察无具体资产才留空。
-   - **parent_ids**：本方向由哪些上游节点综合得出（可选，0/1/多个）——多个事实结合产生一个意图就都传，派生自某上游意图/发现也传其 id，顶层全新方向留空。
+   - **parent_ids**：本方向依据的事实/发现节点 id（可选，0/1/多个；只接受当前或明确关联任务里可见的 fact/finding，不能传 intent/goal id）；多个事实结合就都传，没有事实血缘的新方向留空。上次意图的关联可放在可选 exploration.prior_intent_ids，并说明此次改变。
+   - **exploration（可选）**：信息不足时可记录 question（待回答的问题）、method（选择的方法）、expected_signal（可观察结果）和 stop_condition（停止条件）；续接终态意图可附 prior_intent_ids 与 change（实质差异）。这只是实验理由，不能充当已取得的事实或目标证据，不要求每个意图都填写。
    - **chain_tags**：按该方向的主要攻击面打 1-2 个链标签（web/ad/app/priv/pwn/recon/rev/pivot/meta）——引擎据此给执行 worker 注入对应场景的反问决策骨架（场景→判据→转向）；拿不准按关键词选（sql/注入→web、域/kerberos→ad、提权→priv、隧道/代理/横向→pivot、逆向/脱壳→rev、堆/栈/ctf→pwn、侦察/指纹→recon、apk/frida/小程序→app），实在拿不准留空由引擎自动匹配。
 
 不重复、不硬凑；但目标未达成、又有未覆盖且更深的打法时，该派就派。简洁、聚焦、高效。`
@@ -340,7 +346,7 @@ func plannerSystem(goal, dataDir, workDir string) string {
 	// untrustedDataRule 与 L2 meta 铁律(chainskel.PlannerMetaRules)是静态固定文本
 	// (不含每轮变量),追加在代码固定尾,不破坏跨轮缓存。
 	// plannerHoneypotRules(批 6 L1 蜜罐处置纪律)同为代码固定尾,一律追加。
-	return body + artifactSpec(workDir) + untrustedDataRule + chainskel.PlannerMetaRules + plannerHoneypotRules
+	return body + artifactSpec(workDir) + untrustedDataRule + chainskel.PlannerMetaRules + plannerHoneypotRules + plannerAdaptiveGuidance
 }
 
 // Plan runs one planning round. emit, if non-nil, receives the planner's execution
@@ -359,6 +365,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	p.compactor.OnPlannerRound(ctx, ts)
 	tsx := NewToolSet(ts, "planner")
 	tsx.SetFindingRecorder(p.findingRecorder)
+	tsx.SetTrafficResolver(p.trafficResolver)
 	if as != nil {
 		tsx.SetAssetStore(as, as.Companies())
 	}
@@ -375,6 +382,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	// 并追加 cancel_intent 让 planner 能自己消化积压(红日 3 R2:frontier 36 条 open)。
 	domain := tsx.capFrontierTools(tsx.DropCoverageTools(tsx.PlannerTools()))
 	base := append(domain, actool.DefaultTools()...)
+	base = append(base, newWebFetch(p.proxyAddr, p.proxyCACert, p.guard, p.uaForTask))
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts)})
 	tools, def, cleanup := AugmentTools(ctx, "planner", base)
 	defer cleanup()
@@ -412,9 +420,6 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
 		PermissionMode:  permission.ModeBypass,
-		EnableWebFetch:  true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
-		WebFetchProxy:   p.proxyAddr,
-		WebFetchCACert:  p.proxyCACert,
 		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
 		// WebSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
 		EnableWebSearch:       p.webSearch.Enabled,
@@ -447,6 +452,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		opts.Transcript = p.tx
 		opts.SessionID = fmt.Sprintf("exp%d-planner", ts.ID())
 	}
+	before, beforeOK := plannerBeforeProgress(ctx, ts, tc)
 	// 态势（刚完成的意图 + 完整图）现在拼进本轮 user 输入（见下方 input）。user 里还有
 	// 指令 + 跨唤醒待办（todo 是模型自己的规划便签，可再生，放 user 即可）。
 	// 开场白按「本轮有无具体变动」分两种：有变动 → 指向下方【实际变动】块；无变动
@@ -455,16 +461,19 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	if len(triggers) == 0 {
 		lead = "本轮是**定时巡检（心跳到点）/无具体变动信号**的唤醒——图不一定有新变动。顺带复查在跑意图：长时间无进展或跑偏的用 steer_work 纠偏、方向整个错的用 kill_work 止损；再判定目标、决定是否补方向："
 		// 心跳/无变动唤醒时,若全图已无任何 open 或 running 意图 → 探索已停摆(没 worker 在跑、
-		// 也没排队方向)。明确告知 planner 并强制其本轮补出新方向,别只复查在跑意图后空转一轮。
-		if active, err := ts.HasActiveIntent(); err == nil && !active {
-			lead = "本轮是**定时巡检（心跳到点）**的唤醒,且当前**已没有任何 open 或 running 的意图**——没有 worker 在跑、也没有排队中的方向,探索已停摆。你**必须**在本轮产出一个或多个向目标推进、且与图中既有意图**互不重复**的新意图(不得产出 0 意图);先据下面的态势判定目标是否已达成,未达成则立即补方向："
+		// 也没排队方向)。提示补足决策信息或派发新方向,别只复查旧意图后空转一轮。
+		if !tc.Final && !plannerDeadlineExpired(tc) && before.NeedsWork() {
+			lead = "本轮是**定时巡检（心跳到点）**的唤醒，且当前**已没有任何 open 或 running 的意图**。目标尚未达成时，请根据实际结果选择有实质差异、符合约束的下一步；信息不足可提出能改变决策的信息收集问题，不要重复读取未变化的旧结论。先判断目标是否已有真实达成证据，否则提交新意图；确无合法可行路径时说明具体阻碍，不编造工作："
 		}
 	}
-	input := lead + situational + "\n\n据上面的态势，判定目标。目标已【真正达成】（已拿到目标成果/已确认目标漏洞）时用 prove_goal 逐个标记。**硬底线：只要目标尚未达成、且当前没有任何 open 或 running 意图（frontier_open=0 且 running_intents 为空），本轮就必须产出至少一个向目标推进的意图——此时没有在跑的 work 可等、也没有在排队的方向，产出 0 意图=任务停摆。仅当已有 open/running 意图在推进、或目标已达成时，本轮才可以不产出新意图。**" +
-		renderPlannerTodos(opts.Todos.List())
+	input := lead + situational + "\n\n据上面的态势，判定目标。目标已【真正达成】（已拿到目标成果/已确认目标漏洞）时用 prove_goal 逐个标记。"
+	if !tc.Final && !plannerDeadlineExpired(tc) && before.NeedsWork() {
+		input += "当前仍有未达成的目标且没有 open/running 意图，请用 add_intent 提交有根据、符合范围与约束且不重复的下一步，或用 prove_goal 提交实际达成证据；仅输出分析不算推进。信息不足时先形成范围内可回答的信息收集问题；若连取证也被明确约束或缺少必要授权，请说明具体阻碍，不要虚构意图或绕过审批。"
+	}
+	input += renderPlannerTodos(opts.Todos.List())
 	// MaxDuration 现在会在墙钟到点打断在跑工具并就地进收尾(在活 ctx 上),单轮卡死不再
 	// 绕过收尾,无需外部硬 ctx 兜底。ctx 只承载 pause / kill / shutdown。
-	_, _, err = captureRun(ctx, opts, input,
+	err = p.runWithProgressCheck(ctx, opts, input, def.RecoveryGuidance, ts, before, beforeOK, len(triggers) == 0, tsx.graphOverviewData, func() bool { return tsx.GoalMet },
 		func(r db.Activity) {
 			if emit != nil {
 				r.Worker = "planner" // planner activity has no intent_id (it generates them)
