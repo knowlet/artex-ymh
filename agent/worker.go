@@ -474,7 +474,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// 收敛工具面、减少低价值调用。其余 SDK 默认工具(Read/Write/Edit/LS/Bash/Sleep)照常。
 	base = append(base, defaultToolsExcept("MultiEdit", "Glob", "Grep")...)
 	proxyAddr, proxyCA := w.proxyForTask(taskID)
-	base = append(base, newWebFetch(proxyAddr, proxyCA, w.webFetchGuard))
+	base = append(base, newWebFetch(proxyAddr, proxyCA, w.webFetchGuard, w.uaForTask))
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts), IntentID: intent.ID})
 	tools, def, cleanup := AugmentTools(ctx, "worker", base)
 	defer cleanup()

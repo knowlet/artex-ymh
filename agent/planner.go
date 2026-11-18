@@ -42,6 +42,7 @@ type Planner struct {
 	maxTokensFn       func() int                             // resolver: per-reply output cap (nil/0 = send no cap)
 	compactor         *Compactor                             // cold-node compaction (§7); nil = disabled
 	guard             *guard.Guard                           // optional; nil disables intercept hooks for planner tool calls
+	uaFn              func(taskID int64) string              // per-task client UA for WebFetch (nil = no override)
 
 	// todos keeps ONE plan-scratchpad per task (keyed by exploration id) so the
 	// planner's multi-step plan survives across wake-ups — each Plan() is a fresh
@@ -89,6 +90,16 @@ func (p *Planner) compactionWindow() int {
 // SetProxy points the planner's WebFetch at the recording proxy plus the CA cert
 // it trusts to verify HTTPS through it (empty addr = direct).
 func (p *Planner) SetProxy(addr, caCert string) { p.proxyAddr, p.proxyCACert = addr, caCert }
+
+// SetUAResolver wires the per-task client User-Agent for WebFetch (same pool as ARTEX_UA).
+func (p *Planner) SetUAResolver(fn func(taskID int64) string) { p.uaFn = fn }
+
+func (p *Planner) uaForTask(taskID int64) string {
+	if p.uaFn == nil {
+		return ""
+	}
+	return p.uaFn(taskID)
+}
 
 // SetWebSearch selects the web_search backend for the planner (off by default).
 func (p *Planner) SetWebSearch(o WebSearchOpts) { p.webSearch = o }
@@ -377,7 +388,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	// 并追加 cancel_intent 让 planner 能自己消化积压(红日 3 R2:frontier 36 条 open)。
 	domain := tsx.capFrontierTools(tsx.DropCoverageTools(tsx.PlannerTools()))
 	base := append(domain, actool.DefaultTools()...)
-	base = append(base, newWebFetch(p.proxyAddr, p.proxyCACert, p.guard))
+	base = append(base, newWebFetch(p.proxyAddr, p.proxyCACert, p.guard, p.uaForTask))
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts)})
 	tools, def, cleanup := AugmentTools(ctx, "planner", base)
 	defer cleanup()
@@ -447,13 +458,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		opts.Transcript = p.tx
 		opts.SessionID = fmt.Sprintf("exp%d-planner", ts.ID())
 	}
-	var before db.PlannerProgress
-	if !tc.Final && !plannerDeadlineExpired(tc) {
-		before, err = ts.PlannerProgress(ctx)
-		if err != nil {
-			return false, "", fmt.Errorf("read planner progress before round: %w", err)
-		}
-	}
+	before, beforeOK := plannerBeforeProgress(ctx, ts, tc)
 	// 态势（刚完成的意图 + 完整图）现在拼进本轮 user 输入（见下方 input）。user 里还有
 	// 指令 + 跨唤醒待办（todo 是模型自己的规划便签，可再生，放 user 即可）。
 	// 开场白按「本轮有无具体变动」分两种：有变动 → 指向下方【实际变动】块；无变动
@@ -474,7 +479,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	input += renderPlannerTodos(opts.Todos.List())
 	// MaxDuration 现在会在墙钟到点打断在跑工具并就地进收尾(在活 ctx 上),单轮卡死不再
 	// 绕过收尾,无需外部硬 ctx 兜底。ctx 只承载 pause / kill / shutdown。
-	err = p.runWithProgressCheck(ctx, opts, input, ts, before, len(triggers) == 0, tsx.graphOverviewData, func() bool { return tsx.GoalMet },
+	err = p.runWithProgressCheck(ctx, opts, input, ts, before, beforeOK, len(triggers) == 0, tsx.graphOverviewData, func() bool { return tsx.GoalMet },
 		func(r db.Activity) {
 			if emit != nil {
 				r.Worker = "planner" // planner activity has no intent_id (it generates them)

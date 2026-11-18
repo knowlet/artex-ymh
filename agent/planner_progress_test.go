@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/llm"
 )
 
@@ -501,5 +502,42 @@ func TestPlannerProgressNoopProofAndCancelledIntent(t *testing.T) {
 				t.Fatalf("non-progressful tool call counted as success: err=%v retries=%d", err, retries)
 			}
 		})
+	}
+}
+
+func TestPlannerBeforeProgressReadFailureBestEffort(t *testing.T) {
+	d, ts, _ := plannerProgressStore(t, 1)
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, ok := plannerBeforeProgress(t.Context(), ts, TaskClock{})
+	if ok || before.NeedsWork() || len(before.IntentIDs) > 0 {
+		t.Fatalf("failed before read must yield zero snapshot and beforeOK=false: ok=%v before=%+v", ok, before)
+	}
+}
+
+func TestPlannerProgressUnreliableBeforeSkipsStallDetection(t *testing.T) {
+	d, ts, _ := plannerProgressStore(t, 1)
+	provider := &plannerProgressProvider{step: func(context.Context, llm.CompletionRequest, int) ([]llm.StreamEvent, error) {
+		return plannerText(), nil
+	}}
+	p := NewPlanner(provider, "fixture", t.TempDir(), nil, 0, 5)
+	retries := 0
+	err := p.runWithProgressCheck(t.Context(), agentcore.Options{Provider: provider, MaxTurns: 5},
+		"heartbeat fixture", ts, db.PlannerProgress{}, false, true,
+		func() map[string]any { return nil }, func() bool { return false },
+		func(a db.Activity) {
+			if strings.Contains(string(a.Metadata), "planner_progress_retry") {
+				retries++
+			}
+		})
+	if errors.Is(err, ErrPlannerNoProgress) || retries != 0 {
+		t.Fatalf("unreliable before must not trigger correction or stall escalation: err=%v retries=%d", err, retries)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider calls=%d want 1", len(provider.requests))
+	}
+	if progressCheckpoint(t, d, ts) != 0 {
+		t.Fatal("stall counter must remain zero when before snapshot was unavailable")
 	}
 }

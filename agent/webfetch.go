@@ -34,7 +34,7 @@ const maxWebFetchResponseBytes = 2 << 20
 // newWebFetch owns the network client rather than enabling Norma's built-in
 // fetcher: the latter cannot check redirects and automatically retries directly
 // after some proxy errors. Neither behavior is suitable for scoped TLS opt-ins.
-func newWebFetch(proxyAddr, caCert string, g *guard.Guard) actool.CoreTool {
+func newWebFetch(proxyAddr, caCert string, g *guard.Guard, uaFn func(taskID int64) string) actool.CoreTool {
 	return actool.Build(actool.Spec{
 		Name:        "WebFetch",
 		Description: "Fetch an HTTP(S) page or API response as Markdown. Set extract=true for HTML comments, scripts, endpoints, forms, links and meta tags. Static assets (JS, CSS, images, fonts and media) are not fetched. TLS certificates are verified by default. After a certificate error on an authorized test asset, insecure_skip_verify=true explicitly skips target certificate verification, but only within the current task's registered host/IP/network scope. With a configured proxy you must also set direct=true: this deliberately bypasses the recording/egress proxy, so that request will not be recorded there. Trusting a recording proxy CA alone does not fix its upstream certificate verification. Redirects are checked again; large responses are truncated.",
@@ -126,7 +126,9 @@ func newWebFetch(proxyAddr, caCert string, g *guard.Guard) actool.CoreTool {
 				}
 				return checkURL(r)
 			}}
-			request.Header.Set("User-Agent", "norma/0.4")
+			if ua := webFetchUserAgent(ctx, uaFn); ua != "" {
+				request.Header.Set("User-Agent", ua)
+			}
 			response, err := client.Do(request)
 			if err != nil {
 				// http.Client adds the redirect URL to url.Error. A rejected
@@ -161,6 +163,13 @@ func newWebFetch(proxyAddr, caCert string, g *guard.Guard) actool.CoreTool {
 			return actool.Text(actool.Capture(tc, text)), nil
 		},
 	})
+}
+
+func webFetchUserAgent(ctx context.Context, uaFn func(taskID int64) string) string {
+	if uaFn == nil {
+		return ""
+	}
+	return uaFn(RunInfoFrom(ctx).TaskID)
 }
 
 func webFetchError(err error) string {

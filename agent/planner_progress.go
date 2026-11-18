@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/Autumn-27/artex/db"
@@ -25,6 +26,21 @@ var ErrPlannerNoProgress = errors.New("planner made no committed intent or goal 
 
 func plannerDeadlineExpired(clock TaskClock) bool {
 	return clock.DeadlineUnix > 0 && !time.Now().Before(time.Unix(clock.DeadlineUnix, 0))
+}
+
+// plannerBeforeProgress snapshots committed graph state before a planning round.
+// A failed read is best-effort: callers get a zero snapshot and beforeOK=false so
+// stall detection does not treat missing data as real progress or an idle episode.
+func plannerBeforeProgress(ctx context.Context, ts *db.ExplorationStore, clock TaskClock) (before db.PlannerProgress, beforeOK bool) {
+	if clock.Final || plannerDeadlineExpired(clock) {
+		return before, true
+	}
+	before, err := ts.PlannerProgress(ctx)
+	if err != nil {
+		log.Printf("[planner] read progress before round (best-effort): %v", err)
+		return db.PlannerProgress{}, false
+	}
+	return before, true
 }
 
 // recoveryBudget is a separate, bounded correction within the same planning
@@ -49,7 +65,7 @@ func recoveryBudget(maxTurns int, clock TaskClock, now time.Time) (int, time.Dur
 	return turns, duration, true
 }
 
-func (p *Planner) runWithProgressCheck(ctx context.Context, opts agentcore.Options, input string, ts *db.ExplorationStore, before db.PlannerProgress, heartbeat bool, overview func() map[string]any, goalMet func() bool, emit func(db.Activity)) error {
+func (p *Planner) runWithProgressCheck(ctx context.Context, opts agentcore.Options, input string, ts *db.ExplorationStore, before db.PlannerProgress, beforeOK bool, heartbeat bool, overview func() map[string]any, goalMet func() bool, emit func(db.Activity)) error {
 	// An explicitly enabled goal_met tool completes the task through ToolSet's
 	// authoritative flag without rewriting individual goal nodes. Preserve that
 	// existing contract; assistant prose alone never sets this flag.
@@ -73,7 +89,7 @@ func (p *Planner) runWithProgressCheck(ctx context.Context, opts agentcore.Optio
 		return errors.Join(runErr, fmt.Errorf("read planner progress after round: %w", err))
 	}
 	required := heartbeat && before.NeedsWork()
-	stalled := required && !completed() && after.NeedsWork() && !after.AdvancedFrom(before)
+	stalled := required && beforeOK && !completed() && after.NeedsWork() && !after.AdvancedFrom(before)
 	turns, duration, canRecover := recoveryBudget(opts.MaxTurns, clock, time.Now())
 	// A provider/DSML error is already actionable. Do not blindly retry it or
 	// override a hook stop. Only a normally completed/budget-limited planning
@@ -97,7 +113,7 @@ func (p *Planner) runWithProgressCheck(ctx context.Context, opts agentcore.Optio
 		if err != nil {
 			return errors.Join(runErr, fmt.Errorf("recheck planner progress before correction: %w", err))
 		}
-		stalled = !completed() && after.NeedsWork() && !after.AdvancedFrom(before)
+		stalled = beforeOK && !completed() && after.NeedsWork() && !after.AdvancedFrom(before)
 		_, duration, canRecover = recoveryBudget(opts.MaxTurns, clock, time.Now())
 		if stalled && canRecover {
 			// Recompute remaining time: overview reads must not extend the task
@@ -116,12 +132,12 @@ func (p *Planner) runWithProgressCheck(ctx context.Context, opts agentcore.Optio
 		if err != nil {
 			return errors.Join(runErr, fmt.Errorf("read planner progress after correction: %w", err))
 		}
-		stalled = !completed() && after.NeedsWork() && !after.AdvancedFrom(before)
+		stalled = beforeOK && !completed() && after.NeedsWork() && !after.AdvancedFrom(before)
 	}
 	if plannerDeadlineExpired(clock) {
 		return runErr // task coordinator owns deadline settlement, not this monitor
 	}
-	if !required && !completed() && after.NeedsWork() && !after.AdvancedFrom(before) {
+	if !required && !completed() && after.NeedsWork() && beforeOK && !after.AdvancedFrom(before) {
 		return runErr // event-triggered no-op rounds do not count as idle heartbeats
 	}
 	report, err := ts.FinishPlannerProgress(ctx, before, stalled, plannerStallThreshold, opts.MaxTurns, string(terminal))

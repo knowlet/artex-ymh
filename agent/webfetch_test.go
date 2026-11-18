@@ -89,7 +89,7 @@ func TestWebFetchScopedTLSOptIn(t *testing.T) {
 	}))
 	ctx := WithRunInfo(t.Context(), RunInfo{TaskID: 42})
 	g := webFetchTestGuard([]guard.ScopeRule{{Kind: "ip", Value: "127.0.0.1"}})
-	tool := newWebFetch("", "", g)
+	tool := newWebFetch("", "", g, nil)
 	strict := callWebFetch(t, tool, ctx, webFetchInput{URL: srv.URL})
 	if !strict.IsError || !strings.Contains(strict.Flatten(), "IP SAN") || requests.Load() != 0 {
 		t.Fatalf("default must reject invalid IP certificate: %+v requests=%d", strict, requests.Load())
@@ -113,7 +113,7 @@ func TestWebFetchScopedTLSOptIn(t *testing.T) {
 		{"local exemption is insufficient", ctx, webFetchTestGuard([]guard.ScopeRule{{Kind: "domain", Value: "target.example"}})},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			result := callWebFetch(t, newWebFetch("", "", test.guard), test.ctx, webFetchInput{URL: srv.URL, InsecureSkipVerify: true})
+			result := callWebFetch(t, newWebFetch("", "", test.guard, nil), test.ctx, webFetchInput{URL: srv.URL, InsecureSkipVerify: true})
 			if !result.IsError || requests.Load() != 1 {
 				t.Fatalf("unscoped exception reached target: %+v requests=%d", result, requests.Load())
 			}
@@ -133,7 +133,7 @@ func TestWebFetchTLSRedirectScope(t *testing.T) {
 		_, _ = io.WriteString(w, "completed")
 	}))
 	ctx := WithRunInfo(t.Context(), RunInfo{TaskID: 42})
-	tool := newWebFetch("", "", webFetchTestGuard([]guard.ScopeRule{{Kind: "ip", Value: "127.0.0.1"}}))
+	tool := newWebFetch("", "", webFetchTestGuard([]guard.ScopeRule{{Kind: "ip", Value: "127.0.0.1"}}), nil)
 	for _, test := range []struct {
 		name        string
 		destination string
@@ -174,7 +174,7 @@ func TestWebFetchProxyRequiresExplicitDirectException(t *testing.T) {
 	}))
 	defer proxy.Close()
 	ctx := WithRunInfo(t.Context(), RunInfo{TaskID: 42})
-	tool := newWebFetch(proxy.URL, "", webFetchTestGuard([]guard.ScopeRule{{Kind: "ip", Value: "127.0.0.1"}}))
+	tool := newWebFetch(proxy.URL, "", webFetchTestGuard([]guard.ScopeRule{{Kind: "ip", Value: "127.0.0.1"}}), nil)
 	result := callWebFetch(t, tool, ctx, webFetchInput{URL: target.URL})
 	if !result.IsError || proxyRequests.Load() != 1 || targetRequests.Load() != 0 {
 		t.Fatalf("strict proxy route changed: %+v proxy=%d target=%d", result, proxyRequests.Load(), targetRequests.Load())
@@ -257,7 +257,7 @@ func TestWebFetchRecordingProxyTLSException(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(WithRunInfo(t.Context(), RunInfo{TaskID: 42}), 5*time.Second)
 	defer cancel()
-	tool := newWebFetch(recorder.ProxyAddr(), recorder.CACertPath(), webFetchTestGuard([]guard.ScopeRule{{Kind: "ip", Value: "127.0.0.1"}}))
+	tool := newWebFetch(recorder.ProxyAddr(), recorder.CACertPath(), webFetchTestGuard([]guard.ScopeRule{{Kind: "ip", Value: "127.0.0.1"}}), nil)
 	strict := callWebFetch(t, tool, ctx, webFetchInput{URL: target.URL})
 	if targetRequests.Load() != 0 || strings.Contains(strict.Flatten(), "recording-proxy-test-target") {
 		t.Fatalf("trusting recorder CA unexpectedly disabled upstream verification: %+v", strict)
@@ -362,10 +362,34 @@ func TestWebFetchLocalHostnameRequiresIPScope(t *testing.T) {
 			rules = append(rules, guard.ScopeRule{Kind: "cidr", Value: "127.0.0.0/8"}, guard.ScopeRule{Kind: "ip", Value: "::1"})
 		}
 		before := requests.Load()
-		result := callWebFetch(t, newWebFetch("", "", webFetchTestGuard(rules)), ctx, input)
+		result := callWebFetch(t, newWebFetch("", "", webFetchTestGuard(rules), nil), ctx, input)
 		if result.IsError == allowed || (allowed && requests.Load() != before+1) || (!allowed && requests.Load() != before) {
 			t.Fatalf("local hostname scope failed: allowed=%v result=%+v requests=%d", allowed, result, requests.Load()-before)
 		}
+	}
+}
+
+func TestWebFetchUsesTaskUserAgent(t *testing.T) {
+	const wantUA = "Mozilla/5.0 WebFetch-task-UA-fixture"
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer srv.Close()
+	uaFn := func(taskID int64) string {
+		if taskID == 42 {
+			return wantUA
+		}
+		return ""
+	}
+	g := webFetchTestGuard([]guard.ScopeRule{{Kind: "ip", Value: "127.0.0.1"}})
+	result := callWebFetch(t, newWebFetch("", "", g, uaFn), WithRunInfo(t.Context(), RunInfo{TaskID: 42}), webFetchInput{URL: srv.URL})
+	if result.IsError || gotUA != wantUA {
+		t.Fatalf("task UA not used: result=%+v gotUA=%q", result, gotUA)
+	}
+	if strings.Contains(gotUA, "norma/") {
+		t.Fatalf("framework UA leaked: %q", gotUA)
 	}
 }
 
@@ -382,7 +406,7 @@ func TestWebFetchMalformedRedirectDoesNotLeakSecret(t *testing.T) {
 	egress := guard.NewEgressGuard()
 	egress.AddFingerprint("test", secret)
 	g.SetEgress(egress)
-	result := callWebFetch(t, newWebFetch("", "", g), WithRunInfo(t.Context(), RunInfo{TaskID: 42}), webFetchInput{URL: srv.URL})
+	result := callWebFetch(t, newWebFetch("", "", g, nil), WithRunInfo(t.Context(), RunInfo{TaskID: 42}), webFetchInput{URL: srv.URL})
 	if !result.IsError || requests.Load() != 1 || strings.Contains(result.Flatten(), secret) || !strings.Contains(result.Flatten(), "invalid redirect Location header") {
 		t.Fatalf("malformed Location leaked: %+v requests=%d", result, requests.Load())
 	}
@@ -406,7 +430,7 @@ func TestWebFetchStrictTLSDowngrade(t *testing.T) {
 	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: secure.Certificate().Raw}), 0600); err != nil {
 		t.Fatal(err)
 	}
-	tool := newWebFetch("", caFile, nil)
+	tool := newWebFetch("", caFile, nil, nil)
 	result := callWebFetch(t, tool, t.Context(), webFetchInput{URL: secure.URL})
 	if !result.IsError || insecureRequests.Load() != 0 || !strings.Contains(result.Flatten(), "HTTPS to an insecure scheme") {
 		t.Fatalf("strict HTTPS downgraded: %+v requests=%d", result, insecureRequests.Load())
@@ -429,7 +453,7 @@ func TestWebFetchRawResponseLimitReported(t *testing.T) {
 				_, _ = io.WriteString(w, body)
 			}))
 			defer srv.Close()
-			result := callWebFetch(t, newWebFetch("", "", nil), t.Context(), webFetchInput{URL: srv.URL + "/" + strings.Repeat("a", 4000)})
+			result := callWebFetch(t, newWebFetch("", "", nil, nil), t.Context(), webFetchInput{URL: srv.URL + "/" + strings.Repeat("a", 4000)})
 			if result.IsError || !strings.Contains(result.Flatten(), "visible") || strings.Contains(result.Flatten(), "body truncated at 2 MiB") != (extra > 0) || len(result.Flatten()) > 50000 {
 				t.Fatalf("raw body cutoff not represented: %+v", result)
 			}
@@ -456,11 +480,11 @@ func TestWebFetchProxyCATrustAndRedirectGuard(t *testing.T) {
 	g := webFetchTestGuard([]guard.ScopeRule{{Kind: "domain", Value: "target.example"}})
 	g.SetRoE(guard.RoEConfig{Mode: func() string { return "strict" }, Scope: func(int64) []guard.ScopeRule { return []guard.ScopeRule{{Kind: "domain", Value: "target.example"}} }, TaskIDOf: func(context.Context) int64 { return 42 }})
 	ctx := WithRunInfo(t.Context(), RunInfo{TaskID: 42})
-	result := callWebFetch(t, newWebFetch(proxy.URL, "", g), ctx, webFetchInput{URL: "http://target.example/page"})
+	result := callWebFetch(t, newWebFetch(proxy.URL, "", g, nil), ctx, webFetchInput{URL: "http://target.example/page"})
 	if !result.IsError || proxyRequests.Load() != 0 {
 		t.Fatal("untrusted HTTPS proxy must fail certificate verification")
 	}
-	tool := newWebFetch(proxy.URL, caFile, g)
+	tool := newWebFetch(proxy.URL, caFile, g, nil)
 	result = callWebFetch(t, tool, ctx, webFetchInput{URL: "http://target.example/page"})
 	if result.IsError || !strings.Contains(result.Flatten(), "forwarded fixture") || proxyRequests.Load() != 1 {
 		t.Fatalf("configured proxy CA not trusted: %+v", result)
@@ -472,7 +496,7 @@ func TestWebFetchProxyCATrustAndRedirectGuard(t *testing.T) {
 }
 
 func TestWebFetchContentAndSchema(t *testing.T) {
-	tool := newWebFetch("", "", nil)
+	tool := newWebFetch("", "", nil, nil)
 	properties := tool.InputSchema()["properties"].(map[string]any)
 	for _, name := range []string{"url", "extract", "insecure_skip_verify", "direct"} {
 		if properties[name] == nil {
@@ -516,7 +540,7 @@ func TestWebFetchRedirectEgressDoesNotLeakSecret(t *testing.T) {
 	egress.AddFingerprint("test", secret)
 	g.SetEgress(egress)
 	ctx := WithRunInfo(t.Context(), RunInfo{TaskID: 42})
-	result := callWebFetch(t, newWebFetch("", "", g), ctx, webFetchInput{URL: srv.URL, InsecureSkipVerify: true})
+	result := callWebFetch(t, newWebFetch("", "", g, nil), ctx, webFetchInput{URL: srv.URL, InsecureSkipVerify: true})
 	if !result.IsError || requests.Load() != 1 || strings.Contains(result.Flatten(), secret) || !strings.Contains(result.Flatten(), "禁止外发") {
 		t.Fatalf("redirect egress denial leaked/reached target: %+v requests=%d", result, requests.Load())
 	}

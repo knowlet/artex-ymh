@@ -115,7 +115,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	// visible skills/MCP and lets the DB tools table filter/override. DefaultTools
 	// have no tools-table rows, so they always pass through.
 	base := actool.DefaultTools()
-	base = append(base, newWebFetch(c.proxyAddr, c.proxyCACert, c.guard))
+	base = append(base, newWebFetch(c.proxyAddr, c.proxyCACert, c.guard, nil))
 	ctx = WithRunInfo(ctx, RunInfo{SessionID: sessionID})
 	tools, def, cleanup := AugmentTools(ctx, agentKey, base)
 	defer cleanup()

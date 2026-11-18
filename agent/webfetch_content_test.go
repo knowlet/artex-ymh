@@ -84,7 +84,7 @@ func TestWebFetchReconSurvivesOutputLimit(t *testing.T) {
 		_, _ = io.WriteString(w, html.String())
 	}))
 	defer srv.Close()
-	fetched := callWebFetch(t, newWebFetch("", "", nil), t.Context(), webFetchInput{URL: srv.URL, Extract: true})
+	fetched := callWebFetch(t, newWebFetch("", "", nil, nil), t.Context(), webFetchInput{URL: srv.URL, Extract: true})
 	if fetched.IsError || len(fetched.Flatten()) > webFetchOutputBytes || !strings.Contains(fetched.Flatten(), "=== RECON ===") || !strings.Contains(fetched.Flatten(), "POST /form-0") {
 		t.Fatalf("tool caller discarded bounded RECON: error=%v bytes=%d", fetched.IsError, len(fetched.Flatten()))
 	}
