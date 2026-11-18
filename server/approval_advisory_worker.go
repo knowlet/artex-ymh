@@ -45,10 +45,7 @@ func (s *Server) WaitBackgroundWorkers() {
 	s.advisoryWG.Wait()
 	s.archiveWG.Wait()
 	if s.side != nil {
-		select {
-		case <-s.side.done:
-		default:
-		}
+		<-s.side.done
 	}
 }
 
