@@ -47,6 +47,7 @@
 
 - **deadline 冻结感知**：宿主机睡眠/VM 冻结（时钟跳变 >60s）时自动顺延任务 deadline，不再出现"睡一晚任务全烧死"。
 - **LLM 调用硬墙钟**：单次 LLM 调用 600s 上限（`ARTEX_LLM_CALL_TIMEOUT` 可调），超时归类为可转移瞬时失败，planner/worker 不再被挂死的连接拖住。
+- **模型故障恢复**：响应头与无数据读取各默认 120s 上限；任务路由重试共享 600s 总预算。planner 对瞬时故障冷却重试，worker 在完整工具记录可恢复时持久化下一次执行时间；`add_intent` 兼容有界参数包裹。配置、诊断与限制见 [模型恢复说明](docs/PLANNER-MODEL-RESILIENCE.md)。
 - **会话探活**：手动探活按钮 + 启动卫生（陈旧 alive 会话异步并发探活，失败诚实标 dead）。
 
 ### 6. chains 场景化激活

@@ -221,7 +221,7 @@ func (r *taskLLMRuntime) streamHooks() taskLLMStreamHooks {
 
 func (r *taskLLMRuntime) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
 	ctx = llmrec.WithTaskID(ctx, r.taskID)
-	return streamTaskLLM(ctx, r.taskID, req, r.streamHooks())
+	return r.boundedCall().Stream(ctx, req)
 }
 
 // Complete is the non-streaming counterpart of Stream. A non-streaming call is
@@ -231,11 +231,33 @@ func (r *taskLLMRuntime) Stream(ctx context.Context, req llm.CompletionRequest) 
 // streaming path needs is unnecessary here).
 func (r *taskLLMRuntime) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
 	ctx = llmrec.WithTaskID(ctx, r.taskID)
-	return completeTaskLLM(ctx, r.taskID, req, r.streamHooks())
+	return r.boundedCall().Complete(ctx, req)
+}
+
+// Keep the same deadline across SDK retries, same-provider stream retries and
+// profile failover. Otherwise every retry renews the per-provider wall clock.
+func (r *taskLLMRuntime) boundedCall() llm.Provider {
+	return agent.WithCallTimeout(taskLLMCall{taskID: r.taskID, hooks: r.streamHooks()}, "task", r.agentKey)
+}
+
+type taskLLMCall struct {
+	taskID string
+	hooks  taskLLMStreamHooks
+}
+
+func (c taskLLMCall) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
+	return streamTaskLLM(ctx, c.taskID, req, c.hooks)
+}
+
+func (c taskLLMCall) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+	return completeTaskLLM(ctx, c.taskID, req, c.hooks)
 }
 
 func completeTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest, hooks taskLLMStreamHooks) (llm.Message, string, llm.Usage, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return llm.Message{}, "", llm.Usage{}, err
+		}
 		selection, err := hooks.current()
 		if err != nil {
 			return llm.Message{}, "", llm.Usage{}, err
@@ -287,6 +309,10 @@ func completeTaskLLM(ctx context.Context, taskID string, req llm.CompletionReque
 func streamTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest, hooks taskLLMStreamHooks) iter.Seq2[llm.StreamEvent, error] {
 	return func(yield func(llm.StreamEvent, error) bool) {
 		for {
+			if err := ctx.Err(); err != nil {
+				yield(llm.StreamEvent{}, err)
+				return
+			}
 			selection, err := hooks.current()
 			if err != nil {
 				yield(llm.StreamEvent{}, err)
@@ -429,26 +455,7 @@ func sameProviderRetryPolicy(r agent.RetryConfig) (retries int, backoff func(int
 //   - 上下文过长:相同请求重放也没用,交给 harness 的 reactive 压缩兜底
 //   - 4xx 确定性拒绝(400/401/403/404/422):到哪个 provider 都一样会失败
 func isRetryableStreamError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if isQuotaExhaustedError(err) {
-		return false
-	}
-	s := strings.ToLower(err.Error())
-	if strings.Contains(s, "too long") || strings.Contains(s, "context length") ||
-		strings.Contains(s, "context_length") || strings.Contains(s, "maximum context") ||
-		strings.Contains(s, "status 413") {
-		return false
-	}
-	for _, code := range []string{"status 400", "status 401", "status 403", "status 404", "status 422"} {
-		if strings.Contains(s, code) {
-			return false
-		}
-	}
-	// 其余(传输 reset/EOF/timeout、408/429/5xx、流内 error 事件如 anthropic
-	// overloaded_error 等)一律视为瞬时,允许重试。
-	return true
+	return agent.IsTransientModelError(err)
 }
 
 // CompactionWindow mirrors current()'s precedence so the context window always

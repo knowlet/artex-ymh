@@ -604,12 +604,19 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// session exists the worker continues from where it left off instead of
 	// restarting from scratch.
 	alreadyRecorded := false
+	if intent.ModelRetryCount > 0 {
+		if err := w.CheckModelRetryTranscript(ts.ID(), intent.ID, nil); err != nil {
+			return harness.ReasonModelError, tsx.Writes(), err
+		}
+	}
 	if w.tx != nil {
-		_ = s.Resume(opts.SessionID)
+		if err := s.Resume(opts.SessionID); err != nil {
+			return harness.ReasonModelError, tsx.Writes(), fmt.Errorf("resume worker transcript: %w", err)
+		}
 		alreadyRecorded = requestID != "" && hasWorkerChatMessage(s.Messages(), requestID)
 		if len(s.Messages()) > 0 && message == "" {
 			seedUnlockFromHistory(s.Messages(), def.UnlockSkill)
-			input = "继续执行。"
+			input = "继续执行。请先核对已有工具结果和已写回的事实，从中断处继续，不要重复已完成的动作。"
 		} else if len(s.Messages()) > 0 {
 			seedUnlockFromHistory(s.Messages(), def.UnlockSkill)
 		}

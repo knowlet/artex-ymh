@@ -64,22 +64,24 @@ func jsonbClean(b []byte) []byte {
 
 // Node is a typed reasoning node (= old task_nodes). kind ∈ goal|intent|finding|hint.
 type Node struct {
-	FindingID     int64           `json:"finding_id,omitempty"` // populated by finding-aware reads; never inferred from ID
-	FindingNodeID int64           `json:"finding_node_id,omitempty"`
-	TrafficCount  int             `json:"traffic_count,omitempty"`
-	ID            int64           `json:"id"`
-	Kind          string          `json:"kind"`
-	Payload       json.RawMessage `json:"payload"`
-	Priority      int             `json:"priority"`
-	State         string          `json:"state"`
-	Origin        string          `json:"origin,omitempty"`
-	Owner         string          `json:"owner,omitempty"`
-	BlockedReason string          `json:"blocked_reason,omitempty"`
-	DeleteReason  string          `json:"delete_reason,omitempty"` // 仅意图假删除(state='deleted')时非空
-	Anchors       []int64         `json:"anchors,omitempty"`
-	CreatedAt     time.Time       `json:"created_at"`
-	SourceTaskID  int64           `json:"source_task_id,omitempty"`
-	Inherited     bool            `json:"inherited,omitempty"`
+	FindingID       int64           `json:"finding_id,omitempty"` // populated by finding-aware reads; never inferred from ID
+	FindingNodeID   int64           `json:"finding_node_id,omitempty"`
+	TrafficCount    int             `json:"traffic_count,omitempty"`
+	ID              int64           `json:"id"`
+	Kind            string          `json:"kind"`
+	Payload         json.RawMessage `json:"payload"`
+	Priority        int             `json:"priority"`
+	State           string          `json:"state"`
+	Origin          string          `json:"origin,omitempty"`
+	Owner           string          `json:"owner,omitempty"`
+	BlockedReason   string          `json:"blocked_reason,omitempty"`
+	DeleteReason    string          `json:"delete_reason,omitempty"` // 仅意图假删除(state='deleted')时非空
+	Anchors         []int64         `json:"anchors,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+	ModelRetryCount int             `json:"model_retry_count,omitempty"`
+	ModelRetryAt    *time.Time      `json:"model_retry_at,omitempty"`
+	SourceTaskID    int64           `json:"source_task_id,omitempty"`
+	Inherited       bool            `json:"inherited,omitempty"`
 }
 
 // Activity is one worker execution step (= old task_activity).
@@ -346,7 +348,7 @@ WHERE exploration_id=$1 AND kind='intent' AND state='running'`, s.expID)
 // done/open/running are left untouched. Returns whether a row changed. Used by "重跑".
 func (s *ExplorationStore) ReopenIntent(id int64) (bool, error) {
 	res, err := s.db.Exec(`UPDATE exploration_nodes
-SET state='open', completed_at=NULL, blocked_reason=NULL
+SET state='open', completed_at=NULL, blocked_reason=NULL, model_retry_count=0, model_retry_at=NULL
 WHERE id=$1 AND exploration_id=$2 AND kind='intent'
   AND state IN ('blocked','exhausted','stopped')`, id, s.expID)
 	if err != nil {
@@ -360,7 +362,7 @@ WHERE id=$1 AND exploration_id=$2 AND kind='intent'
 // (batch rerun after e.g. an LLM/network outage that blocked many at once). Returns the
 // number reopened. Workers resume from their transcripts; kept graph writes remain.
 func (s *ExplorationStore) ReopenBlockedIntents() (int64, error) {
-	res, err := s.db.Exec(`UPDATE exploration_nodes SET state='open', completed_at=NULL, blocked_reason=NULL
+	res, err := s.db.Exec(`UPDATE exploration_nodes SET state='open', completed_at=NULL, blocked_reason=NULL, model_retry_count=0, model_retry_at=NULL
 WHERE exploration_id=$1 AND kind='intent' AND state='blocked'`, s.expID)
 	if err != nil {
 		return 0, err
@@ -373,7 +375,8 @@ func (s *ExplorationStore) SetIntentState(id int64, state string) error {
 	// terminal states stamp completed_at; reopening (back to open/running) clears it.
 	terminal := state == "done" || state == "blocked" || state == "exhausted" || state == "stopped"
 	_, err := s.db.Exec(`UPDATE exploration_nodes
-SET state=$1, blocked_reason=NULL, content_version=content_version+1, completed_at = CASE WHEN $4 THEN now() ELSE NULL END
+SET state=$1, blocked_reason=NULL, content_version=content_version+1, completed_at = CASE WHEN $4 THEN now() ELSE NULL END,
+    model_retry_at = CASE WHEN $1 IN ('running','done','blocked','exhausted','stopped','deleted') THEN NULL ELSE model_retry_at END
 WHERE id=$2 AND exploration_id=$3 AND kind='intent'`, state, id, s.expID, terminal)
 	return err
 }
@@ -384,7 +387,8 @@ WHERE id=$2 AND exploration_id=$3 AND kind='intent'`, state, id, s.expID, termin
 func (s *ExplorationStore) CompareAndSetIntentState(id int64, expected, state string) (bool, error) {
 	terminal := state == "done" || state == "blocked" || state == "exhausted" || state == "stopped"
 	res, err := s.db.Exec(`UPDATE exploration_nodes
-SET state=$1, blocked_reason=NULL, content_version=content_version+1, completed_at = CASE WHEN $5 THEN now() ELSE NULL END
+SET state=$1, blocked_reason=NULL, content_version=content_version+1, completed_at = CASE WHEN $5 THEN now() ELSE NULL END,
+    model_retry_at = CASE WHEN $1 IN ('running','done','blocked','exhausted','stopped','deleted') THEN NULL ELSE model_retry_at END
 WHERE id=$2 AND exploration_id=$3 AND kind='intent' AND state=$4`, state, id, s.expID, expected, terminal)
 	if err != nil {
 		return false, err
@@ -719,12 +723,12 @@ func (u *TokenUsage) add(other TokenUsage) {
 	u.CacheWriteTokens += other.CacheWriteTokens
 }
 
-const nodeCols = `id, kind, payload, priority, state, COALESCE(origin,''), COALESCE(owner,''), COALESCE(blocked_reason,''), COALESCE(delete_reason,''), created_at`
+const nodeCols = `id, kind, payload, priority, state, COALESCE(origin,''), COALESCE(owner,''), COALESCE(blocked_reason,''), COALESCE(delete_reason,''), created_at, model_retry_count, model_retry_at`
 
 func scanNode(sc interface{ Scan(...any) error }) (*Node, error) {
 	var n Node
 	var payload []byte
-	if err := sc.Scan(&n.ID, &n.Kind, &payload, &n.Priority, &n.State, &n.Origin, &n.Owner, &n.BlockedReason, &n.DeleteReason, &n.CreatedAt); err != nil {
+	if err := sc.Scan(&n.ID, &n.Kind, &payload, &n.Priority, &n.State, &n.Origin, &n.Owner, &n.BlockedReason, &n.DeleteReason, &n.CreatedAt, &n.ModelRetryCount, &n.ModelRetryAt); err != nil {
 		return nil, err
 	}
 	n.Payload = json.RawMessage(payload)
@@ -1037,6 +1041,23 @@ ORDER BY priority DESC, id ASC LIMIT $2`, s.expID, limit)
 	return scanNodes(rows)
 }
 
+// ReadyFrontier is the dispatch view. Cooling intents remain visible in the
+// ordinary frontier/overview and active counts, but cannot occupy ready slots.
+func (s *ExplorationStore) ReadyFrontier(limit int) ([]*Node, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`SELECT `+nodeCols+` FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='intent' AND state='open'
+  AND (model_retry_at IS NULL OR model_retry_at <= now())
+ORDER BY priority DESC, id ASC LIMIT $2`, s.expID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
 // HasActiveIntent reports whether this exploration has any intent still in play
 // (state open OR running). Used to decide whether to kick the FIRST planner round:
 // a seeded task's intent may already have been claimed (open→running) by a worker
@@ -1061,8 +1082,9 @@ WHERE exploration_id=$1 AND kind='goal' AND state='open')`, s.expID).Scan(&exist
 
 // ClaimIntent atomically moves an open intent to running. Returns true if claimed.
 func (s *ExplorationStore) ClaimIntent(id int64, owner string) (bool, error) {
-	res, err := s.db.Exec(`UPDATE exploration_nodes SET state='running', owner=$1
-WHERE id=$2 AND exploration_id=$3 AND kind='intent' AND state='open'`, owner, id, s.expID)
+	res, err := s.db.Exec(`UPDATE exploration_nodes SET state='running', owner=$1, model_retry_at=NULL
+WHERE id=$2 AND exploration_id=$3 AND kind='intent' AND state='open'
+  AND (model_retry_at IS NULL OR model_retry_at <= now())`, owner, id, s.expID)
 	if err != nil {
 		return false, err
 	}

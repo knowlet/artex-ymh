@@ -65,14 +65,12 @@ func preview(s string, n int) string {
 	return string(r)
 }
 
-// model_error（provider/API 故障：LLM 层瞬时重试耗尽，或流已开始后中途断流）
-// 收场的 work 不是「试过没做完」也不是真失败，而是外部抖动。默认把它当永久
-// blocked 会白丢一条意图，所以这里对该终态额外重跑几次，每次之间退避一下，给
-// provider 恢复的时间；重试期间若被暂停/终止/取消则立即让位给对应分支处理。
+// Worker transport recovery uses a durable cooldown and resumes its transcript.
+// Provider/configuration failures that cannot recover by waiting remain terminal.
 const (
-	modelErrorRetries      = 2               // model_error 收场后额外重试的次数
-	modelErrorRetryBackoff = 3 * time.Second // 每次重试前的退避
-	workControlWaitTimeout = 30 * time.Second
+	modelErrorRetries                    = 2 // model_error 收场后额外重试的次数
+	modelErrorRetryBackoff time.Duration = 0 // 0 selects durable 1m / 5m / 30m cooldowns
+	workControlWaitTimeout               = 30 * time.Second
 )
 
 var errWorkControlConflict = errors.New("work control conflict")
@@ -81,7 +79,7 @@ var errWorkControlConflict = errors.New("work control conflict")
 // In particular, a quota error after partial streaming advances the task cursor
 // for the next LLM call but must not replay this whole intent on the backup.
 func retryableWorkerModelError(reason harness.TerminalReason, err error) bool {
-	return reason == harness.ReasonModelError && !isTaskLLMRuntimeError(err)
+	return reason == harness.ReasonModelError && !isTaskLLMRuntimeError(err) && agent.IsTransientModelError(err)
 }
 
 // Engine drives the event-driven exploration loop with real LLM agents
@@ -548,7 +546,7 @@ func (e *Engine) drainSteer(intentID int64) (string, bool) {
 type steerHooks struct {
 	inner harness.HookRunner
 	drain func() (string, bool)
-	// nudges 是本条意图已注入的空转续跑次数，上限 limit。指针:harness 持有的是
+	// nudges 是本次执行已注入的空转续跑次数，上限 limit。指针:harness 持有的是
 	// steerHooks 的值拷贝，计数必须共享同一份。
 	nudges *atomic.Int64
 	// limit 是空转续跑的次数上限，由 Engine.emptyTurnNudgeLimit() 从「空响应重试
@@ -558,16 +556,15 @@ type steerHooks struct {
 	label string
 	// det 是同响应停滞检测器(chains L1,POSTMORTEM-RED-SUN-3.md R4):PostToolUse
 	// 喂入每步 tool_result,判定"信息梯度为零"后经 PreToolUse drain 注入转向指令。
-	// 指针,与 nudges 同理——且有意建在 model_error 重跑循环外(见 runIntent),一条
-	// 意图的触发额度(冷却/上限)跨重跑共享,重跑一轮不清零。nil = 关闭。
+	// 指针,与 nudges 同理，由本次执行的所有工具共用。自动恢复另受持久化次数限制。nil = 关闭。
 	det *agent.StuckDetector
 	// onStuck 在检测器触发时回调(engine 接线:写 system activity + hint 挂探索图,
 	// 让 planner 感知)。nil = 只注入、不留痕。
 	onStuck func(ev *agent.StuckEvent)
 	// inj 是 WebFetch 结果的注入内容观察器(HONEYPOT-DETECTION-DESIGN.md 二-B,
 	// 反 AI 蜜罐识别信号):PostToolUse 喂入每步 tool_result,命中"诱导 agent 执行
-	// 采集命令并回传"的页面内容时回调 onInject。同一 host 一条意图只提示一次
-	// (观察器内部去重)。与 det 同理建在 model_error 重跑循环外。nil = 关闭。
+	// 采集命令并回传"的页面内容时回调 onInject。同一 host 本次执行只提示一次
+	// (观察器内部去重)。nil = 关闭。
 	inj *agent.InjectWatcher
 	// onInject 在注入内容命中时回调(engine 接线:写 system activity + hint 挂
 	// 探索图,提示 planner 该 host 疑似反 AI 蜜罐)。nil = 只日志、不留痕。
@@ -866,6 +863,7 @@ func resetPlannerTimer(timer *time.Timer, d time.Duration) {
 
 func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 	interval := plannerHeartbeatInterval(t)
+	var retry plannerRetrySchedule
 	// 心跳定时器在 loop 入口臂 = 从任务 start 计时:即使是跳过首轮 planner 的 seed 任务
 	// (Run 里 frontier 非空不 kick 首轮)、这里一直阻塞,心跳也会在「任务 start + interval」
 	// 触发第一轮规划。之后每次唤醒(边沿/心跳)都重臂 = 距上次任意规划触发的时长。
@@ -874,11 +872,19 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 
 	// runRound 跑一轮规划(含 debounce 合并 + 各 guard)。src 仅用于日志区分触发来源。
 	runRound := func(src string) {
+		if retry.remaining(time.Now()) > 0 {
+			return // notifications retain their triggers, but cannot bypass cooldown
+		}
+		previousRetry := retry
+		retry = plannerRetrySchedule{} // skipped/finished rounds return to normal heartbeat
 		// debounce: coalesce a burst of changes into one planning round
 		timer := time.NewTimer(e.debounce)
 	drain:
 		for {
 			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
 			case <-t.notify:
 			case <-timer.C:
 				break drain
@@ -889,6 +895,7 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			return // idle until LLM configured
 		}
 		if e.IsPaused(t.ID) {
+			retry = plannerRetrySchedule{}
 			return // user-paused: don't plan
 		}
 		if e.IsDeleting(t.ID) {
@@ -949,7 +956,15 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		switch {
 		case err != nil && ectx.Err() == nil:
 			log.Printf("[planner] task %s 规划出错: %v", t.ID, err)
+			retry = previousRetry
+			if delay := retry.record(time.Now(), err); delay > 0 {
+				detail := fmt.Sprintf("模型暂时不可用，%s 后重新规划（连续失败 %d 次，冷却最长 5m）", delay, retry.failures)
+				e.emitActivity(t, db.Activity{Worker: "planner", Kind: "text", IsError: true, Summary: detail, Detail: detail})
+			}
+		case ectx.Err() != nil:
+			retry = plannerRetrySchedule{}
 		case met:
+			retry = plannerRetrySchedule{}
 			log.Printf("[planner] task %s 判定目标达成: %s", t.ID, reason)
 			// 所有目标达成 → 持久化任务状态为 done（前端 DTO 会优先展示该终态）。
 			if err := e.m.SetTaskStatus(t.ID, "done"); err != nil {
@@ -960,6 +975,7 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			// 归为 stopped(而非 blocked)。
 			e.cancelExec(t.ID, agent.AbortGoalMet)
 		default:
+			retry = plannerRetrySchedule{}
 			log.Printf("[planner] task %s 规划完成", t.ID)
 		}
 		e.touch(t.ID)
@@ -982,10 +998,14 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			runRound("edge") // worker 结束 / finding / kill / resume / seed 首轮
 		case <-heartbeat.C:
 			// 周期兜底:死锁兜底 + 唤醒去监督飞行中的 worker(steer/kill) + 周期复查。
-			runRound("heartbeat")
+			if retry.failures > 0 {
+				runRound("model retry")
+			} else {
+				runRound("heartbeat")
+			}
 		}
 		// 每次唤醒(边沿或心跳)后重臂心跳:任意规划触发都重算这段静置计时。
-		resetPlannerTimer(heartbeat, interval)
+		resetPlannerTimer(heartbeat, retry.nextDelay(time.Now(), interval))
 	}
 }
 
@@ -1057,9 +1077,14 @@ func (e *Engine) runWorkerStep(ctx context.Context, t *Task, name string, worker
 // cannot observe quiescence between the LLM return and the final DB writes.
 func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *agent.Worker, intent *db.Node, requestID, message string) bool {
 	hasChatMessage := message != ""
+	var retryTrace workerRetryTrace
+	retryTrace.checkpoint, retryTrace.checkpointErr = worker.ModelRetryCheckpoint(t.Store.ID(), intent.ID)
 	e.stampFirstRun(t) // 首次真正执行 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
 	e.touch(t.ID)
-	emit := func(r db.Activity) { e.emitActivity(t, r) }
+	emit := func(r db.Activity) {
+		retryTrace.record(r)
+		e.emitActivity(t, r)
+	}
 	ectx := e.clockCtx(e.execContextFor(ctx, t.ID), t, false) // cancellable by Pause; 带任务 deadline
 	if ectx.Err() != nil || e.IsDeleting(t.ID) {
 		if err := transitionIntentState(t.Store, intent.ID, "running", "open"); err != nil {
@@ -1080,8 +1105,8 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	}
 	label := fmt.Sprintf("%s · #%d", name, iid)
 	workCtx = intercept.WithTaskContext(workCtx, t.ID, label, taskEmit)
-	// nudges 有意建在 model_error 重跑循环之外:空转续跑的上限是「这条意图」的总量，
-	// 重跑一轮不该把额度清零重来。
+	// Nudge and stagnation budgets apply to this worker attempt; durable model
+	// recovery has a separate persisted attempt cap.
 	hooks := steerHooks{
 		inner:  t.Guard.Hooks(),
 		drain:  func() (string, bool) { return e.drainSteer(iid) },
@@ -1089,8 +1114,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		limit:  e.emptyTurnNudgeLimit(),
 		label:  label,
 	}
-	// chains L1 停滞检测器同理:建在重跑循环外,冷却/触发上限按「这条意图」计,
-	// 跨 model_error 重跑共享(见 steerHooks.det 注释)。触发时除注入转向指令外,
+	// chains L1 停滞检测器为本次执行记录冷却/触发上限。触发时除注入转向指令外,
 	// 留两道痕供 planner 感知:
 	//  1) system activity —— 进 worker trace,planner 用 get_worker_output 能看到;
 	//  2) hint 节点挂探索图 —— TriggerEvent 没有 system 类事件(manager.go 的
@@ -1141,26 +1165,6 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding)
 	}
 	e.EndLLMCall(t.ID)
-	// model_error 收场 → 额外重跑几次（退避后再试）。仅在意图仍属本 work、任务
-	// 未暂停/未终止/未取消【且未进入收尾】时重试；否则让位给对应分支处理(收尾期不
-	// 再重试,避免退避挤占其他 worker 的优雅收尾窗口)。
-	maxRetries, retryBackoff := e.modelErrorRetryPolicy()
-	for attempt := 1; attempt <= maxRetries &&
-		retryableWorkerModelError(reason, err) &&
-		workCtx.Err() == nil && ectx.Err() == nil && !e.IsPaused(t.ID) && !e.isSettling(t.ID); attempt++ {
-		log.Printf("[worker %s] task %s 意图 #%d model_error 收场，%v 后重试 (%d/%d)",
-			name, t.ID, intent.ID, retryBackoff, attempt, maxRetries)
-		if sleepCtx(workCtx, retryBackoff) {
-			break // 退避期间被取消（终止/暂停）→ 交给下方分支处理
-		}
-		e.BeginLLMCall(t.ID)
-		if hasChatMessage {
-			reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message)
-		} else {
-			reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding)
-		}
-		e.EndLLMCall(t.ID)
-	}
 	// Capture kill state before detachWork cancels workCtx. kill = this work's
 	// ctx was cancelled (planner kill_work) while the TASK ctx kept running; a
 	// pause cancels the task ctx (ectx) instead. Checking workCtx.Err() AFTER
@@ -1243,6 +1247,13 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		e.touch(t.ID)
 		t.Notify()
 		return true
+	}
+	if retryableWorkerModelError(reason, err) && ectx.Err() == nil &&
+		!e.IsPaused(t.ID) && !e.IsDeleting(t.ID) && !e.isSettling(t.ID) &&
+		!isTerminalStatus(e.m.TaskStatus(t.ID)) {
+		if e.deferWorkerModelRetry(t, name, worker, intent, &retryTrace, err) {
+			return true
+		}
 	}
 	if err != nil {
 		log.Printf("[worker %s] intent %d: %v", name, intent.ID, err)
@@ -1352,7 +1363,7 @@ func sleepCtx(ctx context.Context, d time.Duration) (done bool) {
 }
 
 func (e *Engine) claimNext(t *Task, name string) *db.Node {
-	fr, _ := t.Store.Frontier(20)
+	fr, _ := t.Store.ReadyFrontier(20)
 	for _, in := range fr {
 		if ok, _ := t.Store.ClaimIntent(in.ID, name); ok {
 			return in

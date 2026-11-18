@@ -15,15 +15,16 @@ import (
 
 // 整体墙钟(call-level hard wall clock)。
 //
-// 实战出现过 LLM 连接挂死数小时:TCP 没断、SSE 没帧,SDK 的建连重试和 per-attempt
-// HTTP timeout 都管不到「流已经开始但永远不再来数据」这种半开状态,worker/planner/
+// 实战出现过 LLM 连接挂死数小时:TCP 没断、SSE 没帧,SDK 的建连重试
+// 管不到「流已经开始但永远不再来数据」这种半开状态,worker/planner/
 // 收尾时序被整体冻住。本层在 provider 组装处(Config.NewProvider)给每一次
 // Stream/Complete 调用套一个 context.WithTimeout:从发起计时,覆盖整个流式生命周期;
 // 到点 cancel,错误归一化为 *CallTimeoutError(call_timeout 类,语义 = 可重试的瞬时
 // 失败,参照 429→402 归一化模式),供 llmpool 走故障转移。
 //
-// 与已有的 per-attempt HTTP timeout 不冲突:那是单次 HTTP 尝试的保险,本层是单次
-// 逻辑调用(含 SDK 内部重试、流式全程)的更上层保险。
+// 本项目的响应头/响应读取空闲超时限制单次 HTTP 尝试的等待;本层限制单次逻辑
+// 调用(含 SDK 内部重试、流式全程)。task runtime 在其重试/故障转移外再共享同一预算,
+// 防止这些外层重试每次重新获得完整墙钟。SDK 本身没有默认 HTTP 超时。
 //
 // 配置:env ARTEX_LLM_CALL_TIMEOUT,单位秒,默认 600,0 = 不限(不包这层)。
 const defaultCallTimeoutSeconds = 600
@@ -37,7 +38,7 @@ func callTimeoutFromEnv() time.Duration {
 		return defaultCallTimeoutSeconds * time.Second
 	}
 	n, err := strconv.Atoi(s)
-	if err != nil || n < 0 {
+	if err != nil || n < 0 || int64(n) > int64((1<<63-1)/time.Second) {
 		log.Printf("[llm-call] WARN ARTEX_LLM_CALL_TIMEOUT=%q 非法(应为非负整数秒),按默认 %ds 处理", s, defaultCallTimeoutSeconds)
 		return defaultCallTimeoutSeconds * time.Second
 	}
@@ -58,7 +59,7 @@ type CallTimeoutError struct {
 }
 
 func (e *CallTimeoutError) Error() string {
-	return fmt.Sprintf("llm call_timeout: %s/%s 整体墙钟超时(已耗时 %s,上限 %s),判定连接挂死,按瞬时失败处理",
+	return fmt.Sprintf("llm call_timeout: %s/%s 整体墙钟超时(已耗时 %s,上限 %s),单次调用超出预算,按瞬时失败处理",
 		e.Provider, e.Model, e.Elapsed.Round(time.Millisecond), e.Timeout)
 }
 
@@ -93,6 +94,14 @@ type callTimeoutProvider struct {
 
 // wrapCallTimeout 按 env 配置给 inner 套整体墙钟;0(不限)或 nil inner 时原样返回。
 func wrapCallTimeout(inner llm.Provider, c Config) llm.Provider {
+	return WithCallTimeout(inner, c.Provider(), c.Model)
+}
+
+// WithCallTimeout gives one logical model call a shared wall-clock budget. A
+// router should wrap its complete retry/failover operation, not renew the budget
+// each time it selects or retries an underlying provider. Zero explicitly opts
+// out, matching Config.NewProvider's existing environment setting.
+func WithCallTimeout(inner llm.Provider, provider, model string) llm.Provider {
 	if inner == nil {
 		return nil
 	}
@@ -100,13 +109,13 @@ func wrapCallTimeout(inner llm.Provider, c Config) llm.Provider {
 	if timeout <= 0 {
 		return inner
 	}
-	return &callTimeoutProvider{inner: inner, timeout: timeout, provider: c.Provider(), model: c.Model}
+	return &callTimeoutProvider{inner: inner, timeout: timeout, provider: provider, model: model}
 }
 
 func (p *callTimeoutProvider) warnTimeout(elapsed time.Duration) {
 	// 注意:provider 组装层拿不到 profile 名(Config 里没有);profile 名由外层
 	// llmpool 故障转移日志与 llm_usage 记录(recorder 按 profile 名打标)补全。
-	log.Printf("[llm-call] WARN 整体墙钟超时(call_timeout):provider=%s model=%s 已耗时=%s 上限=%s — 判定连接挂死,归一化为瞬时失败交上层重试/故障转移",
+	log.Printf("[llm-call] WARN 整体墙钟超时(call_timeout):provider=%s model=%s 已耗时=%s 上限=%s — 单次调用超出预算,归一化为瞬时失败交上层重试/故障转移",
 		p.provider, p.model, elapsed.Round(time.Millisecond), p.timeout)
 }
 
@@ -133,6 +142,11 @@ func (p *callTimeoutProvider) Stream(ctx context.Context, req llm.CompletionRequ
 				return
 			}
 		}
+		// A provider may stop its iterator on cancellation without yielding the
+		// context error. Such a return is still a failed call, not a success.
+		if err := callCtx.Err(); err != nil {
+			yield(llm.StreamEvent{}, normalizeDeadline(ctx, callCtx, err, p.provider, p.model, p.timeout, start))
+		}
 	}
 }
 
@@ -142,6 +156,9 @@ func (p *callTimeoutProvider) Complete(ctx context.Context, req llm.CompletionRe
 	callCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 	msg, stop, usage, err := p.inner.Complete(callCtx, req)
+	if err == nil {
+		err = callCtx.Err()
+	}
 	if err != nil {
 		if nerr := normalizeDeadline(ctx, callCtx, err, p.provider, p.model, p.timeout, start); nerr != err {
 			p.warnTimeout(time.Since(start))

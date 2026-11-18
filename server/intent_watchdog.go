@@ -66,14 +66,18 @@ func (e *Engine) reportOverdueP0Intents(t *Task) {
 	if _, worker := e.snapshotFor(t); worker == nil {
 		return // 无 LLM 时没人能领取,上报只是噪声
 	}
-	frontier, err := t.Store.Frontier(50)
+	frontier, err := t.Store.ReadyFrontier(50)
 	if err != nil {
 		log.Printf("[scheduler] task %s P0 巡检读取 frontier 失败: %v", t.ID, err)
 		return
 	}
 	now := time.Now()
 	for _, n := range frontier {
-		overdue, waited := p0ClaimOverdue(n.Priority, n.CreatedAt, now)
+		eligibleAt := n.CreatedAt
+		if n.ModelRetryAt != nil && n.ModelRetryAt.After(eligibleAt) {
+			eligibleAt = *n.ModelRetryAt
+		}
+		overdue, waited := p0ClaimOverdue(n.Priority, eligibleAt, now)
 		if !overdue {
 			continue
 		}

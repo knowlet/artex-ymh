@@ -17,12 +17,13 @@ func TestCallTimeoutFromEnv(t *testing.T) {
 		set  bool
 		want time.Duration
 	}{
-		{set: false, want: 600 * time.Second},   // 未设 → 默认 600s
-		{env: "0", set: true, want: 0},          // 0 = 不限
+		{set: false, want: 600 * time.Second}, // 未设 → 默认 600s
+		{env: "0", set: true, want: 0},        // 0 = 不限
 		{env: "30", set: true, want: 30 * time.Second},
 		{env: " 120 ", set: true, want: 120 * time.Second},
-		{env: "abc", set: true, want: 600 * time.Second}, // 非法 → 默认
-		{env: "-5", set: true, want: 600 * time.Second},  // 负值 → 默认
+		{env: "abc", set: true, want: 600 * time.Second},                 // 非法 → 默认
+		{env: "-5", set: true, want: 600 * time.Second},                  // 负值 → 默认
+		{env: "9223372036854775807", set: true, want: 600 * time.Second}, // duration overflow
 	}
 	for _, c := range cases {
 		if c.set {
@@ -33,6 +34,32 @@ func TestCallTimeoutFromEnv(t *testing.T) {
 		}
 		if got := callTimeoutFromEnv(); got != c.want {
 			t.Errorf("env=%q set=%v: callTimeoutFromEnv()=%v, want %v", c.env, c.set, got, c.want)
+		}
+	}
+}
+
+type silentDeadlineProvider struct{}
+
+func (silentDeadlineProvider) Stream(ctx context.Context, _ llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
+	return func(func(llm.StreamEvent, error) bool) { <-ctx.Done() }
+}
+
+func (silentDeadlineProvider) Complete(ctx context.Context, _ llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+	<-ctx.Done()
+	return llm.Message{}, "", llm.Usage{}, nil
+}
+
+func TestCallTimeoutCannotBecomeSilentSuccess(t *testing.T) {
+	p := &callTimeoutProvider{inner: silentDeadlineProvider{}, timeout: 20 * time.Millisecond}
+	var streamErr error
+	for _, err := range p.Stream(context.Background(), llm.CompletionRequest{}) {
+		streamErr = err
+	}
+	_, _, _, completeErr := p.Complete(context.Background(), llm.CompletionRequest{})
+	for _, err := range []error{streamErr, completeErr} {
+		var timeout *CallTimeoutError
+		if !errors.As(err, &timeout) {
+			t.Fatalf("silent deadline became success: %v", err)
 		}
 	}
 }

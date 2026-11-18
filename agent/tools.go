@@ -24,6 +24,10 @@ func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64) []map[
 		var p map[string]any
 		_ = json.Unmarshal(n.Payload, &p)
 		m := map[string]any{"id": n.ID, "summary": p["summary"], "state": n.State}
+		if n.State == "open" && n.ModelRetryAt != nil {
+			m["model_retry"] = map[string]any{"attempt": n.ModelRetryCount, "retry_at": n.ModelRetryAt,
+				"status": "waiting", "guidance": "模型暂时不可用，已排程恢复原会话；此方向仍在进行，不要重复派发"}
+		}
 		if exploration := compactIntentExploration(n.Payload); exploration != nil {
 			m["exploration"] = exploration
 		}
@@ -1167,7 +1171,7 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 func (t *ToolSet) addIntent() actool.CoreTool {
 	return t.writeExpTool("add_intent", "生成【探索方向】写入 frontier，并连入探索链路。意图是开放的探索方向，不是固定类型——用 summary 一句话自由描述要探索/验证/利用什么。\n"+
 		"信息不足时可建立获取新证据的探索意图；可选 exploration 记录待回答的问题、方法、可区分假设的观察与停止条件，不把假设当事实。"+
-		"★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors）。单条则省略 intents 直接给顶层 summary。",
+		"★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors）。单条则省略 intents 直接给顶层 summary。参数直接传对象，不加 arguments 包装；批量时 asset_ids/parent_ids 等放在各个 intents 元素内，不作为顶层共享默认值。",
 		obj(map[string]any{
 			"intents":     map[string]any{"type": "array", "description": "【优先用这个】要新增的探索方向数组，按顺序处理。每个元素字段同下方顶层字段（summary/asset_ids/parent_ids/priority/chain_tags/exploration）。返回 ids 与本数组等长、同序。", "items": map[string]any{"type": "object"}},
 			"exploration": intentExplorationSchema(),
@@ -1178,17 +1182,9 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 			"chain_tags":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "攻击面链标签（可选，1-2 个，取值仅限 web/ad/app/priv/pwn/recon/rev/pivot/meta）：按该方向的主要攻击面打标，引擎据此给执行 worker 注入对应场景的反问决策骨架（场景→判据→转向）。拿不准按关键词选（sql/注入→web、域/kerberos→ad、提权→priv、隧道/代理/横向→pivot、逆向/脱壳→rev、堆/栈/ctf→pwn、侦察/指纹→recon、apk/frida/小程序→app）；实在拿不准留空，引擎按 summary 关键词自动匹配。"},
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
-			var a struct {
-				Intents    []intentItem `json:"intents"`
-				intentItem              // 单条模式：顶层 summary/asset_ids/parent_ids/priority
-			}
-			if err := json.Unmarshal(in, &a); err != nil {
+			items, batch, err := parseIntentArguments(in)
+			if err != nil {
 				return actool.Errorf("Invalid add_intent input: " + err.Error()), nil
-			}
-			batch := len(a.Intents) > 0
-			items := a.Intents
-			if !batch {
-				items = []intentItem{a.intentItem}
 			}
 
 			ids := make([]int64, len(items))

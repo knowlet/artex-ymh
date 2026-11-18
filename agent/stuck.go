@@ -109,8 +109,8 @@ type stuckEntry struct {
 	isErr bool
 }
 
-// StuckDetector 是滚动停滞检测器:每条意图一个(建在 model_error 重跑循环外,重跑
-// 不清零额度),由调用方逐个喂 tool_result。非并发安全——harness 的 hook 串行调用,
+// StuckDetector 是滚动停滞检测器:每次 worker 执行一个,由调用方逐个喂
+// tool_result。非并发安全——harness 的 hook 串行调用,
 // 与 steerHooks 的既有假设一致。
 type StuckDetector struct {
 	cfg        StuckConfig

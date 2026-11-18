@@ -101,15 +101,14 @@ export const RETRY_LAYERS = {
     offHint: "-1 = 瞬时失败永不熔断（确定性失败仍然熔断）",
   },
   intent: {
-    title: "意图重跑",
-    where: "本项目 · 进程级，全局一份",
-    trigger:
-      "前面几层都没兜住：worker 以 model_error 收场——内层重试全部用尽，或者流已经开始交付输出后才断掉（那时重放不安全，只能整条重来）。",
-    skips: "额度耗尽已经由轮询换配置处理，不在这里重跑；任务被暂停 / 终止 / 进入收尾时立即让位，不占用退避时间。",
-    desc: "整条意图从头再跑一遍。它是最外层，一次重跑意味着里面几层的次数会再乘一遍。",
+    title: "意图恢复",
+    where: "全局策略 · 每条意图持久化计数与冷却",
+    trigger: "内层重试用尽后，worker 因临时网络错误、超时、限流或供应商 5xx 收场，且完整会话和已执行工具结果已持久化。",
+    skips: "鉴权、额度、上下文和不可恢复的会话错误不自动重试；暂停、终止、删除及任务截止时间仍优先。",
+    desc: "冷却后从原会话继续，保留已有事实和工具结果。次数和下次恢复时间落库，重启不重置；冷却期间释放 worker。",
     attemptsLabel: "重跑次数",
     defAttempts: 2,
-    defInterval: "固定 3s",
+    defInterval: "1min→5min（更多次数为 30min）",
     offHint: "-1 = 不重跑，该意图直接判为 blocked",
   },
 } satisfies Record<string, LayerMeta>;
