@@ -265,21 +265,39 @@ func (b *streamBody) finalize() error {
 		call.Function.Name, call.Function.Arguments = p.name.String(), p.arguments.String()
 		calls = append(calls, call)
 	}
-	if err := validateCalls(calls, b.rules, b.finish); err != nil {
+	finish := b.finish
+	tail, dsmlContent, err := b.content.finish()
+	if err != nil {
 		return err
 	}
-	tail, err := b.content.finish()
+	refusalTail, dsmlRefusal, err := b.refusal.finish()
 	if err != nil {
+		return err
+	}
+	dsmlParsed := dsmlContent
+	if len(dsmlRefusal) > 0 {
+		if len(dsmlParsed) > 0 {
+			return protocolError("unparsed_dsml_tool_call")
+		}
+		dsmlParsed = dsmlRefusal
+	}
+	hadStructured := len(calls) > 0
+	calls = appendParsedDSMLCalls(calls, dsmlParsed)
+	if len(dsmlParsed) > 0 && hadStructured {
+		return protocolError("unparsed_dsml_tool_call")
+	}
+	if len(dsmlParsed) > 0 {
+		if finish == "stop" || finish == "" {
+			finish = "tool_calls"
+		}
+	}
+	if err := validateCalls(calls, b.rules, finish); err != nil {
 		return err
 	}
 	if tail != "" {
 		if err := b.delta(map[string]string{"content": tail}, nil); err != nil {
 			return err
 		}
-	}
-	refusalTail, err := b.refusal.finish()
-	if err != nil {
-		return err
 	}
 	if refusalTail != "" {
 		if err := b.delta(map[string]string{"refusal": refusalTail}, nil); err != nil {
@@ -293,7 +311,7 @@ func (b *streamBody) finalize() error {
 			return err
 		}
 	}
-	if err := b.delta(map[string]any{}, b.finish); err != nil {
+	if err := b.delta(map[string]any{}, finish); err != nil {
 		return err
 	}
 	b.pending.WriteString("data: [DONE]\n\n")
