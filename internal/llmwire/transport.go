@@ -199,30 +199,89 @@ func normalizeComplete(raw []byte, rules map[string]argumentRules) ([]byte, erro
 	if e := envelope["error"]; len(e) > 0 && string(e) != "null" {
 		return raw, nil
 	} // preserve SDK error handling
-	var choices []struct {
-		Message struct {
-			Content   string     `json:"content"`
-			Refusal   string     `json:"refusal"`
-			ToolCalls []wireCall `json:"tool_calls"`
-		} `json:"message"`
-		Finish string `json:"finish_reason"`
-	}
+	var choices []json.RawMessage
 	if json.Unmarshal(envelope["choices"], &choices) != nil {
 		return nil, protocolError("invalid_response_choices")
 	}
 	if len(choices) > 1 {
 		return nil, protocolError("multiple_choices_unsupported")
 	}
-	for _, choice := range choices {
-		if strings.Contains(choice.Message.Content, dsmlMarker) ||
-			strings.Contains(choice.Message.Refusal, dsmlMarker) {
-			return nil, protocolError("unparsed_dsml_tool_call")
+	modified := false
+	for i, choiceRaw := range choices {
+		var choice object
+		if json.Unmarshal(choiceRaw, &choice) != nil || choice == nil {
+			return nil, protocolError("invalid_response_choices")
 		}
-		if err := validateCalls(choice.Message.ToolCalls, rules, choice.Finish); err != nil {
+		var finish string
+		if raw := choice["finish_reason"]; len(raw) > 0 && string(raw) != "null" {
+			_ = json.Unmarshal(raw, &finish)
+		}
+		var msg object
+		if raw := choice["message"]; len(raw) > 0 && string(raw) != "null" {
+			if json.Unmarshal(raw, &msg) != nil || msg == nil {
+				return nil, protocolError("invalid_response_choices")
+			}
+		}
+		if msg == nil {
+			msg = object{}
+		}
+		var content string
+		if raw := msg["content"]; len(raw) > 0 && string(raw) != "null" {
+			_ = json.Unmarshal(raw, &content)
+		}
+		if raw := msg["refusal"]; len(raw) > 0 && string(raw) != "null" {
+			var refusal string
+			_ = json.Unmarshal(raw, &refusal)
+			if strings.Contains(refusal, dsmlMarker) {
+				return nil, protocolError("unparsed_dsml_tool_call")
+			}
+		}
+		var existing []wireCall
+		if raw := msg["tool_calls"]; len(raw) > 0 && string(raw) != "null" {
+			if json.Unmarshal(raw, &existing) != nil {
+				return nil, protocolError("invalid_response_choices")
+			}
+		}
+		plain, calls, newFinish, promoted, err := promoteContentDSML(content, finish, existing)
+		if err != nil {
+			return nil, err
+		}
+		if !promoted {
+			calls = existing
+			newFinish = finish
+		} else {
+			msg["content"], _ = json.Marshal(plain)
+			callsRaw, err := json.Marshal(calls)
+			if err != nil {
+				return nil, protocolError("invalid_response_json")
+			}
+			msg["tool_calls"] = callsRaw
+			choice["finish_reason"], _ = json.Marshal(newFinish)
+			msgRaw, err := json.Marshal(msg)
+			if err != nil {
+				return nil, protocolError("invalid_response_json")
+			}
+			choice["message"] = msgRaw
+			choiceRaw, err := json.Marshal(choice)
+			if err != nil {
+				return nil, protocolError("invalid_response_json")
+			}
+			choices[i] = choiceRaw
+			modified = true
+		}
+		if err := validateCalls(calls, rules, newFinish); err != nil {
 			return nil, err
 		}
 	}
-	return raw, nil
+	if !modified {
+		return raw, nil
+	}
+	envelope["choices"], _ = json.Marshal(choices)
+	out, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, protocolError("invalid_response_json")
+	}
+	return out, nil
 }
 
 type completeBody struct {
@@ -258,15 +317,63 @@ func (b *completeBody) Close() error { return b.source.Close() }
 
 // contentGuard retains only a possible marker suffix, so normal text remains
 // streaming and a DSML marker split across arbitrary chunks never escapes.
-// Used for assistant content and refusal; reasoning and tool arguments are not
-// passed through this guard.
-type contentGuard struct{ tail string }
+// Complete DSML tool_calls blocks are held back and parsed at finish.
+// Reasoning and tool arguments are not passed through this guard.
+type contentGuard struct {
+	tail      string
+	heldPlain strings.Builder
+	dsml      strings.Builder
+	inDSML    bool
+	parseDSML bool
+}
+
+func newDSMLContentGuard() contentGuard { return contentGuard{parseDSML: true} }
+
+func newRefusalContentGuard() contentGuard { return contentGuard{parseDSML: false} }
 
 func (g *contentGuard) push(text string) (string, error) {
 	text = g.tail + text
 	g.tail = ""
-	if strings.Contains(text, dsmlMarker) {
-		return "", protocolError("unparsed_dsml_tool_call")
+	if !g.parseDSML {
+		if strings.Contains(text, dsmlMarker) {
+			return "", protocolError("unparsed_dsml_tool_call")
+		}
+		for n := min(len(text), len(dsmlMarker)-1); n > 0; n-- {
+			if strings.HasSuffix(text, dsmlMarker[:n]) {
+				g.tail = text[len(text)-n:]
+				return text[:len(text)-n], nil
+			}
+		}
+		return text, nil
+	}
+	if g.inDSML {
+		if err := g.appendDSML(text); err != nil {
+			return "", err
+		}
+		return "", nil
+	}
+	if idx := strings.Index(text, dsmlMarker); idx >= 0 {
+		before := text[:idx]
+		after := text[idx:]
+		switch {
+		case strings.HasPrefix(after, dsmlToolCallsOpen):
+			g.inDSML = true
+			if before != "" {
+				g.heldPlain.WriteString(before)
+			}
+			if err := g.appendDSML(after); err != nil {
+				return "", err
+			}
+			return "", nil
+		case isDSMLToolCallsPrefix(after):
+			g.tail = after
+			if before != "" {
+				g.heldPlain.WriteString(before)
+			}
+			return "", nil
+		default:
+			return "", protocolError("unparsed_dsml_tool_call")
+		}
 	}
 	for n := min(len(text), len(dsmlMarker)-1); n > 0; n-- {
 		if strings.HasSuffix(text, dsmlMarker[:n]) {
@@ -274,14 +381,63 @@ func (g *contentGuard) push(text string) (string, error) {
 			return text[:len(text)-n], nil
 		}
 	}
+	if extra := possibleDSMLToolCallsTail(text); extra != "" {
+		g.tail = extra
+		return text[:len(text)-len(extra)], nil
+	}
 	return text, nil
 }
-func (g *contentGuard) finish() (string, error) {
-	// Reject an unmistakable but truncated DSML token, not a normal trailing '<'.
-	if strings.HasPrefix(g.tail, "<｜DSML") {
-		return "", protocolError("unparsed_dsml_tool_call")
+
+func (g *contentGuard) appendDSML(text string) error {
+	if g.dsml.Len()+len(text) > maxBodyBytes {
+		return protocolError("unparsed_dsml_tool_call")
+	}
+	g.dsml.WriteString(text)
+	return nil
+}
+
+func (g *contentGuard) finish() (string, []wireCall, error) {
+	if !g.parseDSML {
+		if strings.HasPrefix(g.tail, "<｜DSML") || isDSMLToolCallsPrefix(g.tail) {
+			return "", nil, protocolError("unparsed_dsml_tool_call")
+		}
+		tail := g.tail
+		g.tail = ""
+		return tail, nil, nil
+	}
+	if g.inDSML || g.dsml.Len() > 0 {
+		captured := g.dsml.String() + g.tail
+		g.tail, g.inDSML = "", false
+		g.dsml.Reset()
+		prefix, suffix, calls, err := extractDSMLToolCalls(captured)
+		if err != nil {
+			return "", nil, err
+		}
+		outside := g.heldPlain.String() + prefix + suffix
+		g.heldPlain.Reset()
+		return outside, calls, nil
+	}
+	if strings.HasPrefix(g.tail, "<｜DSML") || isDSMLToolCallsPrefix(g.tail) {
+		return "", nil, protocolError("unparsed_dsml_tool_call")
 	}
 	tail := g.tail
 	g.tail = ""
-	return tail, nil
+	return tail, nil, nil
+}
+
+func isDSMLToolCallsPrefix(text string) bool {
+	return text != "" && strings.HasPrefix(dsmlToolCallsOpen, text) && strings.HasPrefix(text, "<｜")
+}
+
+func possibleDSMLToolCallsTail(text string) string {
+	for n := min(len(text), len(dsmlToolCallsOpen)-1); n > len(dsmlMarker); n-- {
+		suffix := text[len(text)-n:]
+		if strings.HasPrefix(dsmlToolCallsOpen, suffix) && !strings.HasPrefix(suffix, dsmlMarker) {
+			return suffix
+		}
+		if strings.HasPrefix(suffix, dsmlMarker) && strings.HasPrefix(dsmlToolCallsOpen, suffix) {
+			return suffix
+		}
+	}
+	return ""
 }

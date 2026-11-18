@@ -34,7 +34,10 @@ type streamBody struct {
 func newStreamBody(source io.ReadCloser, rules map[string]argumentRules) *streamBody {
 	scanner := bufio.NewScanner(source)
 	scanner.Buffer(make([]byte, 4096), maxBodyBytes)
-	return &streamBody{source: source, scanner: scanner, rules: rules, calls: map[int]*pendingCall{}}
+	body := &streamBody{source: source, scanner: scanner, rules: rules, calls: map[int]*pendingCall{}}
+	body.content = newDSMLContentGuard()
+	body.refusal = newRefusalContentGuard()
+	return body
 }
 func (b *streamBody) Close() error { return b.source.Close() }
 func (b *streamBody) Read(p []byte) (int, error) {
@@ -265,21 +268,35 @@ func (b *streamBody) finalize() error {
 		call.Function.Name, call.Function.Arguments = p.name.String(), p.arguments.String()
 		calls = append(calls, call)
 	}
-	if err := validateCalls(calls, b.rules, b.finish); err != nil {
+	finish := b.finish
+	tail, dsmlContent, err := b.content.finish()
+	if err != nil {
 		return err
 	}
-	tail, err := b.content.finish()
+	refusalTail, _, err := b.refusal.finish()
 	if err != nil {
+		return err
+	}
+	if refusalTail != "" && strings.Contains(refusalTail, dsmlMarker) {
+		return protocolError("unparsed_dsml_tool_call")
+	}
+	hadStructured := len(calls) > 0
+	if len(dsmlContent) > 0 {
+		if hadStructured || !shouldPromoteContentDSML(finish, tail) {
+			return protocolError("unparsed_dsml_tool_call")
+		}
+		calls = appendParsedDSMLCalls(calls, dsmlContent)
+		if finish == "stop" || finish == "" {
+			finish = "tool_calls"
+		}
+	}
+	if err := validateCalls(calls, b.rules, finish); err != nil {
 		return err
 	}
 	if tail != "" {
 		if err := b.delta(map[string]string{"content": tail}, nil); err != nil {
 			return err
 		}
-	}
-	refusalTail, err := b.refusal.finish()
-	if err != nil {
-		return err
 	}
 	if refusalTail != "" {
 		if err := b.delta(map[string]string{"refusal": refusalTail}, nil); err != nil {
@@ -293,7 +310,7 @@ func (b *streamBody) finalize() error {
 			return err
 		}
 	}
-	if err := b.delta(map[string]any{}, b.finish); err != nil {
+	if err := b.delta(map[string]any{}, finish); err != nil {
 		return err
 	}
 	b.pending.WriteString("data: [DONE]\n\n")

@@ -17,9 +17,10 @@ import (
 )
 
 var testRules = map[string]argumentRules{
-	"get_worker_trace": {Required: []string{"intent_id"}, Properties: map[string]json.RawMessage{"intent_id": json.RawMessage(`{"type":"integer"}`)}},
-	"ping":             {},
-	"literal":          {Required: []string{"arguments"}},
+	"get_worker_trace":  {Required: []string{"intent_id"}, Properties: map[string]json.RawMessage{"intent_id": json.RawMessage(`{"type":"integer"}`)}},
+	"get_worker_output": {Required: []string{"intent_id"}, Properties: map[string]json.RawMessage{"intent_id": json.RawMessage(`{"type":"integer"}`)}},
+	"ping":              {},
+	"literal":           {Required: []string{"arguments"}},
 }
 
 func testCall(index int, id, name, args string) wireCall {

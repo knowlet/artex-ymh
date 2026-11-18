@@ -58,11 +58,12 @@ For requests declaring function tools:
   malformed SSE JSON, and in-stream error objects. A single invalid call
   prevents all calls in that model turn from being released.
 - Detect `<｜DSML｜` across content deltas while retaining only a possible marker
-  suffix. Return `openai tool protocol: unparsed_dsml_tool_call`; never execute
-  DSML prose or report it as a successfully completed tool call. With tools
-  enabled, **literal DSML in assistant content is intentionally rejected too**.
-  Requests without tools, reasoning fields, and strings inside structured tool
-  arguments are not subject to this content guard.
+  suffix. When a **complete** DSML `tool_calls` block is present, parse its
+  `invoke` / `parameter` children into structured tool calls instead of surfacing
+  the markup to the user. Incomplete, nested, or non-`tool_calls` DSML still
+  returns `openai tool protocol: unparsed_dsml_tool_call`. Requests without tools,
+  reasoning fields, and strings inside structured tool arguments are not subject
+  to this content guard.
 - Do not blindly unwrap `arguments` or `input`: either can be a legitimate tool
   property. A wrapper that hides a required field produces a diagnostic instead.
 - Bound each SSE frame, accumulated tool data and an atomic response to 16 MiB,

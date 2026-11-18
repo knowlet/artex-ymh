@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Autumn-27/artex/internal/llmwire"
 	"github.com/Autumn-27/artex/llmrec"
 	"github.com/Autumn-27/norma/llm"
 )
@@ -113,6 +114,84 @@ data: [DONE]
 		t.Fatalf("calls=%+v", calls)
 	}
 }
+func workerOutputWireRequest() llm.CompletionRequest {
+	return llm.CompletionRequest{
+		Messages: []llm.Message{llm.UserText("read worker outputs")},
+		Tools: []llm.ToolSchema{{Name: "get_worker_output", InputSchema: map[string]any{
+			"type": "object", "required": []string{"intent_id"}, "properties": map[string]any{"intent_id": map[string]any{"type": "integer"}},
+		}}},
+	}
+}
+
+func TestOpenAIWireParsesDSMLBatchGetWorkerOutput(t *testing.T) {
+	for _, stream := range []bool{true, false} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			var raw string
+			if stream {
+				body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": llmwire.LeakedDSMLBatchFixture}}}})
+				raw = "data: " + string(body) + "\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+			} else {
+				body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": llmwire.LeakedDSMLBatchFixture}, "finish_reason": "stop"}}})
+				raw = string(body)
+			}
+			prov, _, ctx := toolWireFixture(t, raw, stream)
+			want := []int64{8, 9, 10, 11}
+			if stream {
+				acc := llm.NewAccumulator()
+				for ev, err := range prov.Stream(ctx, workerOutputWireRequest()) {
+					if err != nil {
+						t.Fatal(err)
+					}
+					acc.Add(ev)
+				}
+				msg := acc.Message()
+				for _, block := range msg.Content {
+					if block.Type == llm.BlockText && strings.TrimSpace(block.Text) != "" {
+						t.Fatalf("leaked content: %q", block.Text)
+					}
+				}
+				calls := msg.ToolUses()
+				if len(calls) != len(want) {
+					t.Fatalf("calls=%+v", calls)
+				}
+				for i, call := range calls {
+					if call.Name != "get_worker_output" {
+						t.Fatalf("call[%d]=%+v", i, call)
+					}
+					var args struct {
+						IntentID int64 `json:"intent_id"`
+					}
+					if json.Unmarshal(call.Input, &args) != nil || args.IntentID != want[i] {
+						t.Fatalf("call[%d] args=%s", i, string(call.Input))
+					}
+				}
+				return
+			}
+			msg, _, _, err := prov.Complete(ctx, workerOutputWireRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, block := range msg.Content {
+				if block.Type == llm.BlockText && strings.TrimSpace(block.Text) != "" {
+					t.Fatalf("leaked content: %q", block.Text)
+				}
+			}
+			calls := msg.ToolUses()
+			if len(calls) != len(want) {
+				t.Fatalf("calls=%+v", calls)
+			}
+			for i, call := range calls {
+				var args struct {
+					IntentID int64 `json:"intent_id"`
+				}
+				if json.Unmarshal(call.Input, &args) != nil || args.IntentID != want[i] {
+					t.Fatalf("call[%d] args=%s", i, string(call.Input))
+				}
+			}
+		})
+	}
+}
+
 func TestOpenAIWireRejectsDSMLAndBrokenArguments(t *testing.T) {
 	for _, stream := range []bool{true, false} {
 		for _, mode := range []string{"dsml", "broken", "wrapped"} {
