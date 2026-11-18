@@ -411,9 +411,9 @@ func TestPlannerProgressRecoveryBudget(t *testing.T) {
 		duration  time.Duration
 		permitted bool
 	}{
-		{"unlimited_original", 0, TaskClock{}, 3, time.Minute, true},
-		{"smaller_original", 1, TaskClock{}, 1, time.Minute, true},
-		{"task_remaining", 20, TaskClock{DeadlineUnix: 1012}, 3, 12 * time.Second, true},
+		{"unlimited_original", 0, TaskClock{}, 8, 90 * time.Second, true},
+		{"smaller_original", 1, TaskClock{}, 1, 90 * time.Second, true},
+		{"task_remaining", 20, TaskClock{DeadlineUnix: 1012}, 8, 12 * time.Second, true},
 		{"expired", 0, TaskClock{DeadlineUnix: 999}, 0, 0, false},
 		{"final", 0, TaskClock{Final: true}, 0, 0, false},
 	} {
@@ -524,7 +524,7 @@ func TestPlannerProgressUnreliableBeforeSkipsStallDetection(t *testing.T) {
 	p := NewPlanner(provider, "fixture", t.TempDir(), nil, 0, 5)
 	retries := 0
 	err := p.runWithProgressCheck(t.Context(), agentcore.Options{Provider: provider, MaxTurns: 5},
-		"heartbeat fixture", ts, db.PlannerProgress{}, false, true,
+		"heartbeat fixture", "", ts, db.PlannerProgress{}, false, true,
 		func() map[string]any { return nil }, func() bool { return false },
 		func(a db.Activity) {
 			if strings.Contains(string(a.Metadata), "planner_progress_retry") {

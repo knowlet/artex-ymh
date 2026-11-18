@@ -322,6 +322,10 @@ ALTER TABLE activity ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{
 -- original session). Only worker='mainagent' rows carry it.
 ALTER TABLE activity ADD COLUMN IF NOT EXISTS main_seg INTEGER;
 CREATE INDEX IF NOT EXISTS idx_act_node  ON activity(exploration_id, node_id, id);
+-- Worker outcome reads choose the latest result, otherwise latest text, without
+-- scanning a long intent's initial activity pages or unrelated tool output.
+CREATE INDEX IF NOT EXISTS idx_act_worker_output ON activity(exploration_id, node_id, kind, id DESC)
+    WHERE kind IN ('result', 'text');
 CREATE INDEX IF NOT EXISTS idx_act_since ON activity(exploration_id, id);
 CREATE INDEX IF NOT EXISTS idx_act_tool_call ON activity(exploration_id, tool_use_id, id)
   WHERE kind IN ('tool_use', 'tool_result');
