@@ -1,0 +1,140 @@
+name: approval advisory
+
+on:
+  pull_request:
+    paths:
+      - 'approvalreview/**'
+      - 'db/**'
+      - 'intercept/**'
+      - 'server/**'
+      - 'web/**'
+      - 'docs/APPROVAL-ADVISORY.md'
+      - 'scripts/e2e-advisory.sh'
+      - '.github/workflows/approval-advisory.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: approval-advisory-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Record exact tested source without credentials or runtime data
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/approval-evidence
+          git rev-parse HEAD > /tmp/approval-evidence/commit.txt
+          git rev-parse HEAD^{tree} > /tmp/approval-evidence/tree.txt
+          git archive --format=tar.gz --output=/tmp/approval-evidence/source.tar.gz HEAD
+          (cd /tmp/approval-evidence && sha256sum source.tar.gz > SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: approval-advisory-source
+          path: /tmp/approval-evidence/
+          retention-days: 7
+          if-no-files-found: error
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: artex_test
+          POSTGRES_PASSWORD: disposable_test_password
+          POSTGRES_DB: artex_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U artex_test -d artex_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ARTEX_PG_DSN: postgres://artex_test:disposable_test_password@localhost:5432/artex_test?sslmode=disable
+      ARTEX_AUTH_TEST_DSN: postgres://artex_test:disposable_test_password@localhost:5432/artex_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Commit hygiene (no jwt.key / static out in tree)
+        run: bash scripts/check-advisory-commit-hygiene.sh
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Advisory safety and integration regressions (no skips)
+        run: |
+          python3 - <<'PYTEST'
+          import json, pathlib, re, subprocess, sys
+          module = re.search(r'^module\s+(\S+)', pathlib.Path('go.mod').read_text(), re.M)[1]
+          files = ['approvalreview/review_test.go', 'db/approval_advisory_test.go', 'db/approval_advisory_auto_test.go', 'server/approval_advisory_test.go', 'server/approval_advisory_worker_test.go']
+          expected = set()
+          for name in files:
+              path = pathlib.Path(name)
+              tests = re.findall(r'^func (TestApprovalAdvisory\w*)\(t \*testing\.T\)', path.read_text(), re.M)
+              expected.update((module + '/' + str(path.parent), test) for test in tests)
+          if len(expected) < 24:
+              sys.exit('Required advisory regression coverage is missing')
+          cmd = ['go', 'test', '-json', '-race', '-count=1', '-p=1', '-timeout=10m',
+                 './approvalreview', './db', './intercept', './server', '-run', '^TestApprovalAdvisory']
+          passed, skipped = set(), []
+          process = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
+          with open('/tmp/advisory-tests.jsonl', 'w') as evidence:
+              for line in process.stdout:
+                  evidence.write(line)
+                  print(line, end='', flush=True)
+                  event = json.loads(line)
+                  if event.get('Action') == 'pass' and event.get('Test'):
+                      passed.add((event['Package'], event['Test']))
+                  if event.get('Action') == 'skip':
+                      skipped.append((event['Package'], event.get('Test', '<package>')))
+          status = process.wait()
+          missing = sorted(expected - passed)
+          print('Required top-level tests:', len(expected), 'passed:', len(expected & passed))
+          print('Missing PASS:', missing, 'SKIP:', skipped)
+          sys.exit(1 if status or missing or skipped else 0)
+          PYTEST
+      - name: Vet and backend build
+        run: |
+          go vet ./approvalreview ./db ./intercept ./server
+          go build ./cmd/artex
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: approval-advisory-test-evidence
+          path: /tmp/advisory-tests.jsonl
+          retention-days: 7
+          if-no-files-found: error
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: State regressions, type check and static build
+        working-directory: web
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run test:e2e:config
+          node --experimental-strip-types --test tests/approval-advisory.test.mjs
+          npx --no-install tsc --noEmit
+          npm run build:static

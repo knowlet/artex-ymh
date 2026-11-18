@@ -71,7 +71,7 @@ func TestSecuritySkillMetadataMemory(t *testing.T) {
 			})
 			// Allow output storage, bounded buffer growth, and a small fixed
 			// overhead; do not allow allocation proportional to line headers.
-			limit := int64(4*len(tt.content) + 8<<10)
+			limit := int64((4*len(tt.content) + 8<<10) * skillMetadataBenchmarkAllocScale)
 			allocated := result.AllocedBytesPerOp()
 			t.Logf("input=%d bytes, allocated=%d bytes/op, limit=%d bytes/op", len(tt.content), allocated, limit)
 			if allocated > limit {

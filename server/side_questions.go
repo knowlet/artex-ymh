@@ -271,6 +271,8 @@ func (s *Server) sideParent(w http.ResponseWriter, r *http.Request, kind string)
 }
 
 func (s *Server) registerSideRoutes(mux *http.ServeMux) {
+	// Companion consultations share authenticated routing, not execution authority.
+	s.registerApprovalAdvisoryRoutes(mux)
 	for _, route := range []struct{ path, kind string }{{"/api/conversations/{id}", "conversation"}, {"/api/tasks/{id}/chat", "main"}, {"/api/tasks/{id}/intents/{iid}", "worker"}} {
 		for _, method := range []string{"GET", "POST", "DELETE"} {
 			mux.HandleFunc(method+" "+route.path+"/side-questions", func(w http.ResponseWriter, r *http.Request) {
