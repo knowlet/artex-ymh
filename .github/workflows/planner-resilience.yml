@@ -70,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           go test -race -count=1 -p=1 -timeout=8m -json ./db ./agent ./server \
-            -run '^(TestIntentArguments|TestAddIntentWrapped|TestReportFindingWrapped|TestPlannerWrappedIntent|TestOpenAIWireWrappedIntent|TestTransientModelError|TestProviderContextOverflow|TestProviderStalledStream|TestLLMTransport|TestCallTimeout|TestPlannerTransientRetry|TestPlannerOutage|TestTaskLLMRetryShares|TestIntentModelRetry|TestWorkerModelRetry|TestWorkerModelRecovery)' \
+            -run '^(TestIntentArguments|TestAddIntentWrapped|TestReportFindingWrapped|TestPlannerWrappedIntent|TestOpenAIWireWrappedIntent|TestAccessVulnCandidateFact|TestIntentLooksLikePOC|TestRenderPOCFollowup|TestBuildPOCFollowup|TestGraphOverviewPOC|TestGraphOverviewBlockedPOC|TestTransientModelError|TestProviderContextOverflow|TestProviderStalledStream|TestLLMTransport|TestCallTimeout|TestPlannerTransientRetry|TestPlannerOutage|TestTaskLLMRetryShares|TestIntentModelRetry|TestWorkerModelRetry|TestWorkerModelRecovery)' \
             | tee "$RUNNER_TEMP/planner-resilience.jsonl"
           python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-resilience.jsonl" \
             github.com/Autumn-27/artex/agent \
@@ -85,6 +85,7 @@ jobs:
             TestAccessVulnCandidateFactClassification \
             TestBuildPOCFollowupSnapshotUnit \
             TestGraphOverviewPOCFollowupIntegration \
+            TestGraphOverviewBlockedPOCRetryHints \
             TestTransientModelErrorClassification \
             TestProviderContextOverflowAliasReachesCompactor \
             TestProviderStalledStreamUsesIdleTimeout \
