@@ -100,13 +100,18 @@ committed graph changes.
 
 When unfinished goals remain with no queued or running intent, a successful
 round that makes no progress receives one bounded corrective attempt in the
-same heartbeat: at most three turns and 60 seconds, reduced by a smaller
+same heartbeat: at most eight turns and 90 seconds, reduced by a smaller
 positive configured turn limit or the task's remaining deadline. The correction
 starts a fresh short session with the existing tools and approval hooks,
-refreshed graph and todos, and the preceding conclusion or tool error; it
-does not synthesize an intent or accept DSML prose as a tool call. Provider
+refreshed graph and todos, recent worker feedback, and a bounded digest of paired
+tool inputs/results. It can discover permitted capabilities and gather relevant
+decision evidence; it does not synthesize an intent or accept DSML prose as a tool call. Provider
 errors are preserved rather than immediately replaying a failed exchange.
 Cancellation and the task's final wrap-up prevent another work-producing run.
+
+See [adaptive exploration](ADAPTIVE-EXPLORATION.md) for the evidence/discovery
+options in that corrective phase, optional experiment metadata, and limits of
+post-round recovery when an initial unlimited session has not returned.
 
 If the initial progress snapshot cannot be read, the round returns a visible
 database error and leaves the normal heartbeat in control. An unavailable

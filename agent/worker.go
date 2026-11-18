@@ -409,7 +409,11 @@ func intentAssetIDs(intent *db.Node) []int64 {
 }
 
 func renderIntentTask(intent *db.Node) string {
-	return fmt.Sprintf("\n\n【你领到的意图（本次唯一任务：只做这一条、只产生事实、做完即停）】：\n%s\n意图 id: %d（写回 record_fact / report_finding 时传它）", string(intent.Payload), intent.ID)
+	text := fmt.Sprintf("\n\n【你领到的意图（本次唯一任务：只做这一条、只产生事实、做完即停）】：\n%s\n意图 id: %d（写回 record_fact / report_finding 时传它）", string(intent.Payload), intent.ID)
+	if compactIntentExploration(intent.Payload) != nil {
+		text += "\nexploration 是待检验的问题与建议方法，不是已确认事实或额外授权。用当前实际可用的能力选择能区分假设的最小观察；method 不是强制工具顺序。按 stop_condition 或更早到达的任务预算停止，写回真实观察、未解决的不确定性与下一步需要的证据；否定结果也有价值。prior_intent_ids 仅供比较，不恢复已停止工作；发现跨方向线索时交给 planner。"
+	}
+	return text
 }
 
 // renderWorkerGraphOverview folds the global situational snapshot into the worker's
