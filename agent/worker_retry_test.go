@@ -101,3 +101,20 @@ func TestWorkerModelRetryDoesNotTrustReusedHistoricalToolIDs(t *testing.T) {
 		t.Fatal("replaced/truncated transcript checkpoint must fail closed")
 	}
 }
+
+func TestWorkerModelRetryRejectsMarkerOnlyCompaction(t *testing.T) {
+	store := transcript.NewStore(t.TempDir())
+	w := &Worker{tx: store}
+	writer := store.NewWriter(WorkerSessionID(1, 2), "")
+	writer.RecordMessage(llm.UserText("fixture"), llm.Usage{})
+	checkpoint, err := w.ModelRetryCheckpoint(1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.RecordMessage(llm.BoundaryMessage(llm.BoundaryMeta{Trigger: "auto"}), llm.Usage{})
+	writer.RecordMessage(llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockToolUse, ID: "a", Name: "fixture"}}}, llm.Usage{})
+	writer.RecordMessage(llm.Message{Role: llm.RoleUser, Content: []llm.ContentBlock{llm.ToolResultText("a", "copied", false)}}, llm.Usage{})
+	if err := w.CheckModelRetryTranscriptSince(1, 2, checkpoint, []string{"a"}); err == nil {
+		t.Fatal("marker-only compaction accepted copied result")
+	}
+}

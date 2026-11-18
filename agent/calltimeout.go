@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"log"
@@ -77,6 +78,10 @@ func normalizeDeadline(ctx, callCtx context.Context, err error, provider, model 
 	if err == nil {
 		return nil
 	}
+	var terminal interface{ PreserveCallOutcome() bool }
+	if errors.As(err, &terminal) && terminal.PreserveCallOutcome() {
+		return err
+	}
 	if ctx.Err() != nil || callCtx.Err() == nil {
 		return err
 	}
@@ -127,6 +132,7 @@ func (p *callTimeoutProvider) Stream(ctx context.Context, req llm.CompletionRequ
 		start := time.Now()
 		callCtx, cancel := context.WithTimeout(ctx, p.timeout)
 		defer cancel()
+		terminal := false
 		for ev, err := range p.inner.Stream(callCtx, req) {
 			if err != nil {
 				if nerr := normalizeDeadline(ctx, callCtx, err, p.provider, p.model, p.timeout, start); nerr != err {
@@ -134,6 +140,9 @@ func (p *callTimeoutProvider) Stream(ctx context.Context, req llm.CompletionRequ
 					yield(llm.StreamEvent{}, nerr)
 					return
 				}
+			}
+			if err == nil && ev.Type == llm.SEMessageStop {
+				terminal = true
 			}
 			if !yield(ev, err) {
 				return
@@ -144,7 +153,7 @@ func (p *callTimeoutProvider) Stream(ctx context.Context, req llm.CompletionRequ
 		}
 		// A provider may stop its iterator on cancellation without yielding the
 		// context error. Such a return is still a failed call, not a success.
-		if err := callCtx.Err(); err != nil {
+		if err := callCtx.Err(); err != nil && !terminal {
 			yield(llm.StreamEvent{}, normalizeDeadline(ctx, callCtx, err, p.provider, p.model, p.timeout, start))
 		}
 	}

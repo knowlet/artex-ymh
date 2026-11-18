@@ -66,7 +66,8 @@ func (e *taskLLMError) Error() string {
 	return e.cause.Error()
 }
 
-func (e *taskLLMError) Unwrap() error { return e.cause }
+func (e *taskLLMError) Unwrap() error             { return e.cause }
+func (e *taskLLMError) PreserveCallOutcome() bool { return e.chainExhausted }
 
 func isTaskLLMRuntimeError(err error) bool {
 	var target *taskLLMError
@@ -96,9 +97,11 @@ type taskLLMSelection struct {
 }
 
 type taskLLMStreamHooks struct {
-	current    func() (taskLLMSelection, error)
-	exhaust    func(taskLLMSelection, error) (db.TaskLLMTransition, error)
-	transition func(taskLLMSelection, db.TaskLLMTransition, error)
+	currentContext func(context.Context) (taskLLMSelection, error)
+	exhaustContext func(context.Context, taskLLMSelection, error) (db.TaskLLMTransition, error)
+	current        func() (taskLLMSelection, error)
+	exhaust        func(taskLLMSelection, error) (db.TaskLLMTransition, error)
+	transition     func(taskLLMSelection, db.TaskLLMTransition, error)
 }
 
 // current resolves the provider this role runs on, by precedence:
@@ -108,11 +111,14 @@ type taskLLMStreamHooks struct {
 // 返回的 profile id 只有走任务链时才非零 —— streamTaskLLM 以此判断额度错误是否
 // 应该推进任务的故障转移状态（绑定/全局路径不改任务链状态，沿用既有语义）。
 func (r *taskLLMRuntime) current() (taskLLMSelection, error) {
+	return r.currentContext(context.Background())
+}
+func (r *taskLLMRuntime) currentContext(ctx context.Context) (taskLLMSelection, error) {
 	taskNum, err := parseTaskID(r.taskID)
 	if err != nil {
 		return taskLLMSelection{}, err
 	}
-	pt, err := r.s.m.pg.GetTask(taskNum)
+	pt, err := r.s.m.pg.TaskLLMSelectionContext(ctx, taskNum)
 	if err != nil {
 		return taskLLMSelection{}, err
 	}
@@ -201,14 +207,15 @@ func parseTaskID(id string) (int64, error) {
 // exhausted, and how to emit a failover transition.
 func (r *taskLLMRuntime) streamHooks() taskLLMStreamHooks {
 	return taskLLMStreamHooks{
-		current: r.current,
-		exhaust: func(selection taskLLMSelection, cause error) (db.TaskLLMTransition, error) {
+		current:        r.current,
+		currentContext: r.currentContext,
+		exhaustContext: func(ctx context.Context, selection taskLLMSelection, cause error) (db.TaskLLMTransition, error) {
 			taskNum, _ := parseTaskID(r.taskID)
-			transition, err := r.s.m.pg.MarkTaskLLMProfileQuotaExhaustedAtRevision(taskNum, selection.profileID, selection.revision, cause.Error())
+			transition, err := r.s.m.pg.MarkTaskLLMProfileQuotaExhaustedContext(ctx, taskNum, selection.profileID, selection.revision, cause.Error())
 			if err != nil {
 				return transition, err
 			}
-			if pt, getErr := r.s.m.pg.GetTask(taskNum); getErr == nil && pt != nil {
+			if pt, getErr := r.s.m.pg.TaskLLMSelectionContext(ctx, taskNum); getErr == nil && pt != nil {
 				r.s.syncTaskLLMState(pt)
 			}
 			return transition, nil
@@ -258,7 +265,7 @@ func completeTaskLLM(ctx context.Context, taskID string, req llm.CompletionReque
 		if err := ctx.Err(); err != nil {
 			return llm.Message{}, "", llm.Usage{}, err
 		}
-		selection, err := hooks.current()
+		selection, err := hooks.selectCurrent(ctx)
 		if err != nil {
 			return llm.Message{}, "", llm.Usage{}, err
 		}
@@ -292,7 +299,7 @@ func completeTaskLLM(ctx context.Context, taskID string, req llm.CompletionReque
 		if selection.profileID == 0 || !isQuotaExhaustedError(callErr) {
 			return llm.Message{}, "", llm.Usage{}, callErr
 		}
-		transition, markErr := hooks.exhaust(selection, callErr)
+		transition, markErr := hooks.markExhausted(ctx, selection, callErr)
 		if markErr != nil {
 			return llm.Message{}, "", llm.Usage{}, fmt.Errorf("mark profile quota exhausted after %v: %w", callErr, markErr)
 		}
@@ -313,7 +320,7 @@ func streamTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest
 				yield(llm.StreamEvent{}, err)
 				return
 			}
-			selection, err := hooks.current()
+			selection, err := hooks.selectCurrent(ctx)
 			if err != nil {
 				yield(llm.StreamEvent{}, err)
 				return
@@ -383,7 +390,7 @@ func streamTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest
 				yield(llm.StreamEvent{}, streamErr)
 				return
 			}
-			transition, markErr := hooks.exhaust(selection, streamErr)
+			transition, markErr := hooks.markExhausted(ctx, selection, streamErr)
 			if markErr != nil {
 				cause := fmt.Errorf("mark profile quota exhausted after %v: %w", streamErr, markErr)
 				if committed {
@@ -713,4 +720,17 @@ func (s *Server) emitManualTaskLLMSwitch(t *Task, previousID, nextID *int64) db.
 		Mode: "manual", Reason: "用户手动切换任务 LLM", Previous: previous, Next: next,
 	}})
 	return s.engine.emitActivity(t, db.Activity{Worker: "system", Kind: "llm_switch", Summary: summary, Detail: summary, Metadata: metadata})
+}
+
+func (h taskLLMStreamHooks) selectCurrent(ctx context.Context) (taskLLMSelection, error) {
+	if h.currentContext != nil {
+		return h.currentContext(ctx)
+	}
+	return h.current()
+}
+func (h taskLLMStreamHooks) markExhausted(ctx context.Context, s taskLLMSelection, e error) (db.TaskLLMTransition, error) {
+	if h.exhaustContext != nil {
+		return h.exhaustContext(ctx, s, e)
+	}
+	return h.exhaust(s, e)
 }

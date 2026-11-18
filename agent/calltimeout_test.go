@@ -6,6 +6,7 @@ import (
 	"iter"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Autumn-27/norma/llm"
@@ -50,12 +51,14 @@ func (silentDeadlineProvider) Complete(ctx context.Context, _ llm.CompletionRequ
 }
 
 func TestCallTimeoutCannotBecomeSilentSuccess(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
 	p := &callTimeoutProvider{inner: silentDeadlineProvider{}, timeout: 20 * time.Millisecond}
 	var streamErr error
-	for _, err := range p.Stream(context.Background(), llm.CompletionRequest{}) {
+	for _, err := range p.Stream(ctx, llm.CompletionRequest{}) {
 		streamErr = err
 	}
-	_, _, _, completeErr := p.Complete(context.Background(), llm.CompletionRequest{})
+	_, _, _, completeErr := p.Complete(ctx, llm.CompletionRequest{})
 	for _, err := range []error{streamErr, completeErr} {
 		var timeout *CallTimeoutError
 		if !errors.As(err, &timeout) {
@@ -175,8 +178,10 @@ func TestStreamWallClockNormalizes(t *testing.T) {
 }
 
 func TestCompleteWallClockNormalizes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
 	p := &callTimeoutProvider{inner: hangProv{}, timeout: 30 * time.Millisecond, provider: "openai", model: "gpt-x"}
-	_, _, _, err := p.Complete(context.Background(), llm.CompletionRequest{})
+	_, _, _, err := p.Complete(ctx, llm.CompletionRequest{})
 	var cto *CallTimeoutError
 	if !errors.As(err, &cto) {
 		t.Fatalf("err=%v, want *CallTimeoutError", err)
@@ -274,4 +279,37 @@ func TestCallTimeoutErrorTextHasNoStatus(t *testing.T) {
 	if strings.Contains(got, "status ") {
 		t.Fatalf("错误文本不应含 HTTP 状态码形态: %q", got)
 	}
+}
+
+type stoppedFixtureProvider struct{ silentDeadlineProvider }
+
+func (stoppedFixtureProvider) Stream(context.Context, llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
+	return func(yield func(llm.StreamEvent, error) bool) { yield(llm.StreamEvent{Type: llm.SEMessageStop}, nil) }
+}
+func TestCallTimeoutDeliveredStopRemainsSuccess(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := &callTimeoutProvider{inner: stoppedFixtureProvider{}, timeout: 20 * time.Millisecond}
+		for _, err := range p.Stream(t.Context(), llm.CompletionRequest{}) {
+			if err != nil {
+				t.Fatalf("completed stream timed out during consumer work: %v", err)
+			}
+			time.Sleep(30 * time.Millisecond)
+		}
+	})
+}
+
+type committedFixtureError struct{}
+
+func (committedFixtureError) Error() string             { return "terminal fixture" }
+func (committedFixtureError) PreserveCallOutcome() bool { return true }
+func TestCallTimeoutPreservesCommittedTerminalOutcome(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		time.Sleep(time.Second)
+		original := committedFixtureError{}
+		if got := normalizeDeadline(t.Context(), ctx, original, "", "", time.Second, time.Now()); got != original {
+			t.Fatalf("committed outcome replaced: %v", got)
+		}
+	})
 }

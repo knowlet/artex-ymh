@@ -1251,9 +1251,24 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	if retryableWorkerModelError(reason, err) && ectx.Err() == nil &&
 		!e.IsPaused(t.ID) && !e.IsDeleting(t.ID) && !e.isSettling(t.ID) &&
 		!isTerminalStatus(e.m.TaskStatus(t.ID)) {
-		if e.deferWorkerModelRetry(t, name, worker, intent, &retryTrace, err) {
+		if e.deferWorkerModelRetry(ectx, t, name, worker, intent, &retryTrace, err) {
 			return true
 		}
+	}
+	if ectx.Err() != nil { // cancellation can arrive while the retry transaction waits on a lock
+		state := "stopped"
+		if taskExecutionPaused(context.Cause(ectx)) {
+			state = "open"
+		} else if e.isSettling(t.ID) {
+			state = "exhausted"
+		}
+		settleCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, stateErr := t.Store.CompareAndSetIntentStateContext(settleCtx, intent.ID, "running", state)
+		cancel()
+		if stateErr != nil {
+			log.Printf("[worker %s] cancellation settlement: %v", name, stateErr)
+		}
+		return true
 	}
 	if err != nil {
 		log.Printf("[worker %s] intent %d: %v", name, intent.ID, err)
@@ -1365,8 +1380,8 @@ func sleepCtx(ctx context.Context, d time.Duration) (done bool) {
 func (e *Engine) claimNext(t *Task, name string) *db.Node {
 	fr, _ := t.Store.ReadyFrontier(20)
 	for _, in := range fr {
-		if ok, _ := t.Store.ClaimIntent(in.ID, name); ok {
-			return in
+		if claimed, _ := t.Store.ClaimIntentNode(in.ID, name); claimed != nil {
+			return claimed
 		}
 	}
 	return nil

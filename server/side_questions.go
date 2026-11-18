@@ -100,8 +100,10 @@ func (s *Server) flushSideSnapshots() {
 	pending := s.side.pending
 	s.side.pending = map[string]sidequestion.Snapshot{}
 	s.side.mu.Unlock()
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer flushCancel()
 	for key, snap := range pending {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(flushCtx, 3*time.Second)
 		err := s.m.pg.SaveSideSnapshot(ctx, snap)
 		cancel()
 		s.side.mu.Lock()

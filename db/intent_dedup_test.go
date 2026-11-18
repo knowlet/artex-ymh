@@ -197,7 +197,11 @@ func TestIntentDedupAllowsIndependentGraphCommit(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		_ = tx.Rollback()
-		<-result
+		select {
+		case <-result:
+		case <-time.After(time.Second):
+			t.Fatal("admission did not release after rollback")
+		}
 		t.Fatal("admission blocked independent graph insertion's commit")
 	}
 }

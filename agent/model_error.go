@@ -29,10 +29,15 @@ func IsTransientModelError(err error) bool {
 	if errors.As(err, &wireErr) {
 		return wireErr.Transient()
 	}
+	var timeout *CallTimeoutError
+	var idle *ResponseIdleTimeoutError
+	if errors.As(err, &timeout) || errors.As(err, &idle) {
+		return true
+	}
 	s := strings.ToLower(err.Error())
 	// Gateways use several names for the same context overflow. Replaying an
 	// unchanged request cannot repair it, even when an outer gateway emits 5xx.
-	for _, marker := range []string{"contextwindowexceeded", "context_window_exceeded", "context length", "context_length", "maximum context", "too long", "unparsed_dsml", "invalid_tool_call", "invalid tool call", "malformed tool"} {
+	for _, marker := range []string{"contextwindowexceeded", "context_window_exceeded", "context length", "context_length", "maximum context", "prompt too long", "input too long", "request too long", "string too long", "unparsed_dsml", "invalid_tool_call", "invalid tool call", "malformed tool"} {
 		if strings.Contains(s, marker) {
 			return false
 		}
@@ -70,6 +75,10 @@ func IsTransientModelError(err error) bool {
 func normalizeContextOverflow(err error) error {
 	if err == nil {
 		return nil
+	}
+	var wire *llmwire.ProtocolError
+	if errors.As(err, &wire) && wire.Code == "context_window_exceeded" {
+		return fmt.Errorf("llm context length exceeded: %w", err)
 	}
 	s := strings.ToLower(err.Error())
 	if strings.Contains(s, "contextwindowexceeded") || strings.Contains(s, "context_window_exceeded") {

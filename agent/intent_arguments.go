@@ -30,9 +30,10 @@ func parseIntentArguments(in json.RawMessage) ([]intentItem, bool, error) {
 		return []intentItem{input.intentItem}, false, nil
 	}
 	for key := range fields {
-		switch strings.ToLower(key) {
-		case "summary", "asset_ids", "parent_ids", "priority", "chain_tags", "exploration":
-			return nil, false, fmt.Errorf("batch field %q must be inside each intents item; top-level fields are not shared defaults", key)
+		for _, shared := range []string{"summary", "asset_ids", "parent_ids", "priority", "chain_tags", "exploration"} {
+			if strings.EqualFold(key, shared) {
+				return nil, false, fmt.Errorf("batch field %q must be inside each intents item; top-level fields are not shared defaults", key)
+			}
 		}
 	}
 	return input.Intents, true, nil

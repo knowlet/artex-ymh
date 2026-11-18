@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -37,22 +38,25 @@ func ModelRetryDelay(attempt int, interval time.Duration) time.Duration {
 // process restarts, claims, and pause/resume; explicit manual reruns reset it.
 // It never changes a terminal/paused/deleted intent or reopens old blocked work.
 func (s *ExplorationStore) ScheduleIntentModelRetry(id int64, maxRetries int, interval time.Duration, deadline time.Time) (IntentModelRetry, error) {
+	return s.ScheduleIntentModelRetryContext(context.Background(), id, maxRetries, interval, deadline, "")
+}
+func (s *ExplorationStore) ScheduleIntentModelRetryContext(ctx context.Context, id int64, maxRetries int, interval time.Duration, deadline time.Time, revision string) (IntentModelRetry, error) {
 	var out IntentModelRetry
 	if maxRetries <= 0 {
 		out.Stop = "disabled"
 		return out, nil
 	}
 	maxRetries = min(maxRetries, maxRetryAttempts)
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return out, err
 	}
 	defer tx.Rollback()
 	var state string
 	var now time.Time
-	err = tx.QueryRow(`SELECT state, model_retry_count, now() FROM exploration_nodes
+	err = tx.QueryRowContext(ctx, `SELECT state, model_retry_count FROM exploration_nodes
 WHERE id=$1 AND exploration_id=$2 AND kind='intent' FOR UPDATE`, id, s.expID).
-		Scan(&state, &out.Attempt, &now)
+		Scan(&state, &out.Attempt)
 	if err == sql.ErrNoRows {
 		return out, fmt.Errorf("intent not found")
 	}
@@ -67,16 +71,19 @@ WHERE id=$1 AND exploration_id=$2 AND kind='intent' FOR UPDATE`, id, s.expID).
 		out.Stop = "exhausted"
 		return out, nil
 	}
+	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return out, err
+	}
 	out.Attempt++
 	out.RetryAt = now.Add(ModelRetryDelay(out.Attempt, interval))
 	if !deadline.IsZero() && !out.RetryAt.Before(deadline) {
 		out.Stop = "deadline"
 		return out, nil
 	}
-	_, err = tx.Exec(`UPDATE exploration_nodes
+	_, err = tx.ExecContext(ctx, `UPDATE exploration_nodes
 SET state='open', owner=NULL, blocked_reason=NULL, completed_at=NULL,
-    model_retry_count=$3, model_retry_at=$4, content_version=content_version+1
-WHERE id=$1 AND exploration_id=$2`, id, s.expID, out.Attempt, out.RetryAt)
+    model_retry_count=$3, model_retry_at=$4, model_retry_revision=$5, content_version=content_version+1
+WHERE id=$1 AND exploration_id=$2`, id, s.expID, out.Attempt, out.RetryAt, revision)
 	if err != nil {
 		return out, err
 	}

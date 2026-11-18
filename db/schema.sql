@@ -198,6 +198,7 @@ ALTER TABLE exploration_nodes ADD COLUMN IF NOT EXISTS blocked_reason TEXT;
 -- Worker transport recovery is durable; cooling intents remain open/active.
 ALTER TABLE exploration_nodes ADD COLUMN IF NOT EXISTS model_retry_count INT NOT NULL DEFAULT 0;
 ALTER TABLE exploration_nodes ADD COLUMN IF NOT EXISTS model_retry_at TIMESTAMPTZ;
+ALTER TABLE exploration_nodes ADD COLUMN IF NOT EXISTS model_retry_revision TEXT NOT NULL DEFAULT '';
 -- 意图假删除(soft delete):state='deleted' 时,delete_reason 记用户填写的删除原因。
 ALTER TABLE exploration_nodes ADD COLUMN IF NOT EXISTS delete_reason TEXT;
 -- cold-digest (§2.3/§5.3): content_version bumps on any change that could alter a

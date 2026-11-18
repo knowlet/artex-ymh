@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -635,6 +636,7 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 				delete(candidate, "planner_action")
 			}
 		}
+		boundPOCFollowupSnapshot(&snap, out)
 		if len(snap.Candidates) > 0 {
 			out["poc_verification_candidates"] = snap.Candidates
 		}
@@ -1126,27 +1128,31 @@ type intentItem struct {
 // 节点（不能挂在别的意图/目标/提示上）。顶层全新方向留空 parent_ids，兜底连 origin fact。
 // 这样"每个意图都连到 fact 节点、且是发现驱动而非凭空规划"从创建路径上被强制。
 func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
+	out, err := t.admitOneIntent(it)
+	return out.ID, err
+}
+func (t *ToolSet) admitOneIntent(it intentItem) (db.IntentAdmission, error) {
 	if strings.TrimSpace(it.Summary) == "" {
-		return 0, fmt.Errorf("summary 不能为空")
+		return db.IntentAdmission{}, fmt.Errorf("summary 不能为空")
 	}
 	// chain_tags(L3 反问骨架路由标签):取值 ∈ chainskel.Categories,至多 2 个。
 	tags := chainskel.NormalizeChainTags(it.ChainTags)
 	if err := chainskel.ValidateChainTags(tags); err != nil {
-		return 0, err
+		return db.IntentAdmission{}, err
 	}
 	exploration, err := t.prepareIntentExploration(it.Exploration)
 	if err != nil {
-		return 0, err
+		return db.IntentAdmission{}, err
 	}
 	// 先校验锚点（建节点前，避免坏锚点留下孤儿意图）。
 	parents := pidList(it.ParentIDs)
 	for _, pidv := range parents {
 		n, err := t.ts.GetNodeWithSources(pidv)
 		if err != nil || n == nil {
-			return 0, fmt.Errorf("parent_id %d 不存在于本任务或直接关联任务：parent_ids 必须是已存在的【事实(fact)/发现(finding)】节点 id；顶层全新方向请留空 parent_ids", pidv)
+			return db.IntentAdmission{}, fmt.Errorf("parent_id %d 不存在于本任务或直接关联任务：parent_ids 必须是已存在的【事实(fact)/发现(finding)】节点 id；顶层全新方向请留空 parent_ids", pidv)
 		}
 		if n.Kind != db.KindFact && n.Kind != db.KindFinding {
-			return 0, fmt.Errorf("parent_id %d 是 %q 节点，不能作为意图锚点：意图只能锚在已确认的【事实(fact)/发现(finding)】上，不能挂在意图/目标/提示上；顶层全新方向请留空 parent_ids", pidv, n.Kind)
+			return db.IntentAdmission{}, fmt.Errorf("parent_id %d 是 %q 节点，不能作为意图锚点：意图只能锚在已确认的【事实(fact)/发现(finding)】上，不能挂在意图/目标/提示上；顶层全新方向请留空 parent_ids", pidv, n.Kind)
 		}
 	}
 	priority := it.Priority
@@ -1154,11 +1160,13 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 		priority = 5
 	}
 	anchors := pidList(it.AssetIDs)
+	slices.Sort(anchors)
+	anchors = slices.Compact(anchors)
 	// 资产拦截：意图绑定的资产若命中系统资产拦截规则，则禁止下发该意图。
 	if t.as != nil && len(anchors) > 0 {
 		hits, err := t.as.CheckAssetsIntercept(t.taskID, anchors)
 		if err != nil {
-			return 0, fmt.Errorf("资产拦截校验失败：%w", err)
+			return db.IntentAdmission{}, fmt.Errorf("资产拦截校验失败：%w", err)
 		}
 		if len(hits) > 0 {
 			var b strings.Builder
@@ -1166,7 +1174,7 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 			for _, h := range hits {
 				fmt.Fprintf(&b, "\n - %s", h.Describe())
 			}
-			return 0, fmt.Errorf("%s", b.String())
+			return db.IntentAdmission{}, fmt.Errorf("%s", b.String())
 		}
 	}
 	payload := map[string]any{"summary": it.Summary}
@@ -1185,7 +1193,7 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	if len(parents) == 0 {
 		origin, err := t.ts.OriginFactID()
 		if err != nil {
-			return 0, err
+			return db.IntentAdmission{}, err
 		}
 		if origin > 0 {
 			parents = []int64{origin}
@@ -1193,7 +1201,7 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	}
 	// Commit identity and lineage together: concurrent admissions cannot observe
 	// a node before its parent edges exist, and storage errors remain observable.
-	return t.ts.AddIntentWithParents(payload, priority, anchors, "planner", parents)
+	return t.ts.AdmitIntentWithParents(payload, priority, anchors, "planner", parents)
 }
 
 func (t *ToolSet) addIntent() actool.CoreTool {
@@ -1218,14 +1226,16 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 			ids := make([]int64, len(items))
 			errs := map[string]string{}
 			createdAny := false
+			outcomes := make([]db.IntentAdmission, len(items))
 			for i, it := range items {
-				id, err := t.addOneIntent(it)
+				outcome, err := t.admitOneIntent(it)
 				if err != nil {
 					errs[strconv.Itoa(i)] = err.Error()
 					continue
 				}
-				ids[i] = id
-				createdAny = true
+				ids[i] = outcome.ID
+				outcomes[i] = outcome
+				createdAny = createdAny || !outcome.Reused
 			}
 
 			// 人经主 agent 直投意图 → 若任务已 done（无 open 目标的 goalless 分支），把它
@@ -1240,9 +1250,12 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 				if e, bad := errs["0"]; bad {
 					return actool.Errorf(e), nil
 				}
-				return actool.Text(fmt.Sprintf("intent created: %d", ids[0])), nil
+				if outcomes[0].Reused {
+					return actool.Text(fmt.Sprintf("intent reused: %d (state=%s); explicit human reruns use reopen_intent", ids[0], outcomes[0].State)), nil
+				}
+				return actool.Text(fmt.Sprintf("intent created: %d (state=%s)", ids[0], outcomes[0].State)), nil
 			}
-			out := map[string]any{"ids": ids}
+			out := map[string]any{"ids": ids, "outcomes": outcomes}
 			if len(errs) > 0 {
 				out["errors"] = errs
 			}
@@ -1594,7 +1607,9 @@ func (t *ToolSet) recordFact() actool.CoreTool {
 				Facts    []factItem `json:"facts"`
 				factItem            // 单条模式 + 批量默认 intent_id
 			}
-			_ = json.Unmarshal(in, &a)
+			if err := json.Unmarshal(in, &a); err != nil {
+				return actool.Errorf("Invalid record_fact input: " + err.Error()), nil
+			}
 			batch := len(a.Facts) > 0
 			items := a.Facts
 			if !batch {

@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 
 	"github.com/Autumn-27/norma/llm"
@@ -34,33 +36,44 @@ func (w *Worker) CheckModelRetryTranscript(explorationID, intentID int64, comple
 }
 
 func (w *Worker) CheckModelRetryTranscriptSince(explorationID, intentID int64, checkpoint WorkerRetryCheckpoint, completedToolIDs []string) error {
+	_, err := w.VerifiedModelRetryTranscriptSince(explorationID, intentID, checkpoint, completedToolIDs)
+	return err
+}
+func WorkerRetryRevision(records []transcript.Record) string {
+	b, _ := json.Marshal(records)
+	return fmt.Sprintf("%x", sha256.Sum256(b))
+}
+func (w *Worker) VerifiedModelRetryTranscriptSince(explorationID, intentID int64, checkpoint WorkerRetryCheckpoint, completedToolIDs []string) ([]transcript.Record, error) {
 	if w.tx == nil {
-		return fmt.Errorf("worker model recovery requires transcript persistence")
+		return nil, fmt.Errorf("worker model recovery requires transcript persistence")
 	}
 	records, err := w.tx.Load(w.tx.MainPath(WorkerSessionID(explorationID, intentID)))
 	if err != nil {
-		return fmt.Errorf("worker model recovery cannot load transcript: %w", err)
+		return nil, fmt.Errorf("worker model recovery cannot load transcript: %w", err)
 	}
 	messages, _ := transcript.Messages(records)
 	if err := validateWorkerRetryTranscript(messages, nil); err != nil {
-		return err
+		return nil, err
 	}
 	if checkpoint.Records < 0 || checkpoint.Records > len(records) ||
 		checkpoint.Records > 0 && records[checkpoint.Records-1].UUID != checkpoint.LastUUID {
-		return fmt.Errorf("worker model recovery transcript checkpoint changed")
+		return nil, fmt.Errorf("worker model recovery transcript checkpoint changed")
 	}
 	// Norma re-records the kept tail after compaction. Without execution UUIDs,
 	// those copied results cannot establish that a later repeated tool ID was
 	// committed. Preserve the transcript for manual inspection instead of replay.
 	if len(completedToolIDs) > 0 {
 		for _, record := range records[checkpoint.Records:] {
-			if record.Type == "boundary" {
-				return fmt.Errorf("worker model recovery cannot verify tool executions across a compaction boundary")
+			if record.Type == "boundary" || record.Message != nil && llm.IsBoundaryMarker(*record.Message) {
+				return nil, fmt.Errorf("worker model recovery cannot verify tool executions across a compaction boundary")
 			}
 		}
 	}
 	current, _ := transcript.Messages(records[checkpoint.Records:])
-	return validateWorkerRetryTranscript(current, completedToolIDs)
+	if err := validateWorkerRetryTranscript(current, completedToolIDs); err != nil {
+		return nil, err
+	}
+	return records, nil
 }
 
 func validateWorkerRetryTranscript(messages []llm.Message, completedToolIDs []string) error {
@@ -75,6 +88,9 @@ func validateWorkerRetryTranscript(messages []llm.Message, completedToolIDs []st
 			case llm.BlockToolUse:
 				pending[block.ID]++
 			case llm.BlockToolResult:
+				if pending[block.ToolUseID] == 0 {
+					return fmt.Errorf("worker model recovery transcript contains an orphan tool result")
+				}
 				if pending[block.ToolUseID] > 1 {
 					pending[block.ToolUseID]--
 				} else {

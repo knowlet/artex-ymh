@@ -570,3 +570,12 @@ func FuzzStreamBoundary(f *testing.F) {
 		_, _ = normalizeStream(s)
 	})
 }
+
+func TestDeclaredArgumentsPropertyIsNotEnvelope(t *testing.T) {
+	rules := map[string]argumentRules{"literal": {Required: []string{"query"}, Properties: map[string]json.RawMessage{"arguments": json.RawMessage(`{"type":"object"}`), "query": json.RawMessage(`{"type":"string"}`)}}}
+	body := newStreamBody(io.NopCloser(strings.NewReader(callsFrame(testCall(0, "a", "literal", `{"arguments":{"query":"fixture"}}`))+terminal("tool_calls"))), rules)
+	defer body.Close()
+	if _, err := io.ReadAll(body); err == nil {
+		t.Fatal("declared arguments property was unwrapped into missing required field")
+	}
+}

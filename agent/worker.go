@@ -608,14 +608,29 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// session exists the worker continues from where it left off instead of
 	// restarting from scratch.
 	alreadyRecorded := false
+	var verifiedRetry []transcript.Record
 	if intent.ModelRetryCount > 0 {
-		if err := w.CheckModelRetryTranscript(ts.ID(), intent.ID, nil); err != nil {
+		var err error
+		verifiedRetry, err = w.VerifiedModelRetryTranscriptSince(ts.ID(), intent.ID, WorkerRetryCheckpoint{}, nil)
+		if err != nil {
 			return harness.ReasonModelError, tsx.Writes(), err
 		}
+		if intent.ModelRetryRevision == "" || WorkerRetryRevision(verifiedRetry) != intent.ModelRetryRevision {
+			return harness.ReasonModelError, tsx.Writes(), fmt.Errorf("worker retry transcript revision changed or unavailable; manual inspection required")
+		}
 	}
+
 	if w.tx != nil {
 		if err := s.Resume(opts.SessionID); err != nil {
 			return harness.ReasonModelError, tsx.Writes(), fmt.Errorf("resume worker transcript: %w", err)
+		}
+		if verifiedRetry != nil {
+			messages, usage := transcript.Messages(verifiedRetry)
+			expected, _ := json.Marshal(messages)
+			actual, _ := json.Marshal(s.Messages())
+			if string(expected) != string(actual) || usage != s.Usage() {
+				return harness.ReasonModelError, tsx.Writes(), fmt.Errorf("worker retry resume differs from verified transcript; manual inspection required")
+			}
 		}
 		alreadyRecorded = requestID != "" && hasWorkerChatMessage(s.Messages(), requestID)
 		if len(s.Messages()) > 0 && message == "" {

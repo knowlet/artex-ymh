@@ -65,15 +65,27 @@ jobs:
       - name: Formatting
         run: |
           set -euo pipefail
-          test -z "$(gofmt -l agent/wire_transient_test.go server/background_shutdown_test.go agent/poc_retry_boundary_test.go agent/poc_followup*.go agent/finding_validation_test.go agent/intent_dedup_test.go agent/intent_arguments*.go agent/model_error*.go agent/transport_timeout*.go agent/worker_retry*.go agent/calltimeout*.go agent/provider.go agent/tools.go agent/worker.go agent/terminalreason.go db/intent_dedup*.go db/intent_model_retry*.go db/exploration.go db/llmretry.go server/planner_retry*.go server/worker_retry*.go server/task_llm_budget_test.go server/task_llm.go server/engine.go server/intent_watchdog.go)"
+          formatted=$(gofmt -l agent/wire_transient_test.go server/background_shutdown_test.go agent/poc_retry_boundary_test.go agent/poc_followup*.go agent/finding_validation_test.go agent/intent_dedup_test.go agent/intent_arguments*.go agent/model_error*.go agent/transport_timeout*.go agent/worker_retry*.go agent/calltimeout*.go agent/provider.go agent/tools.go agent/worker.go agent/terminalreason.go db/intent_dedup*.go db/intent_model_retry*.go db/exploration.go db/llmretry.go server/planner_retry*.go server/worker_retry*.go server/task_llm_budget_test.go server/task_llm.go server/engine.go server/intent_watchdog.go)
+          test -z "$formatted"
       - name: Real PostgreSQL, stream fixtures, and recovery races
         run: |
           set -euo pipefail
           go test -race -count=1 -p=1 -timeout=8m -json ./db ./agent ./server \
-            -run '^(TestWaitBackgroundWorkersWaitsForSideSnapshotFlush|TestOpenAIWireTransientFailures|TestPOCFollowup|TestReportFindingValidation|TestIntentDedup|TestAddIntentConcurrent|TestIntentArguments|TestAddIntentWrapped|TestReportFindingWrapped|TestPlannerWrappedIntent|TestOpenAIWireWrappedIntent|TestAccessVulnCandidateFact|TestIntentLooksLikePOC|TestRenderPOCFollowup|TestBuildPOCFollowup|TestGraphOverviewPOC|TestGraphOverviewBlockedPOC|TestTransientModelError|TestProviderContextOverflow|TestProviderStalledStream|TestLLMTransport|TestCallTimeout|TestPlannerTransientRetry|TestPlannerOutage|TestTaskLLMRetryShares|TestTaskLLMStreamRetriesLlmwire|TestIntentModelRetry|TestWorkerModelRetry|TestWorkerModelRecovery)' \
+            -run '^(TestReview|TestWaitBackgroundWorkersWaitsForSideSnapshotFlush|TestOpenAIWireTransientFailures|TestPOCFollowup|TestReportFindingValidation|TestIntentDedup|TestAddIntentConcurrent|TestIntentArguments|TestAddIntentWrapped|TestReportFindingWrapped|TestPlannerWrappedIntent|TestOpenAIWireWrappedIntent|TestAccessVulnCandidateFact|TestIntentLooksLikePOC|TestRenderPOCFollowup|TestBuildPOCFollowup|TestGraphOverviewPOC|TestGraphOverviewBlockedPOC|TestTransientModelError|TestProviderContextOverflow|TestProviderStalledStream|TestLLMTransport|TestCallTimeout|TestPlannerTransientRetry|TestPlannerOutage|TestTaskLLMRetryShares|TestTaskLLMStreamRetriesLlmwire|TestIntentModelRetry|TestWorkerModelRetry|TestWorkerModelRecovery)' \
             | tee "$RUNNER_TEMP/planner-resilience.jsonl"
           python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-resilience.jsonl" \
             github.com/Autumn-27/artex/agent \
+            TestReviewUnicodeArgumentAmbiguity \
+            TestCallTimeoutDeliveredStopRemainsSuccess \
+            TestCallTimeoutPreservesCommittedTerminalOutcome \
+            TestReviewGatewayTimeoutDiagnostic \
+            TestReviewToolStreamContextOverflow \
+            TestReviewInferredGapDoesNotDispatch \
+            TestReviewOrphanResultCannotProveRecovery \
+            TestReviewIntentAssetSetAndTerminalOutcome \
+            TestReviewPOCPromptBounded \
+            TestReviewFactDecodeFailureDoesNotWrite \
+            TestWorkerModelRetryRejectsMarkerOnlyCompaction \
             TestIntentArgumentsNormalizesKnownEnvelopes \
             TestAddIntentConcurrentDuplicates \
             TestPOCFollowupTerminalEvidenceDoesNotRedispatch \
@@ -108,6 +120,9 @@ jobs:
             TestWorkerModelRetryVisibleInPlannerOverview
           python3 scripts/assert_go_test_results.py "$RUNNER_TEMP/planner-resilience.jsonl" \
             github.com/Autumn-27/artex/db \
+            TestReviewRetryLockCancellationAndFreshClaim \
+            TestReviewArchiveSnapshotCancellation \
+            TestReviewQuotaTransitionLockCancellation \
             TestIntentDedupConcurrentAdmission \
             TestIntentDedupPreservesIdentityAndControl \
             TestIntentDedupLineageFailureRollsBack \
@@ -123,6 +138,7 @@ jobs:
             TestPlannerOutageNotificationsRespectCooldown \
             TestTaskLLMRetrySharesCallBudget \
             TestTaskLLMStreamRetriesLlmwireTransientPreCommit \
+            TestWorkerModelRecoveryRejectsRolledBackRevision \
             TestWorkerModelRecoveryResumesWithoutRepeatingCommittedTools \
             TestWorkerModelRecoveryBudgetSurvivesEngineRestart \
             TestWorkerModelRecoveryRejectsPermanentFailuresAndUnpersistedEffects

@@ -74,12 +74,7 @@ func accessVulnCandidateFact(summary, detail, confidence string) (ok bool, kind 
 	}
 	conf := normalizeFactConfidence(confidence)
 	if conf == FactConfidenceInferred {
-		// Inferred positives are easy to false-alarm; only follow up on the strongest kinds.
-		switch kind {
-		case "shell_rce", "privilege_gain":
-		default:
-			return false, ""
-		}
+		return false, ""
 	}
 	return true, kind
 }
@@ -307,7 +302,7 @@ func buildPOCFollowupSnapshot(
 		retry := map[string]any{
 			"intent_id": n.ID, "summary": summary, "needs_followup": false,
 			"manual_review_required": true,
-			"model_retry_exhausted":  n.ModelRetryCount > 0,
+			"model_retry_count":      n.ModelRetryCount,
 		}
 		if n.BlockedReason != "" {
 			retry["blocked_reason"] = n.BlockedReason
@@ -339,19 +334,13 @@ func renderPOCFollowupGuidance(data map[string]any) string {
 		return ""
 	}
 	rawC, _ := data["poc_verification_candidates"].([]map[string]any)
-	rawB, _ := data["blocked_poc_retries"].([]map[string]any)
-	var needC, needB []map[string]any
+	var needC []map[string]any
 	for _, c := range rawC {
 		if v, _ := c["needs_followup"].(bool); v {
 			needC = append(needC, c)
 		}
 	}
-	for _, b := range rawB {
-		if v, _ := b["needs_followup"].(bool); v {
-			needB = append(needB, b)
-		}
-	}
-	if len(needC) == 0 && len(needB) == 0 {
+	if len(needC) == 0 {
 		return ""
 	}
 	var b strings.Builder
@@ -362,11 +351,36 @@ func renderPOCFollowupGuidance(data map[string]any) string {
 		b.Write(j)
 		b.WriteByte('\n')
 	}
-	if len(needB) > 0 {
-		j, _ := json.Marshal(needB)
-		b.WriteString("以下 blocked 验证/模型故障意图在事实已充足时可重新规划（blocked_poc_retries）；永久 llm_quota_exhausted 不在此列。可新建验证意图或等待 model_retry 自动 reopen，勿无差异重复：\n")
-		b.Write(j)
-		b.WriteByte('\n')
-	}
 	return b.String()
+}
+
+// Prompt views are bounded independently of complete persistence coverage.
+const pocPromptLimit = 20
+
+func boundPOCFollowupSnapshot(snap *pocFollowupSnapshot, out map[string]any) {
+	out["poc_verification_candidate_count"] = len(snap.Candidates)
+	out["blocked_poc_retry_count"] = len(snap.BlockedRetries)
+	selected := make([]map[string]any, 0, pocPromptLimit)
+	for _, active := range []bool{true, false} {
+		for _, c := range snap.Candidates {
+			v, _ := c["needs_followup"].(bool)
+			if v == active && len(selected) < pocPromptLimit {
+				selected = append(selected, c)
+			}
+		}
+	}
+	snap.Candidates = selected
+	if len(snap.BlockedRetries) > pocPromptLimit {
+		snap.BlockedRetries = snap.BlockedRetries[:pocPromptLimit]
+	}
+	for _, list := range [][]map[string]any{snap.Candidates, snap.BlockedRetries} {
+		for _, c := range list {
+			if text, ok := c["summary"].(string); ok {
+				r := []rune(text)
+				if len(r) > 256 {
+					c["summary"] = string(r[:256]) + "…"
+				}
+			}
+		}
+	}
 }

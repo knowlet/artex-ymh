@@ -1,4 +1,4 @@
--- PostgreSQL 16+; read-only. Defaults to task 2 and the last 24 hours.
+-- PostgreSQL 16+; read-only. Defaults to task 2. since_hours filters activity only; graph/finding sections are task-wide.
 -- psql "$ARTEX_PG_DSN" -X -v ON_ERROR_STOP=1 -v task_id=2 \
 --   -v since_hours=24 -f scripts/diagnose_planner_resilience.sql
 -- Run against the deployment only when operational access is authorized.
@@ -74,6 +74,7 @@ WITH RECURSIVE calls AS (
                WHEN 'string' THEN
                    CASE WHEN pg_input_is_valid(args->>'arguments', 'jsonb')
                         THEN (args->>'arguments')::jsonb END
+               ELSE args->'arguments'
            END,
            depth + 1
     FROM walk
@@ -132,7 +133,7 @@ SELECT a.id, a.node_id, a.worker, a.created_at, a.is_error,
 FROM activity a
 JOIN tasks t ON t.exploration_id = a.exploration_id
 WHERE t.id = :'task_id'::bigint
-  AND (a.detail LIKE '%model_error%'
+  AND ((a.kind='result' AND a.is_error AND a.detail LIKE '%model_error%')
        OR a.metadata ? 'model_retry')
   AND a.created_at >= now() - make_interval(hours => :'since_hours'::int)
 ORDER BY a.created_at DESC, a.id DESC

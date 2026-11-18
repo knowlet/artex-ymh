@@ -63,7 +63,7 @@ func argumentObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
 		return nil, fmt.Errorf("expected a JSON object")
 	}
 	fields := make(map[string]json.RawMessage)
-	seen := make(map[string]bool)
+	seen := []string{}
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
@@ -77,10 +77,12 @@ func argumentObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
 		if folded == "arguments" && key != "arguments" {
 			return nil, fmt.Errorf("arguments wrapper must use the exact lowercase field name")
 		}
-		if seen[folded] {
-			return nil, fmt.Errorf("duplicate argument field %q", key)
+		for _, prior := range seen {
+			if strings.EqualFold(prior, key) {
+				return nil, fmt.Errorf("duplicate argument field %q", key)
+			}
 		}
-		seen[folded] = true
+		seen = append(seen, key)
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
 			return nil, fmt.Errorf("invalid argument object")

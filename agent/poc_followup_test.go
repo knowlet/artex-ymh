@@ -39,7 +39,7 @@ func TestAccessVulnCandidateFactClassification(t *testing.T) {
 		{"端口无响应", "", "observed", false, ""},
 		{"login page returns 200", "", "observed", false, ""},
 		{"疑似 session 有效", "", "inferred", false, ""},
-		{"命令执行成功", "id=0(root)", "inferred", true, "shell_rce"},
+		{"命令执行成功", "id=0(root)", "inferred", false, ""},
 	}
 	for _, c := range cases {
 		ok, kind := accessVulnCandidateFact(c.sum, c.det, c.conf)
@@ -63,6 +63,7 @@ func TestIntentLooksLikePOCVerification(t *testing.T) {
 }
 
 func TestRenderPOCFollowupGuidanceOnlyOpenItems(t *testing.T) {
+	t.Setenv("ARTEX_PLANNER_POC_FOLLOWUP", "1")
 	data := map[string]any{
 		"poc_verification_candidates": []map[string]any{
 			{"fact_id": 1, "needs_followup": true, "summary": "session ok"},

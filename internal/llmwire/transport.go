@@ -188,6 +188,9 @@ func validateCalls(calls []wireCall, rules map[string]argumentRules, finish stri
 			return false, protocolError("invalid_tool_arguments")
 		}
 		if err := validateArgumentObject(args, rule); err != nil {
+			if _, declared := rule.Properties["arguments"]; declared {
+				return false, err
+			}
 			inner, normErr := toolargs.NormalizeArguments(json.RawMessage(raw))
 			if normErr != nil {
 				return false, err

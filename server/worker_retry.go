@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -56,11 +57,18 @@ func (t *workerRetryTrace) check(worker *agent.Worker, explorationID, intentID i
 // deferWorkerModelRetry returns true once a recoverable intent is parked. No
 // NotifyDone is sent: it is still active and must not finalize the task or appear
 // as an exhausted exploration direction to the planner.
-func (e *Engine) deferWorkerModelRetry(t *Task, name string, worker *agent.Worker, intent *db.Node, trace *workerRetryTrace, modelErr error) bool {
+func (e *Engine) deferWorkerModelRetry(ctx context.Context, t *Task, name string, worker *agent.Worker, intent *db.Node, trace *workerRetryTrace, modelErr error) bool {
 	retries, interval := e.modelErrorRetryPolicy()
 	stop := "disabled"
 	if retries > 0 {
-		if err := trace.check(worker, t.Store.ID(), intent.ID); err != nil {
+		records, verifyErr := worker.VerifiedModelRetryTranscriptSince(t.Store.ID(), intent.ID, trace.checkpoint, trace.completed)
+		if trace.checkpointErr != nil {
+			verifyErr = trace.checkpointErr
+		}
+		if len(trace.pending) > 0 {
+			verifyErr = fmt.Errorf("unfinished tool executions")
+		}
+		if err := verifyErr; err != nil {
 			stop = "transcript_unavailable"
 			log.Printf("[worker %s] task %s intent #%d recovery refused: %v", name, t.ID, intent.ID, err)
 		} else {
@@ -68,7 +76,7 @@ func (e *Engine) deferWorkerModelRetry(t *Task, name string, worker *agent.Worke
 			if unix := e.taskDeadline(t); unix > 0 {
 				deadline = time.Unix(unix, 0)
 			}
-			decision, err := t.Store.ScheduleIntentModelRetry(intent.ID, retries, interval, deadline)
+			decision, err := t.Store.ScheduleIntentModelRetryContext(ctx, intent.ID, retries, interval, deadline, agent.WorkerRetryRevision(records))
 			if err != nil {
 				stop = "schedule_failed"
 				log.Printf("[worker %s] task %s intent #%d recovery persistence failed: %v", name, t.ID, intent.ID, err)

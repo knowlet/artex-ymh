@@ -217,3 +217,12 @@ detector. Named assertions require the selected regressions to emit PASS; an
 unavailable database or skipped regression cannot silently satisfy this gate.
 Existing WebFetch/progress, adaptive-exploration, and full regression workflows
 continue to cover their respective behavior.
+
+
+### Review follow-up: retry integrity
+
+Recovery now records a SHA-256 revision of the validated transcript in `model_retry_revision` in the same transaction as the cooldown. A retry refuses missing, replaced or rolled-back revisions before invoking the provider; resumed messages and usage must equal the validated snapshot. Legacy cooling rows without a revision stop for manual inspection rather than replaying. Explicit manual reopen resets the revision. Orphan results and either persisted compaction marker representation cannot prove a new tool execution. This remains a conservative recovery check, not general exactly-once execution.
+
+Intent admission canonicalizes asset IDs as a set, including matching historical payload arrays against their anchor set. Outcomes report `reused` and current `state`; terminal reuse does not reopen or resume a task. Distinct payloads, assets and parent evidence retain their identity. PoC prompt candidates and diagnostics are capped at 20 rows with 256-rune summaries and aggregate counts; coverage checks still use full persisted lineage. Inferred facts remain facts for review and do not become actionable from keyword matching.
+
+The retry scheduling and quota-transition transactions honor cancellation, and cooldowns start from the database clock after the row lock is acquired. Archive snapshot SQL inherits the server context; side snapshot batches share a three-second flush budget. These changes do not establish an overall supervisor shutdown guarantee for arbitrary disk stalls, other legacy archive stages or configuration/audit reads outside these context-aware paths.

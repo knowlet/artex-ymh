@@ -100,7 +100,21 @@ func TestPOCFollowupOldTerminalEvidenceDoesNotRedispatch(t *testing.T) {
 		}
 	}
 	tools := NewToolSet(store, "planner")
-	if g := renderPOCFollowupGuidance(tools.graphOverviewData()); g != "" {
+	overview := tools.graphOverviewData()
+	if overview["poc_followup_unavailable"] != nil {
+		t.Fatal("coverage lookup failed")
+	}
+	candidates, _ := overview["poc_verification_candidates"].([]map[string]any)
+	found := false
+	for _, c := range candidates {
+		if c["fact_id"] == fact && c["needs_followup"] == false {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("historical fact coverage missing: %+v", overview)
+	}
+	if g := renderPOCFollowupGuidance(overview); g != "" {
 		t.Fatalf("history window reset evidence coverage: %s", g)
 	}
 }

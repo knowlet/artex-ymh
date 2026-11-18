@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -176,3 +178,42 @@ func TestWorkerModelRecoveryRejectsPermanentFailuresAndUnpersistedEffects(t *tes
 		t.Fatalf("executed but unpersisted result must not replay: %v", err)
 	}
 }
+
+func TestWorkerModelRecoveryRejectsRolledBackRevision(t *testing.T) {
+	m, task, id := workerRecoveryFixture(t)
+	p := &workerRecoveryProvider{step: func(llm.CompletionRequest, int) (llm.Message, string, error) {
+		return llm.Message{}, "", errors.New("HTTP 504 fixture")
+	}}
+	w := newRecoveryWorker(t, m, p)
+	e := NewEngine(m)
+	if !e.runWorkerStep(t.Context(), task, "work#1", w) {
+		t.Fatal("first attempt missing")
+	}
+	n, err := task.Store.GetNode(id)
+	if err != nil || n.ModelRetryRevision == "" || n.ModelRetryCount != 1 {
+		t.Fatalf("revision not persisted %+v %v", n, err)
+	}
+	path := filepath.Join(m.dir, "transcripts")
+	tx := transcript.NewStore(path)
+	// A balanced but older/different nonempty history must not start another model call.
+	records := []transcript.Record{{Type: "message", UUID: "older", Message: messagePtr(llm.UserText("older fixture"))}}
+	raw, err := json.Marshal(records[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tx.MainPath(agent.WorkerSessionID(task.ExpID, id)), append(raw, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.pg.Exec(`UPDATE exploration_nodes SET model_retry_at=now()-interval '1 second' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	calls := len(p.requests)
+	if !NewEngine(m).runWorkerStep(t.Context(), task, "work#2", w) {
+		t.Fatal("due retry not claimed")
+	}
+	n, err = task.Store.GetNode(id)
+	if err != nil || n.State != "blocked" || len(p.requests) != calls {
+		t.Fatalf("rollback invoked model or failed open %+v calls=%d ->%d err=%v", n, calls, len(p.requests), err)
+	}
+}
+func messagePtr(m llm.Message) *llm.Message { return &m }
