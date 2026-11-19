@@ -1,5 +1,20 @@
 # Dependency upgrade pack (2026-11-11)
 
+## Deployment correction (2026-11-19)
+
+This directory records the **historical dependency-upgrade rehearsal**, not an
+automatic production PostgreSQL migration. PR #18 changed Compose from PG16 to
+PG17 without converting existing named volumes; its disposable dump/restore
+tests did not cover starting PG17 against a populated PG16 deployment volume.
+
+Compose now defaults to PG16 for existing installations. Already-initialized
+PG17 installations must retain `POSTGRES_IMAGE=postgres:17-alpine`. The
+deployment preflight checks image/data major compatibility and does not migrate
+data. Use the [current PostgreSQL recovery and upgrade guide](../../docs/POSTGRES-UPGRADE.md)
+for recovery, an intentional migration to a separate volume, and rollback
+boundaries. The inventory, matrix and evidence below remain dated snapshots;
+their PG17 target is not the default deployment policy.
+
 Machine-readable artifacts for the comprehensive upgrade branch:
 
 | File | Purpose |
@@ -24,7 +39,8 @@ scripts/verify_upgrade_gates.sh
 scripts/run_security_audits.sh
 ```
 
-PostgreSQL major rehearsal (PG16 dump → PG17 → rollback on PG16):
+PostgreSQL major rehearsal (disposable PG16 dump → PG17 → rollback on PG16;
+never point this script at production containers or databases):
 
 ```bash
 # Requires docker containers artex-pg16 and artex-pg17; builds baseline from main worktree.

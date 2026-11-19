@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    # Keep existing PG16 volumes readable during ordinary ARTEX updates.
+    # PG17 requires an explicit migration to a new volume; see docs/POSTGRES-UPGRADE.md.
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-artex}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
