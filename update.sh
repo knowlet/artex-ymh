@@ -21,8 +21,44 @@ sync_repo(){
   fi
 }
 
+# Hold the lock until this process exits. flock is released by the kernel even
+# if the updater is killed. Without flock, a directory lock is removed on exit.
+acquire_update_lock(){
+  local lock_key lock_file
+  lock_key="$(pwd -P | cksum | awk '{print $1}')"
+  lock_file="${TMPDIR:-/tmp}/artex-docker-update.${lock_key}.lock"
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$lock_file"
+    if ! flock -n 9; then
+      info "另一个更新正在构建或部署，等待它结束后继续…"
+      flock 9
+    fi
+    return 0
+  fi
+  local lock_dir="${lock_file}.d" announced=0 pid
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+      rm -rf -- "$lock_dir"
+      continue
+    fi
+    if [ "$announced" -eq 0 ]; then
+      info "另一个更新正在构建或部署，等待它结束后继续…"
+      announced=1
+    fi
+    sleep 1
+  done
+  printf '%s\n' "$$" > "$lock_dir/pid"
+  # shellcheck disable=SC2064
+  trap "rm -rf -- $(printf '%q' "$lock_dir")" EXIT INT TERM
+}
+
 # ── ① Docker 更新 ───────────────────────────────
 update_docker(){
+  # artex-ymh:local is one mutable tag. Hold the lock across the whole
+  # build-and-deploy sequence so an older build cannot finish last.
+  acquire_update_lock
+
   command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 \
     || die "未检测到 docker / docker compose，请先用 ./install.sh 安装部署"
   [ -f .env ] || die "未找到 .env，请先运行 ./install.sh 完成首次部署"

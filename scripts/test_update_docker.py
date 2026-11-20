@@ -34,13 +34,35 @@ class DockerUpdateTests(unittest.TestCase):
         docker = self.root / "bin" / "docker"
         docker.write_text(
             f"#!{sys.executable}\n"
-            "import json, os, sys\n"
+            "import json, os, sys, time\n"
             "args = sys.argv[1:]\n"
             "with open(os.environ['TEST_CALLS'], 'a') as log:\n"
             "    log.write(json.dumps(args) + '\\n')\n"
             "failure = os.environ.get('TEST_DOCKER_FAIL', '')\n"
             "if failure and args == json.loads(failure):\n"
             "    sys.exit(1)\n"
+            "hold = os.environ.get('TEST_HOLD_BUILD', '')\n"
+            "if hold and args == ['compose', 'build', 'artex']:\n"
+            "    import fcntl\n"
+            "    path = os.environ['TEST_CRITICAL']\n"
+            "    def adjust(delta):\n"
+            "        with open(path, 'a+') as handle:\n"
+            "            fcntl.flock(handle, fcntl.LOCK_EX)\n"
+            "            handle.seek(0)\n"
+            "            current = int(handle.read().strip() or '0') + delta\n"
+            "            peak_path = os.environ['TEST_PEAK']\n"
+            "            peak = 0\n"
+            "            if os.path.exists(peak_path):\n"
+            "                peak = int(open(peak_path).read().strip() or '0')\n"
+            "            if current > peak:\n"
+            "                open(peak_path, 'w').write(str(current))\n"
+            "            handle.seek(0)\n"
+            "            handle.truncate()\n"
+            "            handle.write(str(current))\n"
+            "            fcntl.flock(handle, fcntl.LOCK_UN)\n"
+            "    adjust(1)\n"
+            "    time.sleep(float(hold))\n"
+            "    adjust(-1)\n"
         )
         docker.chmod(0o755)
         (self.root / "scripts" / "check_postgres_version.sh").write_text(
@@ -144,6 +166,39 @@ class DockerUpdateTests(unittest.TestCase):
                 ["compose", "up", "-d", "--no-build"],
             ],
         )
+        self.assert_configuration_unchanged()
+
+    def test_concurrent_updates_do_not_overlap_image_build(self):
+        self.env["TEST_HOLD_BUILD"] = "0.6"
+        self.env["TEST_CRITICAL"] = str(self.root / "critical")
+        self.env["TEST_PEAK"] = str(self.root / "peak")
+        procs = [
+            subprocess.Popen(
+                ["bash", str(self.root / "update.sh")],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self.env,
+                cwd=self.root,
+            )
+            for _ in range(2)
+        ]
+        outputs = [proc.communicate(input="1\n", timeout=15) for proc in procs]
+        for proc, (stdout, stderr) in zip(procs, outputs):
+            self.assertEqual(proc.returncode, 0, stderr)
+            self.assertIn("更新完成", stdout)
+        peak = int((self.root / "peak").read_text().strip())
+        self.assertEqual(peak, 1)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        sequence = [
+            ["compose", "version"],
+            ["preflight"],
+            ["compose", "build", "artex"],
+            ["compose", "up", "-d", "--no-deps", "--wait", "--wait-timeout", "120", "postgres"],
+            ["compose", "up", "-d", "--no-deps", "--no-build", "--pull", "never", "artex"],
+        ]
+        self.assertEqual(calls, sequence + sequence)
         self.assert_configuration_unchanged()
 
 
