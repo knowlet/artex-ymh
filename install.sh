@@ -43,9 +43,15 @@ install_docker(){
     chmod 600 .env
     info "沿用已存在的 .env"
   fi
-  info "拉取镜像并启动…"
-  docker compose pull || true
-  docker compose up -d
+  # 重跑安装也可能遇到已有 pgdata；必须先验证，不能隐式升级数据库大版本。
+  info "检查 PostgreSQL 数据目录与目标镜像的大版本…"
+  bash scripts/check_postgres_version.sh
+  info "从源码构建 ARTEX 镜像…"
+  docker compose build artex
+  info "启动 PostgreSQL 并等待健康检查…"
+  docker compose up -d --no-deps --wait --wait-timeout 120 postgres
+  info "启动服务…"
+  docker compose up -d --no-build
   ok "启动完成 → http://localhost:8787"
   info "查看日志：docker compose logs -f artex"
 }

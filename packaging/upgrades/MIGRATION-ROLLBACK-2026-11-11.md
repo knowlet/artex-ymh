@@ -1,5 +1,21 @@
 # ARTEX dependency upgrade — migration & rollback (2026-11-11)
 
+## Deployment correction (2026-11-19)
+
+The PG16 → PG17 procedure and evidence below describe a **disposable historical
+rehearsal**. They did not add a migration step to `docker compose up`, the
+installer, or the updater. PR #18 (commit `31277e5`) nevertheless changed the
+Compose image to PG17 while retaining the existing `pgdata` mount, causing PG16
+deployments to fail before application schema migration could run.
+
+The corrected deployment defaults to PG16 and checks the image major against
+the mounted data directory before startup. Existing PG17 deployments must set
+`POSTGRES_IMAGE=postgres:17-alpine`; the compatibility correction is not a
+downgrade of their data. Follow the [current PostgreSQL guide](../../docs/POSTGRES-UPGRADE.md)
+for production recovery and a deliberate major upgrade onto a separate volume.
+The dated rehearsal results below are retained as evidence and do not claim
+automatic production-volume migration or a currently selected PG17 default.
+
 ## Scope
 
 Runtime dependency bumps (Go 1.27.4, PostgreSQL **17**, npm, Docker pins). Schema source remains `db/schema.sql` (idempotent). **Not** a production deploy.

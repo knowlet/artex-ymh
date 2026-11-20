@@ -81,8 +81,16 @@ journalctl -u artex -f
 git clone https://github.com/r0th-m/artex-ymh.git
 cd artex-ymh
 cp .env.example .env   # 填 POSTGRES_PASSWORD(不要用 # 字符)
-docker compose up -d --build
+bash scripts/check_postgres_version.sh && docker compose up -d --build
 ```
+
+PostgreSQL 預設使用 16，以相容既有資料 volume。Compose 將 `PGDATA` 固定在具名 volume 的
+掛載點 `/var/lib/postgresql/data`；不要改成官方 PostgreSQL 18 映像的預設路徑
+`/var/lib/postgresql/18/docker`，那個路徑不在此 volume 上。已經使用 PostgreSQL 17 的部署須在原 `.env`
+保留 `POSTGRES_IMAGE=postgres:17-alpine`；設定 image 不會自動轉換資料庫大版本。
+若更新後出現 `database files are incompatible with server`，請依
+[PostgreSQL 升級與復原指南](docs/POSTGRES-UPGRADE.md)確認 `PG_VERSION`、備份並修正映像設定，
+保留原 volume 與本機 Compose 修改。
 
 HTTP 后端现在默认只发布到宿主机 `127.0.0.1:8787`（包括未设置 `ARTEX_BIND_IP` 的旧 `.env`）。远程访问请使用 HTTPS 反向代理；Cloudflare Proxy、Nginx strict SNI 与升级步骤见 [HARDENING.md](HARDENING.md)。
 
@@ -140,7 +148,9 @@ PHP2Shell Scanner、OSV-Scanner、Trivy、ZAP、ffuf。
 
 ## 升级
 
-- **重启即迁移**:schema 每次启动幂等重跑，升级只换程序不动数据（备份 `./data` 与数据库仍是好习惯）。
+- **應用程式 schema 更新**：ARTEX 啟動時會執行資料表 migration，前提是 PostgreSQL 已能正常啟動。更新前應備份 `./data` 與資料庫；重啟程式不會轉換 PostgreSQL 的大版本資料格式。
+- **PostgreSQL 大版本與部署預檢**：手動更新 Docker 部署前執行 `bash scripts/check_postgres_version.sh`；預檢失敗時先處理映像與資料目錄的版本對應。16 → 17 須另外執行 dump/restore 或 `pg_upgrade`，不能只改 image。復原、獨立 volume 遷移及回復界線見 [PostgreSQL 升級與復原指南](docs/POSTGRES-UPGRADE.md)。
+- **Docker 更新不會並行部署**：`./update.sh` 的 Docker 路徑在預檢、重建 `artex-ymh:local` 與啟動服務期間持有排他鎖。後到的更新會等前一次結束，避免較舊的建置最後完成並覆蓋正在部署的映像。
 - ⚠️ **二开版一键安装保持禁用**：检查更新只查询 `knowlet/artex-ymh`，不会回退到上游。独立发布与签名链尚待单独审核；即使以后建立 Release，也不会自动启用安装。API、下载暂存与启动换装入口均阻止远程更新，旧暂存文件会保留但不执行。升级请从本 fork 更新源码并重新编译（方式二）。
 
 ## 配置
@@ -236,6 +246,7 @@ ARTEX 是一套 **LLM 多 agent 驱动的自主渗透系统**:Go 单体后端（
 | 文档 | 内容 |
 | --- | --- |
 | [HARDENING.md](HARDENING.md) | Cloudflare Proxy / Full (strict)、Nginx strict SNI、来源边界、部署与验证 |
+| [PostgreSQL 升級與復原](docs/POSTGRES-UPGRADE.md) | 大版本不相容的根因、保留資料的復原、16 → 17 遷移與回復界線 |
 | `README-FORK.md` | 二开完整说明（与上游关系、新增能力清单、验证情况） |
 | `HONEYPOT-DETECTION-DESIGN.md` | 蜜罐识别模块调研与设计（含反 AI 代理蜜罐） |
 | `HONEYPOT-DETECTION-DESIGN.md` | 蜜罐识别模块调研与设计（含反 AI 代理蜜罐） |
