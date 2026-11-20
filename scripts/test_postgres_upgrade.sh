@@ -13,7 +13,9 @@ suffix="${TEST_DIR##*.}"
 project16="artex-pg-upgrade-${suffix,,}-16"
 project17="artex-pg-upgrade-${suffix,,}-17"
 image_alias="artex-pg-upgrade-test:${suffix,,}"
-projects=("$project16" "$project17")
+project_mount="artex-pg-upgrade-${suffix,,}-mount"
+project_partial="artex-pg-upgrade-${suffix,,}-partial"
+projects=("$project16" "$project17" "$project_mount" "$project_partial")
 
 # Explicit files exclude the operator's default override; the forced volume name
 # and project names make cleanup independent of any deployed ARTEX instance.
@@ -31,6 +33,7 @@ volumes:
     external: false
 YAML
 export COMPOSE_FILE="$ROOT/docker-compose.yml:$TEST_DIR/compose.test.yml"
+base_compose_files="$COMPOSE_FILE"
 export COMPOSE_PATH_SEPARATOR=:
 export COMPOSE_PROJECT_NAME="$project16"
 export POSTGRES_USER=artex_upgrade_test
@@ -116,6 +119,19 @@ printf '%s\n' '1. Fresh deployment defaults to PostgreSQL 16.'
 configured_image="$(docker compose config --format json | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["services"]["postgres"]["image"])')"
 [[ "$configured_image" == postgres:16-alpine ]] || fail "unsafe default image: $configured_image"
+configured_pgdata="$(docker compose config --format json | python3 -c '
+import json, sys
+env = json.load(sys.stdin)["services"]["postgres"].get("environment", {})
+if isinstance(env, dict):
+    print(env.get("PGDATA", ""))
+elif isinstance(env, list):
+    vals = [item.split("=", 1)[1] for item in env if item.startswith("PGDATA=")]
+    print(vals[-1] if vals else "")
+else:
+    print("")
+')"
+[[ "$configured_pgdata" == /var/lib/postgresql/data ]] \
+  || fail "PGDATA is not on the named volume: ${configured_pgdata:-<unset>}"
 check_version
 start_postgres
 [[ "$(sql 'SHOW server_version_num')" == 16???? ]] || fail 'fresh deployment did not start PG16'
@@ -135,8 +151,7 @@ services:
     environment:
       PGDATA: /var/lib/postgresql/data/pgdata
 YAML
-base_compose_files="$COMPOSE_FILE"
-export COMPOSE_FILE="$COMPOSE_FILE:$TEST_DIR/compose.pgdata.yml"
+export COMPOSE_FILE="$base_compose_files:$TEST_DIR/compose.pgdata.yml"
 expect_rejection changed-pgdata 'Existing cluster found at /var/lib/postgresql/data' \
   'PGDATA is /var/lib/postgresql/data/pgdata'
 export COMPOSE_FILE="$base_compose_files"
@@ -186,4 +201,56 @@ assert_rows
 
 export COMPOSE_PROJECT_NAME="$project16"
 [[ "$(fingerprint)" == "$pg16_hash" ]] || fail 'logical upgrade changed the original PG16 volume'
-printf '%s\n' 'PASS: fresh install, PGDATA guard, both major mismatch directions, PG16 recovery, schema replay, and isolated PG16-to-PG17 restore.'
+
+printf '%s\n' '8. The PostgreSQL 18 default PGDATA is rejected outside the mounted volume.'
+export COMPOSE_PROJECT_NAME="$project_mount"
+export POSTGRES_IMAGE=
+cat > "$TEST_DIR/compose.outside.yml" <<'YAML'
+services:
+  postgres:
+    environment:
+      PGDATA: /var/lib/postgresql/18/docker
+YAML
+export COMPOSE_FILE="$base_compose_files:$TEST_DIR/compose.outside.yml"
+if check_version > "$TEST_DIR/outside.log" 2>&1; then
+  cat "$TEST_DIR/outside.log"
+  fail 'PGDATA outside the mounted volume was accepted'
+fi
+cat "$TEST_DIR/outside.log"
+output="$(< "$TEST_DIR/outside.log")"
+[[ "$output" == *'outside the mounted volume /var/lib/postgresql/data'* \
+  && "$output" == *'/var/lib/postgresql/18/docker'* ]] \
+  || fail 'outside-volume error omits the mount or PGDATA path'
+[[ -z "$(docker compose ps --status running --quiet postgres)" ]] \
+  || fail 'outside-volume preflight started PostgreSQL'
+docker volume inspect "${project_mount}_pgdata" >/dev/null
+[[ -z "$(volume_read 'ls -A /source')" ]] || fail 'outside-volume preflight wrote to the mounted volume'
+export COMPOSE_FILE="$base_compose_files"
+
+printf '%s\n' '9. A nonempty standard directory without PG_VERSION cannot be bypassed.'
+export COMPOSE_PROJECT_NAME="$project_partial"
+docker compose run --rm --no-deps --user 0 --entrypoint sh postgres -euc \
+  'printf partial > /var/lib/postgresql/data/partial.dat'
+partial_before="$(fingerprint)"
+cat > "$TEST_DIR/compose.partial.yml" <<'YAML'
+services:
+  postgres:
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+YAML
+export COMPOSE_FILE="$base_compose_files:$TEST_DIR/compose.partial.yml"
+if check_version > "$TEST_DIR/partial.log" 2>&1; then
+  cat "$TEST_DIR/partial.log"
+  fail 'nonempty legacy directory was accepted'
+fi
+cat "$TEST_DIR/partial.log"
+output="$(< "$TEST_DIR/partial.log")"
+[[ "$output" == *'Nonempty data directory at /var/lib/postgresql/data has no PG_VERSION'* \
+  && "$output" == *'PGDATA is /var/lib/postgresql/data/pgdata'* ]] \
+  || fail 'nonempty legacy directory was not reported'
+[[ -z "$(docker compose ps --status running --quiet postgres)" ]] \
+  || fail 'partial-directory preflight started PostgreSQL'
+[[ "$(fingerprint)" == "$partial_before" ]] || fail 'preflight changed the partial volume'
+export COMPOSE_FILE="$base_compose_files"
+
+printf '%s\n' 'PASS: fresh install, mounted PGDATA, legacy directory guard, both major mismatch directions, PG16 recovery, schema replay, and isolated PG16-to-PG17 restore.'

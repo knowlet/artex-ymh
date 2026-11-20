@@ -84,7 +84,9 @@ cp .env.example .env   # 填 POSTGRES_PASSWORD(不要用 # 字符)
 bash scripts/check_postgres_version.sh && docker compose up -d --build
 ```
 
-PostgreSQL 預設使用 16，以相容既有資料 volume。已經使用 PostgreSQL 17 的部署須在原 `.env`
+PostgreSQL 預設使用 16，以相容既有資料 volume。Compose 將 `PGDATA` 固定在具名 volume 的
+掛載點 `/var/lib/postgresql/data`；不要改成官方 PostgreSQL 18 映像的預設路徑
+`/var/lib/postgresql/18/docker`，那個路徑不在此 volume 上。已經使用 PostgreSQL 17 的部署須在原 `.env`
 保留 `POSTGRES_IMAGE=postgres:17-alpine`；設定 image 不會自動轉換資料庫大版本。
 若更新後出現 `database files are incompatible with server`，請依
 [PostgreSQL 升級與復原指南](docs/POSTGRES-UPGRADE.md)確認 `PG_VERSION`、備份並修正映像設定，

@@ -26,9 +26,18 @@ which is not compatible with this version 17.12.
 - Compose 預設使用 `postgres:16-alpine`，保留既有 PostgreSQL 16 部署的相容性。
 - `.env` 的 `POSTGRES_IMAGE` 可明確指定映像。**已經使用 PostgreSQL 17 的資料目錄必須保留
   `POSTGRES_IMAGE=postgres:17-alpine`；不能改用 16 啟動。**
+- Compose 把 `PGDATA` 固定為 `/var/lib/postgresql/data`，也就是具名 volume `pgdata` 的掛載點。
+  PostgreSQL 16／17 的叢集檔本來就在這個目錄，既有 volume 版面不變。官方 PostgreSQL 18
+  以上映像的預設 `PGDATA` 是 `/var/lib/postgresql/<major>/docker`，volume 宣告則改到
+  `/var/lib/postgresql`。若沿用本倉庫的掛載點卻不覆寫 `PGDATA`，資料目錄不在具名 volume 上。
+  目前的官方 entrypoint 若偵測到 `/var/lib/postgresql/data` 有未使用的掛載，會拒絕初始化；
+  若沒有偵測到，會把新叢集寫進容器層，容器重建後資料消失。不要為了 18 的新目錄把既有
+  volume 改掛到 `/var/lib/postgresql`，那會讓 16／17 的叢集檔落在伺服器尋找的資料目錄之外。
 - `bash scripts/check_postgres_version.sh` 比對選定映像與資料目錄的 `PG_VERSION`，
-  不會啟動 PostgreSQL 或執行版本轉換。安裝／更新腳本會使用此預檢；手動執行 Compose
-  時也應先執行。版本不符時先處理資料與映像的對應，再啟動服務。
+  不會啟動 PostgreSQL 或執行版本轉換。掛載存在時，預檢拒絕不在該掛載點上的 `PGDATA`。
+  `PGDATA` 若與 `/var/lib/postgresql/data` 不同，標準目錄裡已有 `PG_VERSION`，或目錄非空
+  但沒有 `PG_VERSION`，也都會拒絕，避免不完整的舊目錄被當成可忽略。安裝／更新腳本會使用
+  此預檢；手動執行 Compose 時也應先執行。版本不符時先處理資料與映像的對應，再啟動服務。
 - `POSTGRES_IMAGE` 只選擇伺服器映像，並不代表同時執行 PostgreSQL 大版本升級。
 
 預檢依照 Compose 解析後的映像、掛載與 `PGDATA` 工作；本指南使用倉庫的標準 16／17
@@ -114,7 +123,8 @@ services:
 以使用預設值。也要確認目前 shell 沒有用 `POSTGRES_IMAGE` 覆蓋 `.env`。
 若使用尚未套用修正、寫死 image 的舊版 Compose，先把該行改成 `image: postgres:16-alpine`。
 
-保留 `pgdata:/var/lib/postgresql/data`、原 volume 名稱、Traefik 設定及 `artex-ymh:local`。
+保留 `pgdata:/var/lib/postgresql/data`、`PGDATA=/var/lib/postgresql/data`、原 volume 名稱、
+Traefik 設定及 `artex-ymh:local`。
 不要用 `git restore docker-compose.yml` 覆蓋整份已修改的本機設定。
 以下預檢指令使用本次修正新增的 `scripts/check_postgres_version.sh`；請先取得該修正。
 

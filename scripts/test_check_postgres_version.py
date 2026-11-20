@@ -158,6 +158,82 @@ class PostgresVersionTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Unrecognized postgres --version", result.stderr)
 
+    def test_compose_pins_pgdata_on_named_volume(self):
+        text = (ROOT / "docker-compose.yml").read_text()
+        self.assertIn("pgdata:/var/lib/postgresql/data", text)
+        self.assertRegex(text, r"(?m)^\s+PGDATA:\s*/var/lib/postgresql/data\s*$")
+
+    def run_with_mounted_volume(self, pgdata, populate):
+        volume = self.root / "mounted-volume"
+        volume.mkdir()
+        populate(volume)
+        before = {p.name: p.read_bytes() for p in volume.iterdir() if p.is_file()}
+        env = self.env.copy()
+        env.update(PGDATA=pgdata, HOST_VOLUME=str(volume), PREFLIGHT_SCRIPT=str(ROOT / "scripts/check_postgres_version.sh"))
+        result = subprocess.run(
+            [
+                "unshare", "--user", "--mount", "--map-root-user",
+                "bash", "-c",
+                """
+set -euo pipefail
+mount -t tmpfs tmpfs /var/lib
+mkdir -p /var/lib/postgresql/data
+mount --bind "$HOST_VOLUME" /var/lib/postgresql/data
+set +e
+bash "$PREFLIGHT_SCRIPT"
+status=$?
+set -e
+if [ -e /var/lib/postgresql/18 ]; then
+  printf '%s\\n' 'preflight created the image-default data directory' >&2
+  exit 99
+fi
+exit "$status"
+""",
+            ],
+            cwd=self.root,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        after = {p.name: p.read_bytes() for p in volume.iterdir() if p.is_file()}
+        self.assertEqual(before, after, "preflight changed the mounted volume")
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        self.assertEqual(len(calls), 1, "preflight invoked an extra container operation")
+        return result
+
+    def test_image_default_pgdata_outside_mounted_volume_is_rejected(self):
+        result = self.run_with_mounted_volume("/var/lib/postgresql/18/docker", lambda volume: None)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("outside the mounted volume /var/lib/postgresql/data", result.stderr)
+        self.assertIn("/var/lib/postgresql/18/docker", result.stderr)
+        self.assertNotIn("empty PGDATA", result.stdout)
+
+    def test_empty_mounted_volume_root_can_initialize(self):
+        result = self.run_with_mounted_volume("/var/lib/postgresql/data", lambda volume: None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("empty PGDATA", result.stdout)
+
+    def test_nonempty_legacy_directory_without_version_is_rejected(self):
+        def populate(volume):
+            (volume / "partial.dat").write_text("incomplete cluster")
+
+        result = self.run_with_mounted_volume("/var/lib/postgresql/data/pgdata", populate)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Nonempty data directory at /var/lib/postgresql/data has no PG_VERSION", result.stderr)
+        self.assertIn("PGDATA is /var/lib/postgresql/data/pgdata", result.stderr)
+        self.assertNotIn("empty PGDATA", result.stdout)
+
+    def test_changed_pgdata_still_rejects_legacy_cluster(self):
+        def populate(volume):
+            (volume / "PG_VERSION").write_text("16\n")
+            (volume / "sentinel").write_bytes(b"existing")
+
+        result = self.run_with_mounted_volume("/var/lib/postgresql/data/pgdata", populate)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Existing cluster found at /var/lib/postgresql/data", result.stderr)
+        self.assertIn("PGDATA is /var/lib/postgresql/data/pgdata", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

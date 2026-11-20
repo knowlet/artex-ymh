@@ -38,11 +38,29 @@ docker compose run --rm --no-deps -T --entrypoint sh postgres -ec '
     ""|*[!0-9]*) fail "Cannot determine the server major version." ;;
   esac
 
-  # A changed PGDATA (including the PG18 image layout) must not hide the old
-  # standard volume and make a populated deployment look like a fresh install.
-  legacy_dir=/var/lib/postgresql/data
-  if [ "$data_dir" != "$legacy_dir" ] && [ -e "$legacy_dir/PG_VERSION" ]; then
-    fail "Existing cluster found at $legacy_dir, but PGDATA is $data_dir. Refusing to initialize another cluster."
+  # Compose mounts the named volume at this path. Official PostgreSQL 18+
+  # images default PGDATA to /var/lib/postgresql/<major>/docker, which is not
+  # on that mount; an empty directory there is not a fresh durable cluster.
+  volume_mount=/var/lib/postgresql/data
+  if awk -v mp="$volume_mount" "\$5 == mp { found = 1 } END { exit !found }" /proc/self/mountinfo; then
+    case "$data_dir" in
+      "$volume_mount"|"$volume_mount"/*) ;;
+      *) fail "PGDATA $data_dir is outside the mounted volume $volume_mount. Refusing to initialize a cluster that would not persist across container recreation." ;;
+    esac
+  fi
+
+  # A changed PGDATA must not hide the standard volume. A partial directory
+  # with no PG_VERSION is still existing data, not an unused mount.
+  legacy_dir=$volume_mount
+  if [ "$data_dir" != "$legacy_dir" ] && [ -e "$legacy_dir" ]; then
+    if [ -e "$legacy_dir/PG_VERSION" ]; then
+      fail "Existing cluster found at $legacy_dir, but PGDATA is $data_dir. Refusing to initialize another cluster."
+    fi
+    if [ ! -d "$legacy_dir" ]; then
+      fail "Data path $legacy_dir exists but is not a directory, while PGDATA is $data_dir."
+    fi
+    legacy_entries=$(ls -A "$legacy_dir") || fail "Cannot inspect $legacy_dir."
+    [ -z "$legacy_entries" ] || fail "Nonempty data directory at $legacy_dir has no PG_VERSION, but PGDATA is $data_dir. Refusing to initialize another cluster."
   fi
 
   if [ -e "$data_dir/PG_VERSION" ]; then
