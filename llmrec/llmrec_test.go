@@ -92,6 +92,10 @@ func TestSideUsageRecordedOnceOnConsumerCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pg.Close()
+	// schema.sql does not create llm_usage; startup and the other DB tests call this.
+	if err := pg.EnsureLLMUsageTable(); err != nil {
+		t.Fatalf("ensure llm_usage: %v", err)
+	}
 	for _, early := range []bool{false, true} {
 		profile := "btw-metering-" + uuid.NewString()
 		ctx, cancel := context.WithCancel(transcript.WithSessionID(t.Context(), "exp0-btw-test"))
