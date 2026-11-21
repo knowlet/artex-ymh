@@ -1,12 +1,12 @@
 {
   "files": [
     {
-      "bytes": 1668462,
+      "bytes": 1684042,
       "license": "CC0-1.0",
       "name": "cisa-kev",
       "path": "vulnerability-intel.json",
-      "sha256": "1676bb0c130d8c6382a57f556318277bf27bfd7ab39149352505e1b1ddaa349c",
-      "source_date": "2026-11-13T20:24:18.3008Z"
+      "sha256": "aed622728bad9dd3d4b398b2be3d6be75c338da86cafa7e5d67206f465a33b7a",
+      "source_date": "2026-11-20T17:48:39.1516Z"
     },
     {
       "bytes": 8120,
