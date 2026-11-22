@@ -5,9 +5,11 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -76,19 +78,25 @@ class DockerUpdateTests(unittest.TestCase):
             TEST_CALLS=str(self.log),
             TEST_PREFLIGHT_EXIT="0",
             TEST_DOCKER_FAIL="",
+            TMPDIR=str(self.root / "tmp"),
+            XDG_STATE_HOME=str(self.root / "state"),
         )
+        (self.root / "tmp").mkdir()
 
-    def run_script(self, name="update.sh"):
+    def run_script(self, name="update.sh", root=None, env=None, timeout=10):
+        root = root or self.root
+        env = env or self.env
         result = subprocess.run(
-            ["bash", str(self.root / name)],
+            ["bash", str(root / name)],
             input="1\n",
             text=True,
             capture_output=True,
-            env=self.env,
-            cwd=self.root,
-            timeout=10,
+            env=env,
+            cwd=root,
+            timeout=timeout,
         )
-        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        text = self.log.read_text() if self.log.exists() else ""
+        calls = [json.loads(line) for line in text.splitlines()]
         return result, calls
 
     def assert_configuration_unchanged(self):
@@ -184,7 +192,10 @@ class DockerUpdateTests(unittest.TestCase):
             )
             for _ in range(2)
         ]
-        outputs = [proc.communicate(input="1\n", timeout=15) for proc in procs]
+        for proc in procs:
+            proc.stdin.write("1\n")
+            proc.stdin.flush()
+        outputs = [proc.communicate(timeout=15) for proc in procs]
         for proc, (stdout, stderr) in zip(procs, outputs):
             self.assertEqual(proc.returncode, 0, stderr)
             self.assertIn("更新完成", stdout)
@@ -200,6 +211,177 @@ class DockerUpdateTests(unittest.TestCase):
         ]
         self.assertEqual(calls, sequence + sequence)
         self.assert_configuration_unchanged()
+
+    def shell_out(self, script, arg):
+        return subprocess.check_output(
+            ["bash", "-c", script, "bash", arg], text=True
+        ).strip()
+
+    def daemon_scope(self, env):
+        host = env.get("DOCKER_HOST", "")
+        context = env.get("DOCKER_CONTEXT", "")
+        if host:
+            return host
+        if context and context != "default":
+            return f"context:{context}"
+        return "default"
+
+    def daemon_lock_path(self, env):
+        key = self.shell_out(
+            "printf '%s' \"$1\" | cksum | awk '{print $1}'",
+            f"artex-ymh:local|{self.daemon_scope(env)}",
+        )
+        return Path(env["XDG_STATE_HOME"]) / "artex-ymh" / f"docker-update.{key}.lock"
+
+    def legacy_lock_path(self, env, checkout):
+        key = self.shell_out(
+            "cd \"$1\" && pwd -P | cksum | awk '{print $1}'", str(checkout)
+        )
+        return Path(env["TMPDIR"]) / f"artex-docker-update.{key}.lock"
+
+    def write_checkout(self, root):
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "scripts").mkdir(exist_ok=True)
+        shutil.copyfile(ROOT / "update.sh", root / "update.sh")
+        (root / ".env").write_text(self.original_env)
+        (root / "docker-compose.yml").write_text(self.original_compose)
+        (root / "scripts" / "check_postgres_version.sh").write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '[\"preflight\"]\\n' >> \"$TEST_CALLS\"\n"
+            "exit \"${TEST_PREFLIGHT_EXIT:-0}\"\n"
+        )
+
+    def test_different_checkouts_share_one_daemon_image_lock(self):
+        other = self.root / "other-checkout"
+        self.write_checkout(other)
+        self.env["TEST_HOLD_BUILD"] = "0.6"
+        self.env["TEST_CRITICAL"] = str(self.root / "critical")
+        self.env["TEST_PEAK"] = str(self.root / "peak")
+        procs = [
+            subprocess.Popen(
+                ["bash", str(checkout / "update.sh")],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self.env,
+                cwd=checkout,
+            )
+            for checkout in (self.root, other)
+        ]
+        for proc in procs:
+            proc.stdin.write("1\n")
+            proc.stdin.flush()
+        outputs = [proc.communicate(timeout=15) for proc in procs]
+        for proc, (stdout, stderr) in zip(procs, outputs):
+            self.assertEqual(proc.returncode, 0, stderr)
+            self.assertIn("更新完成", stdout)
+        peak = int((self.root / "peak").read_text().strip())
+        self.assertEqual(peak, 1)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        sequence = [
+            ["compose", "version"],
+            ["preflight"],
+            ["compose", "build", "artex"],
+            ["compose", "up", "-d", "--no-deps", "--wait", "--wait-timeout", "120", "postgres"],
+            ["compose", "up", "-d", "--no-deps", "--no-build", "--pull", "never", "artex"],
+        ]
+        self.assertEqual(calls, sequence + sequence)
+
+    def test_lock_file_is_private_and_existing_contents_survive(self):
+        lock = self.daemon_lock_path(self.env)
+        lock.parent.mkdir(parents=True)
+        lock.parent.chmod(0o755)
+        lock.write_text("keep-new\n")
+        legacy = self.legacy_lock_path(self.env, self.root)
+        legacy.write_text("keep-old\n")
+        result, _ = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(lock.read_text(), "keep-new\n")
+        self.assertEqual(legacy.read_text(), "keep-old\n")
+        self.assertFalse(lock.is_symlink())
+        self.assertEqual(lock.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(lock.parent.stat().st_uid, os.getuid())
+        self.assertEqual(list(Path(self.env["TMPDIR"]).glob("artex-docker-update*")), [legacy])
+
+    def test_lock_refuses_symlink_without_truncating_the_target(self):
+        lock = self.daemon_lock_path(self.env)
+        lock.parent.mkdir(parents=True)
+        lock.parent.chmod(0o700)
+        victim = self.root / "victim"
+        victim.write_text("precious")
+        lock.symlink_to(victim)
+        legacy = self.legacy_lock_path(self.env, self.root)
+        legacy_victim = self.root / "legacy-victim"
+        legacy_victim.write_text("legacy-precious")
+        legacy.symlink_to(legacy_victim)
+        result, calls = self.run_script()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("符号链接", result.stderr)
+        self.assertEqual(victim.read_text(), "precious")
+        self.assertEqual(legacy_victim.read_text(), "legacy-precious")
+        self.assertFalse(any(call[:2] == ["compose", "build"] for call in calls))
+
+    def path_without_flock(self):
+        bindir = self.root / "path-no-flock"
+        bindir.mkdir(exist_ok=True)
+        for name in (
+            "bash",
+            "awk",
+            "cksum",
+            "stat",
+            "id",
+            "chmod",
+            "mkdir",
+            "cat",
+            "rm",
+            "sleep",
+            "readlink",
+            "dirname",
+            "basename",
+        ):
+            source = shutil.which(name)
+            dest = bindir / name
+            if source and not dest.exists():
+                dest.symlink_to(source)
+        return f"{self.root / 'bin'}:{bindir}"
+
+    def test_directory_lock_signals_exit_before_compose_up(self):
+        env = self.env.copy()
+        env["PATH"] = self.path_without_flock()
+        env["TEST_HOLD_BUILD"] = "1.5"
+        env["TEST_CRITICAL"] = str(self.root / "critical")
+        env["TEST_PEAK"] = str(self.root / "peak")
+        for sig, status in ((signal.SIGTERM, 143), (signal.SIGINT, 130)):
+            with self.subTest(signal=sig):
+                self.log.write_text("")
+                proc = subprocess.Popen(
+                    ["bash", str(self.root / "update.sh")],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                    cwd=self.root,
+                )
+                proc.stdin.write("1\n")
+                proc.stdin.flush()
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    if self.log.exists() and '"build"' in self.log.read_text():
+                        break
+                    if proc.poll() is not None:
+                        break
+                    time.sleep(0.05)
+                proc.send_signal(sig)
+                stdout, stderr = proc.communicate(timeout=10)
+                self.assertEqual(proc.returncode, status, stderr)
+                self.assertNotIn("更新完成", stdout)
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                self.assertTrue(any(call[:3] == ["compose", "build", "artex"] for call in calls))
+                self.assertFalse(any("up" in call for call in calls), calls)
+                state = Path(env["XDG_STATE_HOME"])
+                self.assertEqual(list(state.rglob("*.lock.d")), [])
 
 
 if __name__ == "__main__":

@@ -21,25 +21,103 @@ sync_repo(){
   fi
 }
 
+# artex-ymh:local is one tag on the Docker daemon, shared by every checkout.
+# The lock follows that tag and the daemon, not the working directory.
+UPDATE_LOCK_DIR=
+release_update_lock(){
+  if [ -n "${UPDATE_LOCK_DIR:-}" ]; then
+    rm -rf -- "$UPDATE_LOCK_DIR"
+    UPDATE_LOCK_DIR=
+  fi
+}
+
+prepare_private_dir(){
+  local dir=$1
+  if [ -L "$dir" ]; then
+    die "更新锁目录是符号链接，已拒绝：$dir"
+  fi
+  if [ ! -d "$dir" ]; then
+    mkdir -p -- "$dir" || die "无法创建更新锁目录：$dir"
+  fi
+  if [ -L "$dir" ] || [ ! -d "$dir" ]; then
+    die "更新锁目录是符号链接，已拒绝：$dir"
+  fi
+  if [ "$(stat -c %u -- "$dir")" != "$(id -u)" ]; then
+    die "更新锁目录必须属于当前用户：$dir"
+  fi
+  chmod 700 -- "$dir" || die "无法设置更新锁目录权限：$dir"
+  if [ -L "$dir" ] || [ "$(stat -c %a -- "$dir")" != 700 ]; then
+    die "更新锁目录权限异常：$dir"
+  fi
+}
+
+refuse_symlink(){
+  if [ -L "$1" ]; then
+    die "更新锁是符号链接，已拒绝：$1"
+  fi
+}
+
 # Hold the lock until this process exits. flock is released by the kernel even
-# if the updater is killed. Without flock, a directory lock is removed on exit.
+# if the updater is killed. Without flock, a directory lock is removed by the
+# EXIT trap; INT and TERM exit so startup does not continue unlocked.
 acquire_update_lock(){
-  local lock_key lock_file
-  lock_key="$(pwd -P | cksum | awk '{print $1}')"
-  lock_file="${TMPDIR:-/tmp}/artex-docker-update.${lock_key}.lock"
+  local state_home lock_dir daemon_scope scope_key lock_file lock_umask
+  if [ -n "${XDG_STATE_HOME:-}" ]; then
+    state_home=$XDG_STATE_HOME
+  elif [ -n "${HOME:-}" ]; then
+    state_home=$HOME/.local/state
+  else
+    die "无法创建更新锁：HOME 未设置"
+  fi
+  lock_dir=$state_home/artex-ymh
+  prepare_private_dir "$lock_dir"
+
+  daemon_scope=${DOCKER_HOST:-}
+  if [ -z "$daemon_scope" ]; then
+    if [ -n "${DOCKER_CONTEXT:-}" ] && [ "$DOCKER_CONTEXT" != default ]; then
+      daemon_scope=context:$DOCKER_CONTEXT
+    else
+      daemon_scope=default
+    fi
+  fi
+  scope_key=$(printf '%s' "artex-ymh:local|$daemon_scope" | cksum | awk '{print $1}')
+  lock_file=$lock_dir/docker-update.$scope_key.lock
+  refuse_symlink "$lock_file"
+  if [ -e "$lock_file" ] && [ ! -f "$lock_file" ]; then
+    die "更新锁路径不是普通文件：$lock_file"
+  fi
+
   if command -v flock >/dev/null 2>&1; then
-    exec 9>"$lock_file"
+    lock_umask=$(umask)
+    umask 077
+    # Append so a pre-existing file is not truncated before the lock is held.
+    if ! exec 9>>"$lock_file"; then
+      umask "$lock_umask"
+      die "无法打开更新锁：$lock_file"
+    fi
+    umask "$lock_umask"
+    refuse_symlink "$lock_file"
     if ! flock -n 9; then
       info "另一个更新正在构建或部署，等待它结束后继续…"
       flock 9
     fi
     return 0
   fi
-  local lock_dir="${lock_file}.d" announced=0 pid
-  while ! mkdir "$lock_dir" 2>/dev/null; do
-    pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+
+  local lock_hold=$lock_file.d announced=0 pid
+  # Exit on the signal. The EXIT trap releases the directory we hold.
+  trap release_update_lock EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  refuse_symlink "$lock_hold"
+  if [ -e "$lock_hold" ] && [ ! -d "$lock_hold" ]; then
+    die "更新锁路径不是目录：$lock_hold"
+  fi
+  while ! mkdir -- "$lock_hold" 2>/dev/null; do
+    refuse_symlink "$lock_hold"
+    pid=$(cat "$lock_hold/pid" 2>/dev/null || true)
     if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-      rm -rf -- "$lock_dir"
+      rm -rf -- "$lock_hold"
       continue
     fi
     if [ "$announced" -eq 0 ]; then
@@ -48,15 +126,15 @@ acquire_update_lock(){
     fi
     sleep 1
   done
-  printf '%s\n' "$$" > "$lock_dir/pid"
-  # shellcheck disable=SC2064
-  trap "rm -rf -- $(printf '%q' "$lock_dir")" EXIT INT TERM
+  UPDATE_LOCK_DIR=$lock_hold
+  printf '%s\n' "$$" > "$lock_hold/pid"
 }
 
 # ── ① Docker 更新 ───────────────────────────────
 update_docker(){
-  # artex-ymh:local is one mutable tag. Hold the lock across the whole
-  # build-and-deploy sequence so an older build cannot finish last.
+  # artex-ymh:local is one mutable tag for the whole Docker daemon. Hold the
+  # lock across the whole build-and-deploy sequence so another checkout cannot
+  # finish a build last and start this checkout's container from that image.
   acquire_update_lock
 
   command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 \

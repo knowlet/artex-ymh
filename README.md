@@ -150,7 +150,7 @@ PHP2Shell Scanner、OSV-Scanner、Trivy、ZAP、ffuf。
 
 - **應用程式 schema 更新**：ARTEX 啟動時會執行資料表 migration，前提是 PostgreSQL 已能正常啟動。更新前應備份 `./data` 與資料庫；重啟程式不會轉換 PostgreSQL 的大版本資料格式。
 - **PostgreSQL 大版本與部署預檢**：手動更新 Docker 部署前執行 `bash scripts/check_postgres_version.sh`；預檢失敗時先處理映像與資料目錄的版本對應。16 → 17 須另外執行 dump/restore 或 `pg_upgrade`，不能只改 image。復原、獨立 volume 遷移及回復界線見 [PostgreSQL 升級與復原指南](docs/POSTGRES-UPGRADE.md)。
-- **Docker 更新不會並行部署**：`./update.sh` 的 Docker 路徑在預檢、重建 `artex-ymh:local` 與啟動服務期間持有排他鎖。後到的更新會等前一次結束，避免較舊的建置最後完成並覆蓋正在部署的映像。
+- **Docker 更新不會並行部署**：`./update.sh` 的 Docker 路徑在預檢、重建 `artex-ymh:local` 與啟動服務期間持有排他鎖。這把鎖對應同一個 Docker daemon 上的 `artex-ymh:local`，不同工作目錄會一起排隊。後到的更新會等前一次結束，避免另一個 checkout 的建置最後完成並把容器啟動成那份映像。
 - ⚠️ **二开版一键安装保持禁用**：检查更新只查询 `knowlet/artex-ymh`，不会回退到上游。独立发布与签名链尚待单独审核；即使以后建立 Release，也不会自动启用安装。API、下载暂存与启动换装入口均阻止远程更新，旧暂存文件会保留但不执行。升级请从本 fork 更新源码并重新编译（方式二）。
 
 ## 配置

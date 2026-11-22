@@ -231,8 +231,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-artex}
     volumes:
       - pgdata17:/var/lib/postgresql/data
+    # 必須使用 TCP。映像初始化時的暫時伺服器只聽 Unix socket，socket 版 pg_isready 會在真正的 postmaster 接受連線前就通過。
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 24

@@ -163,13 +163,30 @@ class PostgresVersionTests(unittest.TestCase):
         self.assertIn("pgdata:/var/lib/postgresql/data", text)
         self.assertRegex(text, r"(?m)^\s+PGDATA:\s*/var/lib/postgresql/data\s*$")
 
-    def run_with_mounted_volume(self, pgdata, populate):
+    def test_healthchecks_wait_for_tcp_not_the_init_socket(self):
+        compose = (ROOT / "docker-compose.yml").read_text()
+        self.assertRegex(
+            compose,
+            r'(?m)^\s+test:\s*\["CMD-SHELL", "pg_isready -h 127\.0\.0\.1 -U \$\{POSTGRES_USER:-artex\} -d \$\{POSTGRES_DB:-artex\}"\]\s*$',
+        )
+        document = (ROOT / "docs/POSTGRES-UPGRADE.md").read_text()
+        self.assertIn(
+            'test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]',
+            document,
+        )
+
+    def run_with_mounted_volume(self, pgdata, populate, setup=""):
         volume = self.root / "mounted-volume"
         volume.mkdir()
         populate(volume)
         before = {p.name: p.read_bytes() for p in volume.iterdir() if p.is_file()}
         env = self.env.copy()
-        env.update(PGDATA=pgdata, HOST_VOLUME=str(volume), PREFLIGHT_SCRIPT=str(ROOT / "scripts/check_postgres_version.sh"))
+        env.update(
+            PGDATA=pgdata,
+            HOST_VOLUME=str(volume),
+            PREFLIGHT_SCRIPT=str(ROOT / "scripts/check_postgres_version.sh"),
+            PREFLIGHT_SETUP=setup,
+        )
         result = subprocess.run(
             [
                 "unshare", "--user", "--mount", "--map-root-user",
@@ -179,6 +196,9 @@ set -euo pipefail
 mount -t tmpfs tmpfs /var/lib
 mkdir -p /var/lib/postgresql/data
 mount --bind "$HOST_VOLUME" /var/lib/postgresql/data
+if [ -n "${PREFLIGHT_SETUP:-}" ]; then
+  eval "$PREFLIGHT_SETUP"
+fi
 set +e
 bash "$PREFLIGHT_SCRIPT"
 status=$?
@@ -233,6 +253,46 @@ exit "$status"
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Existing cluster found at /var/lib/postgresql/data", result.stderr)
         self.assertIn("PGDATA is /var/lib/postgresql/data/pgdata", result.stderr)
+
+    def test_dotdot_pgdata_outside_mount_is_rejected(self):
+        result = self.run_with_mounted_volume(
+            "/var/lib/postgresql/data/../other", lambda volume: None
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("outside the mounted volume /var/lib/postgresql/data", result.stderr)
+        self.assertIn("/var/lib/postgresql/data/../other", result.stderr)
+        self.assertNotIn("empty PGDATA", result.stdout)
+
+    def test_dotdot_back_onto_the_volume_can_initialize(self):
+        result = self.run_with_mounted_volume(
+            "/var/lib/postgresql/data/../data", lambda volume: None
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("empty PGDATA", result.stdout)
+
+    def test_symlink_pgdata_outside_mount_is_rejected(self):
+        result = self.run_with_mounted_volume(
+            "/var/lib/postgresql/data/escape",
+            lambda volume: None,
+            "mkdir -p /var/lib/postgresql/outside\n"
+            "ln -s /var/lib/postgresql/outside /var/lib/postgresql/data/escape\n",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("outside the mounted volume /var/lib/postgresql/data", result.stderr)
+        self.assertIn("/var/lib/postgresql/data/escape", result.stderr)
+        self.assertNotIn("empty PGDATA", result.stdout)
+
+    def test_nested_mount_is_not_the_volume(self):
+        result = self.run_with_mounted_volume(
+            "/var/lib/postgresql/data/nested",
+            lambda volume: None,
+            "mkdir -p /var/lib/elsewhere /var/lib/postgresql/data/nested\n"
+            "mount --bind /var/lib/elsewhere /var/lib/postgresql/data/nested\n",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("outside the mounted volume /var/lib/postgresql/data", result.stderr)
+        self.assertIn("/var/lib/postgresql/data/nested", result.stderr)
+        self.assertNotIn("empty PGDATA", result.stdout)
 
 
 if __name__ == "__main__":
