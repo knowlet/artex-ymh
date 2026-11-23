@@ -38,7 +38,7 @@ class DockerUpdateTests(unittest.TestCase):
         self.net_locks.mkdir()
         docker.write_text(
             f"#!{sys.executable}\n"
-            "import json, os, re, shutil, sys, time\n"
+            "import json, os, shutil, sys, time, uuid\n"
             "from pathlib import Path\n"
             "args = sys.argv[1:]\n"
             "\n"
@@ -59,6 +59,9 @@ class DockerUpdateTests(unittest.TestCase):
             "    (path / 'labels').write_text(json.dumps(labels))\n"
             "\n"
             "if args[:1] == ['network']:\n"
+            "    def record(labels):\n"
+            "        keys = ['id', 'artex.lock/pid', 'artex.lock/start', 'artex.lock/wall', 'artex.lock/host', 'artex.lock/pidns']\n"
+            "        return '|'.join(str(labels.get(key, '')) for key in keys)\n"
             "    if args[1] == 'create':\n"
             "        labels = {}\n"
             "        name = None\n"
@@ -76,31 +79,43 @@ class DockerUpdateTests(unittest.TestCase):
             "            path.mkdir()\n"
             "        except FileExistsError:\n"
             "            sys.exit(1)\n"
+            "        labels['id'] = uuid.uuid4().hex\n"
             "        (path / 'labels').write_text(json.dumps(labels))\n"
+            "        sys.stdout.write(labels['id'] + '\\n')\n"
             "        sys.exit(0)\n"
             "    if args[1] == 'inspect':\n"
-            "        fmt = args[args.index('-f') + 1]\n"
             "        name = args[-1]\n"
-            "        key = re.search(r'artex\\.lock/[A-Za-z]+', fmt).group(0)\n"
             "        labels = read_labels(name)\n"
+            "        if not (net_root() / name).is_dir():\n"
+            "            sys.exit(1)\n"
+            "        replace = os.environ.get('TEST_REPLACE_LOCK') == '1' and not name.endswith('reap')\n"
             "        swap_lock = os.environ.get('TEST_SWAP_LOCK') == '1' and not name.endswith('reap')\n"
             "        swap_reaper = os.environ.get('TEST_SWAP_REAPER') == '1' and name.endswith('reap')\n"
-            "        if (swap_lock or swap_reaper) and key == 'artex.lock/pid':\n"
-            "            mark = net_root() / ('.swapped-lock' if swap_lock else '.swapped')\n"
+            "        if replace or swap_lock or swap_reaper:\n"
+            "            mark = net_root() / ('.replaced' if replace else '.swapped-lock' if swap_lock else '.swapped')\n"
             "            if not mark.exists():\n"
-            "                old = labels.get(key, '')\n"
+            "                old = record(labels)\n"
+            "                if replace:\n"
+            "                    labels['id'] = 'replacement-id'\n"
             "                labels['artex.lock/pid'] = os.environ['TEST_LIVE_PID']\n"
             "                labels['artex.lock/start'] = os.environ['TEST_LIVE_START']\n"
             "                write_labels(name, labels)\n"
             "                mark.write_text('1')\n"
             "                sys.stdout.write(old + '\\n')\n"
             "                sys.exit(0)\n"
-            "        sys.stdout.write(str(labels.get(key, '')) + '\\n')\n"
+            "        sys.stdout.write(record(labels) + '\\n')\n"
             "        sys.exit(0)\n"
             "    if args[1] == 'rm':\n"
-            "        path = net_root() / args[-1]\n"
-            "        if path.exists():\n"
-            "            shutil.rmtree(path)\n"
+            "        target = args[-1]\n"
+            "        with open(net_root() / 'rm.log', 'a') as log:\n"
+            "            log.write(target + '\\n')\n"
+            "        removed = False\n"
+            "        for path in list(net_root().iterdir()):\n"
+            "            if path.is_dir() and read_labels(path.name).get('id') == target:\n"
+            "                shutil.rmtree(path)\n"
+            "                removed = True\n"
+            "        if not removed and (net_root() / target).is_dir():\n"
+            "            shutil.rmtree(net_root() / target)\n"
             "        sys.exit(0)\n"
             "    sys.exit(1)\n"
             "\n"
@@ -310,6 +325,10 @@ class DockerUpdateTests(unittest.TestCase):
         return "artexymh" + env.get("TEST_DOCKER_ID", "testdaemon")
 
     def plant_network(self, name, labels):
+        labels = dict(labels)
+        labels.setdefault("artex.lock/host", Path("/etc/machine-id").read_text().strip())
+        labels.setdefault("artex.lock/pidns", os.readlink("/proc/self/ns/pid"))
+        labels.setdefault("id", "id-" + name)
         path = self.net_locks / name
         path.mkdir(parents=True, exist_ok=True)
         (path / "labels").write_text(json.dumps(labels))
@@ -451,6 +470,8 @@ class DockerUpdateTests(unittest.TestCase):
             "tr",
             "sed",
             "ps",
+            "readlink",
+            "hostname",
             "mkdir",
             "cat",
             "rm",
@@ -747,6 +768,135 @@ class DockerUpdateTests(unittest.TestCase):
         self.assertTrue(reaper.is_dir())
         labels = json.loads((reaper / "labels").read_text())
         self.assertEqual(labels["artex.lock/pid"], str(holder.pid))
+        proc.kill()
+
+    def test_unreadable_start_time_stops_at_the_bound(self):
+        holder = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(lambda: holder.poll() is None and holder.kill())
+        net = self.network_name(self.env)
+        planted = self.plant_network(net, {
+            "artex.lock/pid": str(holder.pid),
+            "artex.lock/start": "",
+            "artex.lock/wall": "1",
+        })
+        started = time.monotonic()
+        result, calls = self.run_script(timeout=8)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("两小时上限已到", result.stderr)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertTrue(planted.is_dir())
+        labels = json.loads((planted / "labels").read_text())
+        self.assertEqual(labels["artex.lock/pid"], str(holder.pid))
+        self.assertFalse(any(call[:2] == ["compose", "build"] for call in calls))
+
+    def test_unreadable_start_time_waits_inside_the_bound(self):
+        holder = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(lambda: holder.poll() is None and holder.kill())
+        net = self.network_name(self.env)
+        planted = self.plant_network(net, {
+            "artex.lock/pid": str(holder.pid),
+            "artex.lock/start": "",
+            "artex.lock/wall": str(int(time.time())),
+        })
+        proc = subprocess.Popen(
+            ["bash", str(self.root / "update.sh")],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=self.env, cwd=self.root,
+        )
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        proc.stdin.write("1\n")
+        proc.stdin.flush()
+        time.sleep(1.2)
+        self.assertIsNone(proc.poll(), "stopped before the two-hour bound")
+        labels = json.loads((planted / "labels").read_text())
+        self.assertEqual(labels["artex.lock/pid"], str(holder.pid))
+        calls = self.log.read_text() if self.log.exists() else ""
+        self.assertNotIn('"build"', calls)
+        proc.kill()
+
+    def test_other_host_does_not_reap_a_live_lock(self):
+        holder = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(lambda: holder.poll() is None and holder.kill())
+        net = self.network_name(self.env)
+        planted = self.plant_network(net, {
+            "artex.lock/pid": str(holder.pid),
+            "artex.lock/start": self.proc_start(holder.pid),
+            "artex.lock/wall": str(int(time.time())),
+            "artex.lock/host": "not-this-machine",
+        })
+        result, calls = self.run_script(timeout=8)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("另一台主机或另一个 PID namespace", result.stderr)
+        self.assertTrue(planted.is_dir())
+        labels = json.loads((planted / "labels").read_text())
+        self.assertEqual(labels["artex.lock/pid"], str(holder.pid))
+        self.assertFalse(any(call[:2] == ["compose", "build"] for call in calls))
+
+    def test_other_pid_namespace_does_not_reap_a_live_lock(self):
+        holder = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(lambda: holder.poll() is None and holder.kill())
+        net = self.network_name(self.env)
+        planted = self.plant_network(net, {
+            "artex.lock/pid": str(holder.pid),
+            "artex.lock/start": self.proc_start(holder.pid),
+            "artex.lock/wall": str(int(time.time())),
+        })
+        result = subprocess.run(
+            [
+                "unshare", "--user", "--map-root-user", "--pid", "--fork", "--mount-proc",
+                "bash", str(self.root / "update.sh"),
+            ],
+            input="1\n",
+            text=True,
+            capture_output=True,
+            env=self.env,
+            cwd=self.root,
+            timeout=15,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("另一个 PID namespace", result.stderr)
+        self.assertTrue(planted.is_dir())
+        labels = json.loads((planted / "labels").read_text())
+        self.assertEqual(labels["artex.lock/pid"], str(holder.pid))
+        calls = self.log.read_text() if self.log.exists() else ""
+        self.assertNotIn('"build"', calls)
+
+    def test_reaper_removes_network_by_id_not_name(self):
+        holder = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(lambda: holder.poll() is None and holder.kill())
+        net = self.network_name(self.env)
+        planted = self.plant_network(net, {
+            "artex.lock/pid": str(self.dead_pid()),
+            "artex.lock/start": "dead",
+            "artex.lock/wall": "1",
+            "id": "old-lock-id",
+        })
+        env = self.env.copy()
+        env["TEST_REPLACE_LOCK"] = "1"
+        env["TEST_LIVE_PID"] = str(holder.pid)
+        env["TEST_LIVE_START"] = self.proc_start(holder.pid)
+        proc = subprocess.Popen(
+            ["bash", str(self.root / "update.sh")],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=env, cwd=self.root,
+        )
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        proc.stdin.write("1\n")
+        proc.stdin.flush()
+        mark = self.net_locks / ".replaced"
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not mark.exists():
+            time.sleep(0.05)
+        self.assertTrue(mark.exists(), "lock identity was never read")
+        self.assertTrue(planted.is_dir(), "replacement network was removed by name")
+        labels = json.loads((planted / "labels").read_text())
+        self.assertEqual(labels["id"], "replacement-id")
+        self.assertEqual(labels["artex.lock/pid"], str(holder.pid))
+        removed = (self.net_locks / "rm.log").read_text() if (self.net_locks / "rm.log").exists() else ""
+        self.assertNotIn(net, removed.splitlines())
+        self.assertNotIn("replacement-id", removed.splitlines())
+        calls = self.log.read_text() if self.log.exists() else ""
+        self.assertNotIn('"build"', calls)
         proc.kill()
 
     def test_lock_directory_without_pid_stops(self):
