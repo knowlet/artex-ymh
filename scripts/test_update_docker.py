@@ -34,10 +34,76 @@ class DockerUpdateTests(unittest.TestCase):
         (self.root / "docker-compose.yml").write_text(self.original_compose)
         self.log = self.root / "calls.jsonl"
         docker = self.root / "bin" / "docker"
+        self.net_locks = self.root / "netlocks"
+        self.net_locks.mkdir()
         docker.write_text(
             f"#!{sys.executable}\n"
-            "import json, os, sys, time\n"
+            "import json, os, re, shutil, sys, time\n"
+            "from pathlib import Path\n"
             "args = sys.argv[1:]\n"
+            "\n"
+            "def net_root():\n"
+            "    root = Path(os.environ['TEST_NET_LOCKS'])\n"
+            "    root.mkdir(parents=True, exist_ok=True)\n"
+            "    return root\n"
+            "\n"
+            "def read_labels(name):\n"
+            "    path = net_root() / name / 'labels'\n"
+            "    if not path.is_file():\n"
+            "        return {}\n"
+            "    return json.loads(path.read_text() or '{}')\n"
+            "\n"
+            "def write_labels(name, labels):\n"
+            "    path = net_root() / name\n"
+            "    path.mkdir(parents=True, exist_ok=True)\n"
+            "    (path / 'labels').write_text(json.dumps(labels))\n"
+            "\n"
+            "if args[:1] == ['network']:\n"
+            "    if args[1] == 'create':\n"
+            "        labels = {}\n"
+            "        name = None\n"
+            "        i = 2\n"
+            "        while i < len(args):\n"
+            "            if args[i] == '--label':\n"
+            "                key, value = args[i + 1].split('=', 1)\n"
+            "                labels[key] = value\n"
+            "                i += 2\n"
+            "                continue\n"
+            "            name = args[i]\n"
+            "            i += 1\n"
+            "        path = net_root() / name\n"
+            "        try:\n"
+            "            path.mkdir()\n"
+            "        except FileExistsError:\n"
+            "            sys.exit(1)\n"
+            "        (path / 'labels').write_text(json.dumps(labels))\n"
+            "        sys.exit(0)\n"
+            "    if args[1] == 'inspect':\n"
+            "        fmt = args[args.index('-f') + 1]\n"
+            "        name = args[-1]\n"
+            "        key = re.search(r'artex\\.lock/[A-Za-z]+', fmt).group(0)\n"
+            "        labels = read_labels(name)\n"
+            "        swap_lock = os.environ.get('TEST_SWAP_LOCK') == '1' and not name.endswith('reap')\n"
+            "        swap_reaper = os.environ.get('TEST_SWAP_REAPER') == '1' and name.endswith('reap')\n"
+            "        if (swap_lock or swap_reaper) and key == 'artex.lock/pid':\n"
+            "            mark = net_root() / ('.swapped-lock' if swap_lock else '.swapped')\n"
+            "            if not mark.exists():\n"
+            "                old = labels.get(key, '')\n"
+            "                labels['artex.lock/pid'] = os.environ['TEST_LIVE_PID']\n"
+            "                labels['artex.lock/start'] = os.environ['TEST_LIVE_START']\n"
+            "                write_labels(name, labels)\n"
+            "                mark.write_text('1')\n"
+            "                sys.stdout.write(old + '\\n')\n"
+            "                sys.exit(0)\n"
+            "        sys.stdout.write(str(labels.get(key, '')) + '\\n')\n"
+            "        sys.exit(0)\n"
+            "    if args[1] == 'rm':\n"
+            "        path = net_root() / args[-1]\n"
+            "        if path.exists():\n"
+            "            shutil.rmtree(path)\n"
+            "        sys.exit(0)\n"
+            "    sys.exit(1)\n"
+            "\n"
             "with open(os.environ['TEST_CALLS'], 'a') as log:\n"
             "    log.write(json.dumps(args) + '\\n')\n"
             "if args == ['info', '--format', '{{.ID}}']:\n"
@@ -90,13 +156,9 @@ class DockerUpdateTests(unittest.TestCase):
             # XDG_STATE_HOME fails the shared-lock tests below.
             XDG_STATE_HOME=str(self.root / "ignored-xdg"),
             TEST_DOCKER_ID=self.root.name,
+            TEST_NET_LOCKS=str(self.net_locks),
         )
         (self.root / "tmp").mkdir()
-        self.addCleanup(
-            shutil.rmtree,
-            Path("/tmp/artex-ymh-update-locks") / self.root.name,
-            True,
-        )
 
     def run_script(self, name="update.sh", root=None, env=None, timeout=10):
         root = root or self.root
@@ -244,9 +306,14 @@ class DockerUpdateTests(unittest.TestCase):
             ["bash", "-c", script, "bash", arg], text=True
         ).strip()
 
-    def daemon_lock_path(self, env):
-        daemon = env.get("TEST_DOCKER_ID", "testdaemon")
-        return Path("/tmp/artex-ymh-update-locks") / daemon / "docker-update.lock"
+    def network_name(self, env):
+        return "artexymh" + env.get("TEST_DOCKER_ID", "testdaemon")
+
+    def plant_network(self, name, labels):
+        path = self.net_locks / name
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "labels").write_text(json.dumps(labels))
+        return path
 
     def legacy_lock_path(self, env, checkout):
         key = self.shell_out(
@@ -310,19 +377,15 @@ class DockerUpdateTests(unittest.TestCase):
         self.assertEqual([call for call in calls if call != info], body + body)
 
     def test_lock_file_is_private_and_existing_contents_survive(self):
-        lock = self.daemon_lock_path(self.env)
-        lock.parent.mkdir(parents=True)
-        lock.parent.chmod(0o755)
-        lock.write_text("keep-new\n")
+        planted = self.root / "home" / "old-lock"
+        planted.parent.mkdir(parents=True)
+        planted.write_text("keep-new\n")
         legacy = self.legacy_lock_path(self.env, self.root)
         legacy.write_text("keep-old\n")
         result, _ = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(lock.read_text(), "keep-new\n")
+        self.assertEqual(planted.read_text(), "keep-new\n")
         self.assertEqual(legacy.read_text(), "keep-old\n")
-        self.assertFalse(lock.is_symlink())
-        self.assertEqual(lock.parent.stat().st_mode & 0o777, 0o777)
-        self.assertEqual(lock.parent.stat().st_uid, os.getuid())
         self.assertEqual(list(Path(self.env["TMPDIR"]).glob("artex-docker-update*")), [legacy])
 
     def test_upgrade_backups_are_excluded_from_the_build_context(self):
@@ -352,26 +415,26 @@ class DockerUpdateTests(unittest.TestCase):
         result, calls = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(["preflight"], calls)
-        lock_dir = self.daemon_lock_path(self.env).parent
-        self.assertEqual(lock_dir.stat().st_mode & 0o777, 0o777)
 
     def test_lock_refuses_symlink_without_truncating_the_target(self):
-        lock = self.daemon_lock_path(self.env)
-        lock.parent.mkdir(parents=True)
-        lock.parent.chmod(0o700)
         victim = self.root / "victim"
         victim.write_text("precious")
-        lock.symlink_to(victim)
         legacy = self.legacy_lock_path(self.env, self.root)
         legacy_victim = self.root / "legacy-victim"
         legacy_victim.write_text("legacy-precious")
         legacy.symlink_to(legacy_victim)
+        shared = Path("/tmp/artex-ymh-update-locks")
+        shared.mkdir(exist_ok=True)
+        link = shared / "docker-update.lock"
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        link.symlink_to(victim)
+        self.addCleanup(shutil.rmtree, shared, True)
         result, calls = self.run_script()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("符号链接", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(victim.read_text(), "precious")
         self.assertEqual(legacy_victim.read_text(), "legacy-precious")
-        self.assertFalse(any(call[:2] == ["compose", "build"] for call in calls))
+        self.assertTrue(any(call[:2] == ["compose", "build"] for call in calls))
 
     def path_without_flock(self):
         bindir = self.root / "path-no-flock"
@@ -386,6 +449,8 @@ class DockerUpdateTests(unittest.TestCase):
             "chmod",
             "date",
             "tr",
+            "sed",
+            "ps",
             "mkdir",
             "cat",
             "rm",
@@ -405,40 +470,23 @@ class DockerUpdateTests(unittest.TestCase):
         proc.wait()
         return proc.pid
 
+    def proc_start(self, pid):
+        rest = Path(f"/proc/{pid}/stat").read_text().split(") ", 1)[1]
+        return rest.split()[19]
+
     def test_directory_lock_stale_takeover_rechecks_before_removing(self):
         env = self.env.copy()
-        env["PATH"] = self.path_without_flock()
-        hold = Path(str(self.daemon_lock_path(env)) + ".d")
-        hold.parent.mkdir(parents=True)
-        hold.parent.chmod(0o700)
-        hold.mkdir()
-        (hold / "pid").write_text(f"{self.dead_pid()}\n")
-        # A live process standing in for the waiter that won the stale lock.
         winner = subprocess.Popen(["sleep", "30"])
         self.addCleanup(winner.kill)
-        # The live owner publishes starttime before its PID is visible. The
-        # stub reveals that PID only after the first stale read.
-        winner_stat = Path(f"/proc/{winner.pid}/stat").read_text().split(")", 1)[1].split()
-        (hold / "starttime").write_text(winner_stat[19] + "\n")
-        (hold / "started").write_text(f"{int(time.time())}\n")
-        # The first read of the lock PID returns the dead owner; right after
-        # it, the other waiter takes the lock over (its PID is now there).
-        stub = self.root / "bin" / "cat"
-        stub.write_text(
-            "#!" + shutil.which("bash") + "\n"
-            'case "${1:-}" in *.lock.d/pid)\n'
-            '  if [ ! -e "$TEST_RACE_MARK" ]; then\n'
-            '    : > "$TEST_RACE_MARK"\n'
-            f'    {shutil.which("cat")} "$1"\n'
-            '    printf \'%s\\n\' "$TEST_RACE_WINNER" > "$1"\n'
-            "    exit 0\n"
-            "  fi;;\n"
-            "esac\n"
-            f'exec {shutil.which("cat")} "$@"\n'
-        )
-        stub.chmod(0o755)
-        env["TEST_RACE_MARK"] = str(self.root / "race-mark")
-        env["TEST_RACE_WINNER"] = str(winner.pid)
+        net = self.network_name(env)
+        self.plant_network(net, {
+            "artex.lock/pid": str(self.dead_pid()),
+            "artex.lock/start": "dead",
+            "artex.lock/wall": "1",
+        })
+        env["TEST_SWAP_LOCK"] = "1"
+        env["TEST_LIVE_PID"] = str(winner.pid)
+        env["TEST_LIVE_START"] = self.proc_start(winner.pid)
         proc = subprocess.Popen(
             ["bash", str(self.root / "update.sh")],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -447,37 +495,38 @@ class DockerUpdateTests(unittest.TestCase):
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
         proc.stdin.write("1\n")
         proc.stdin.flush()
-        deadline = time.monotonic() + 2.5
-        while time.monotonic() < deadline and proc.poll() is None:
+        mark = self.net_locks / ".swapped-lock"
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not mark.exists():
             time.sleep(0.05)
         calls = self.log.read_text() if self.log.exists() else ""
-        self.assertTrue((self.root / "race-mark").exists(), "stale PID was never read")
+        self.assertTrue(mark.exists(), "stale owner was never read")
         self.assertNotIn('"build"', calls, "took a live lock away from its owner")
-        self.assertEqual((hold / "pid").read_text().strip(), str(winner.pid))
-        # Once the owner releases its lock, the waiter proceeds normally.
-        shutil.rmtree(hold)
+        labels = json.loads((self.net_locks / net / "labels").read_text())
+        self.assertEqual(labels["artex.lock/pid"], str(winner.pid))
+        shutil.rmtree(self.net_locks / net)
         stdout, stderr = proc.communicate(timeout=10)
         self.assertEqual(proc.returncode, 0, stderr)
         self.assertIn("更新完成", stdout)
-        self.assertEqual(list(hold.parent.glob("*.reap")), [])
 
     def test_directory_lock_left_by_dead_owner_is_reaped(self):
         env = self.env.copy()
-        env["PATH"] = self.path_without_flock()
-        hold = Path(str(self.daemon_lock_path(env)) + ".d")
-        hold.parent.mkdir(parents=True)
-        hold.parent.chmod(0o700)
-        hold.mkdir()
-        (hold / "pid").write_text(f"{self.dead_pid()}\n")
-        # A reaper killed mid-removal is cleared the same way.
-        reaper = Path(str(hold) + ".reap")
-        reaper.mkdir()
-        (reaper / "pid").write_text(f"{self.dead_pid()}\n")
+        net = self.network_name(env)
+        self.plant_network(net, {
+            "artex.lock/pid": str(self.dead_pid()),
+            "artex.lock/start": "dead",
+            "artex.lock/wall": "1",
+        })
+        self.plant_network(net + "reap", {
+            "artex.lock/pid": str(self.dead_pid()),
+            "artex.lock/start": "dead",
+            "artex.lock/wall": "1",
+        })
         result, calls = self.run_script(env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(any(call[:3] == ["compose", "build", "artex"] for call in calls))
-        self.assertFalse(hold.exists())
-        self.assertFalse(reaper.exists())
+        self.assertFalse((self.net_locks / net).exists())
+        self.assertFalse((self.net_locks / (net + "reap")).exists())
 
     def test_directory_lock_signals_exit_before_compose_up(self):
         env = self.env.copy()
@@ -513,7 +562,7 @@ class DockerUpdateTests(unittest.TestCase):
                 calls = [json.loads(line) for line in self.log.read_text().splitlines()]
                 self.assertTrue(any(call[:3] == ["compose", "build", "artex"] for call in calls))
                 self.assertFalse(any("up" in call for call in calls), calls)
-                self.assertFalse(Path(str(self.daemon_lock_path(env)) + ".d").exists())
+                self.assertFalse((self.net_locks / self.network_name(env)).exists())
 
     def hold_build(self, env):
         env = env.copy()
@@ -580,13 +629,13 @@ class DockerUpdateTests(unittest.TestCase):
         self.assert_serialized((env, env), ("update.sh", "install.sh"))
 
     def test_reaper_without_pid_stops_instead_of_spinning(self):
-        hold = Path(str(self.daemon_lock_path(self.env)) + ".d")
-        hold.parent.mkdir(parents=True)
-        hold.parent.chmod(0o700)
-        hold.mkdir()
-        (hold / "pid").write_text(f"{self.dead_pid()}\n")
-        reaper = Path(str(hold) + ".reap")
-        reaper.mkdir()
+        net = self.network_name(self.env)
+        self.plant_network(net, {
+            "artex.lock/pid": str(self.dead_pid()),
+            "artex.lock/start": "dead",
+            "artex.lock/wall": "1",
+        })
+        reaper = self.plant_network(net + "reap", {})
         started = time.monotonic()
         result, calls = self.run_script(timeout=20)
         elapsed = time.monotonic() - started
@@ -595,7 +644,6 @@ class DockerUpdateTests(unittest.TestCase):
         self.assertGreaterEqual(elapsed, 3)
         self.assertLess(elapsed, 15)
         self.assertTrue(reaper.is_dir())
-        self.assertFalse((reaper / "pid").exists())
         self.assertFalse(any(call[:2] == ["compose", "build"] for call in calls))
 
     def test_different_homes_and_host_spellings_share_one_daemon_lock(self):
@@ -607,20 +655,13 @@ class DockerUpdateTests(unittest.TestCase):
         second["DOCKER_CONTEXT"] = "remote"
         self.env = first
         self.assert_serialized((first, second), ("update.sh", "update.sh"))
-        lock = self.daemon_lock_path(first)
-        self.assertEqual(lock, self.daemon_lock_path(second))
-        self.assertFalse(str(lock).startswith(str(first["HOME"])))
-        self.assertFalse(str(lock).startswith(str(second["HOME"])))
+        self.assertEqual(self.network_name(first), self.network_name(second))
+        self.assertFalse(str(self.network_name(first)).startswith(str(first["HOME"])))
 
     def test_different_daemon_ids_do_not_share_the_lock(self):
         first = self.hold_build(self.env)
         second = self.hold_build(self.env)
         second["TEST_DOCKER_ID"] = self.root.name + "other"
-        self.addCleanup(
-            shutil.rmtree,
-            Path("/tmp/artex-ymh-update-locks") / second["TEST_DOCKER_ID"],
-            True,
-        )
         self.env = first
         procs = [
             subprocess.Popen(
@@ -642,34 +683,78 @@ class DockerUpdateTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, stderr)
             self.assertIn("更新完成", stdout)
         self.assertEqual(int((self.root / "peak").read_text().strip()), 2)
-        self.assertNotEqual(self.daemon_lock_path(first), self.daemon_lock_path(second))
+        self.assertNotEqual(self.network_name(first), self.network_name(second))
 
     def test_reused_pid_does_not_block_the_directory_lock(self):
         env = self.env.copy()
-        env["PATH"] = self.path_without_flock()
-        hold = Path(str(self.daemon_lock_path(env)) + ".d")
-        hold.parent.mkdir(parents=True)
-        hold.parent.chmod(0o777)
-        hold.mkdir()
         holder = subprocess.Popen(["sleep", "60"])
         self.addCleanup(lambda: holder.poll() is None and holder.kill())
-        (hold / "pid").write_text(f"{holder.pid}\n")
-        (hold / "starttime").write_text("1\n")
-        (hold / "started").write_text(f"{int(time.time())}\n")
-        result, calls = self.run_script(env=env, timeout=20)
+        net = self.network_name(env)
+        self.plant_network(net, {
+            "artex.lock/pid": str(holder.pid),
+            "artex.lock/start": "1",
+            "artex.lock/wall": str(int(time.time())),
+        })
+        result, calls = self.run_script(env=env, timeout=8)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(any(call[:3] == ["compose", "build", "artex"] for call in calls))
-        self.assertFalse(hold.exists() and (hold / "pid").read_text().strip() == str(holder.pid))
+
+    def test_dead_pid_is_reaped_without_the_two_hour_bound(self):
+        env = self.env.copy()
+        net = self.network_name(env)
+        self.plant_network(net, {
+            "artex.lock/pid": str(self.dead_pid()),
+            "artex.lock/start": "",
+            "artex.lock/wall": str(int(time.time())),
+        })
+        started = time.monotonic()
+        result, calls = self.run_script(env=env, timeout=8)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertTrue(any(call[:3] == ["compose", "build", "artex"] for call in calls))
+
+    def test_replaced_reaper_is_not_removed(self):
+        holder = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(holder.kill)
+        net = self.network_name(self.env)
+        self.plant_network(net, {
+            "artex.lock/pid": str(self.dead_pid()),
+            "artex.lock/start": "dead",
+            "artex.lock/wall": "1",
+        })
+        reaper = self.plant_network(net + "reap", {
+            "artex.lock/pid": str(self.dead_pid()),
+            "artex.lock/start": "dead",
+            "artex.lock/wall": "1",
+        })
+        env = self.env.copy()
+        env["TEST_SWAP_REAPER"] = "1"
+        env["TEST_LIVE_PID"] = str(holder.pid)
+        env["TEST_LIVE_START"] = self.proc_start(holder.pid)
+        proc = subprocess.Popen(
+            ["bash", str(self.root / "update.sh")],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=env, cwd=self.root,
+        )
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        proc.stdin.write("1\n")
+        proc.stdin.flush()
+        mark = self.net_locks / ".swapped"
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not mark.exists():
+            time.sleep(0.05)
+        self.assertTrue(mark.exists(), "reaper owner was never read")
+        self.assertTrue(reaper.is_dir())
+        labels = json.loads((reaper / "labels").read_text())
+        self.assertEqual(labels["artex.lock/pid"], str(holder.pid))
+        proc.kill()
 
     def test_lock_directory_without_pid_stops(self):
-        hold = Path(str(self.daemon_lock_path(self.env)) + ".d")
-        hold.parent.mkdir(parents=True)
-        hold.parent.chmod(0o700)
-        hold.mkdir()
+        net = self.plant_network(self.network_name(self.env), {})
         result, calls = self.run_script(timeout=20)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("更新锁目录没有进程号", result.stderr)
-        self.assertTrue(hold.is_dir())
+        self.assertIn("更新锁没有进程号", result.stderr)
+        self.assertTrue(net.is_dir())
         self.assertFalse(any(call[:2] == ["compose", "build"] for call in calls))
 
 

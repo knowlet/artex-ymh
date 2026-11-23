@@ -1,224 +1,196 @@
-# Sourced by update.sh and install.sh. Both build the mutable artex-ymh:local tag.
-# The directory is the lock every caller takes, with or without flock. flock, when
-# present, is held in addition so the kernel drops that fd if the process is
-# killed; it is not a second protocol. INT and TERM exit so the EXIT trap
-# releases the directory before compose up continues.
+# Sourced by update.sh and install.sh. Both publish the mutable artex-ymh:local
+# tag on one Docker daemon. The lock is a network on that daemon, named from
+# docker info's ID, so every client of that daemon shares it. A directory
+# under /tmp does not: it is world-writable, kill -0 on another user's
+# process returns EPERM, and someone who cannot open the daemon can hold the
+# name. Only a Docker client can create or remove this network.
 
-UPDATE_LOCK_DIR=
+UPDATE_LOCK_NET=
 UPDATE_LOCK_REAPER=
 UPDATE_LOCK_REAPER_WAIT=0
 
 release_update_lock(){
   if [ -n "${UPDATE_LOCK_REAPER:-}" ]; then
-    rm -rf -- "$UPDATE_LOCK_REAPER"
+    docker network rm "$UPDATE_LOCK_REAPER" >/dev/null 2>&1 || true
     UPDATE_LOCK_REAPER=
   fi
-  if [ -n "${UPDATE_LOCK_DIR:-}" ]; then
-    rm -rf -- "$UPDATE_LOCK_DIR"
-    UPDATE_LOCK_DIR=
+  if [ -n "${UPDATE_LOCK_NET:-}" ]; then
+    docker network rm "$UPDATE_LOCK_NET" >/dev/null 2>&1 || true
+    UPDATE_LOCK_NET=
   fi
 }
 
-# Remove a directory lock whose owner died, at most one waiter at a time, and
-# only if it still names the dead PID the caller read. Two waiters can read the
-# same dead PID; without the recheck the second would delete the lock the
-# first had just taken, and both would build. A reaper killed between mkdir
-# and cleanup is itself recognised by its dead PID and cleared.
-#
-# A reaper with no PID yet is the window between mkdir and the pid write. Do
-# not delete it: a live updater may still be publishing the PID. Wait a bounded
-# number of times. The caller retries this function without sleeping, so the
-# sleep has to be here; past the bound, stop instead of spinning.
+# Linux: field 22 of /proc/pid/stat (clock ticks since boot).
+# macOS: ps lstart, because /proc is absent. Empty if neither works.
+proc_starttime(){
+  local pid=$1 stat rest value
+  if [ -r "/proc/$pid/stat" ]; then
+    stat=$(cat "/proc/$pid/stat") || return 0
+    rest=${stat#*') '}
+    value=$(printf '%s\n' "$rest" | awk '{print $20}')
+    case "$value" in
+      ""|*[!0-9]*) return 0 ;;
+    esac
+    printf '%s\n' "$value"
+    return 0
+  fi
+  value=$(ps -p "$pid" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//') || true
+  [ -n "$value" ] || return 0
+  printf '%s\n' "$value"
+}
+
+# 0 when pid is still the process that started at start.
+# 1 when it is gone or the PID has been reused.
+# 2 when the process exists but no start time can be read.
+owner_state(){
+  local pid=$1 start=$2 current
+  if [ -z "$pid" ]; then
+    return 1
+  fi
+  if [ -d /proc ]; then
+    [ -d "/proc/$pid" ] || return 1
+  elif ! ps -p "$pid" >/dev/null 2>&1; then
+    return 1
+  fi
+  current=$(proc_starttime "$pid" || true)
+  if [ -n "$start" ] && [ -n "$current" ]; then
+    if [ "$start" = "$current" ]; then
+      return 0
+    fi
+    return 1
+  fi
+  return 2
+}
+
+lock_label(){
+  docker network inspect -f "{{index .Labels \"$2\"}}" "$1" 2>/dev/null || true
+}
+
+# Remove name only when a second read still shows the same dead owner.
+# Two waiters can observe one dead reaper; the later remove must not delete
+# the reaper a replacement has since created.
+reap_if_unchanged(){
+  local name=$1 pid=$2 start=$3 again_pid again_start state
+  again_pid=$(lock_label "$name" artex.lock/pid)
+  again_start=$(lock_label "$name" artex.lock/start)
+  [ "$again_pid" = "$pid" ] && [ "$again_start" = "$start" ] || return 0
+  state=0
+  owner_state "$again_pid" "$again_start" || state=$?
+  if [ "$state" -eq 1 ]; then
+    docker network rm "$name" >/dev/null 2>&1 || true
+  fi
+}
+
 reap_stale_update_lock(){
-  local lock_hold=$1 dead_pid=$2 reaper=$1.reap current waited
-  refuse_symlink "$reaper"
-  if ! mkdir -- "$reaper" 2>/dev/null; then
-    current=$(cat "$reaper/pid" 2>/dev/null || true)
-    if [ -z "$current" ]; then
+  local net=$1 dead_pid=$2 dead_start=$3 reap=${1}reap
+  local rpid rstart start waited state
+  start=$(proc_starttime $$ || true)
+  if ! docker network create \
+      --label "artex.lock/pid=$$" \
+      --label "artex.lock/start=$start" \
+      --label "artex.lock/wall=$(date +%s)" \
+      "$reap" >/dev/null 2>&1; then
+    rpid=$(lock_label "$reap" artex.lock/pid)
+    rstart=$(lock_label "$reap" artex.lock/start)
+    if [ -z "$rpid" ]; then
       waited=${UPDATE_LOCK_REAPER_WAIT:-0}
       waited=$((waited + 1))
       UPDATE_LOCK_REAPER_WAIT=$waited
       if [ "$waited" -ge 5 ]; then
-        die "更新锁的回收目录没有进程号，已停止。确认没有更新在运行后删除：$reaper"
+        die "更新锁的回收记录没有进程号，已停止。确认没有更新在运行后删除网络：$reap"
       fi
       sleep 1
       return 0
     fi
     UPDATE_LOCK_REAPER_WAIT=0
-    if ! kill -0 "$current" 2>/dev/null; then
-      rm -rf -- "$reaper"
+    state=0
+    owner_state "$rpid" "$rstart" || state=$?
+    if [ "$state" -eq 0 ]; then
+      sleep 1
+      return 0
     fi
+    if [ "$state" -eq 2 ]; then
+      # The process is alive and we cannot timestamp it. Do not delete it.
+      sleep 1
+      return 0
+    fi
+    reap_if_unchanged "$reap" "$rpid" "$rstart"
     return 0
   fi
   UPDATE_LOCK_REAPER_WAIT=0
-  UPDATE_LOCK_REAPER=$reaper
-  printf '%s\n' "$$" > "$reaper/pid"
-  chmod 777 -- "$reaper" 2>/dev/null || true
-  chmod 644 -- "$reaper/pid" 2>/dev/null || true
-  refuse_symlink "$lock_hold"
-  current=$(cat "$lock_hold/pid" 2>/dev/null || true)
-  if [ "$current" = "$dead_pid" ] && ! owner_holds_lock "$current" "$lock_hold"; then
-    rm -rf -- "$lock_hold"
-  fi
-  rm -rf -- "$reaper"
+  UPDATE_LOCK_REAPER=$reap
+  reap_if_unchanged "$net" "$dead_pid" "$dead_start"
+  docker network rm "$reap" >/dev/null 2>&1 || true
   UPDATE_LOCK_REAPER=
 }
 
-refuse_symlink(){
-  if [ -L "$1" ]; then
-    die "更新锁是符号链接，已拒绝：$1"
-  fi
-}
-
-# Field 22 of /proc/pid/stat (starttime). Empty when /proc is unavailable.
-# Combined with the PID, it identifies one process: a reused PID has a new value.
-proc_starttime(){
-  local stat=/proc/$1/stat
-  [ -r "$stat" ] || return 0
-  awk -F ')' 'NF > 1 {
-    n = split($2, f, " ")
-    if (n >= 20 && f[20] ~ /^[0-9]+$/) print f[20]
-  }' "$stat"
-}
-
-# 0: keep waiting. 1: the recorded owner is gone or is a reused PID.
+# 0: keep waiting. 1: reap.
 owner_holds_lock(){
-  local pid=$1 hold=$2 recorded current started now err
-  err=$(kill -0 "$pid" 2>&1 >/dev/null || true)
-  if [ -n "$err" ]; then
-    case "$err" in
-      *"not permitted"*) ;;
-      *) return 1 ;;
-    esac
+  local pid=$1 start=$2 wall=$3 state now
+  state=0
+  owner_state "$pid" "$start" || state=$?
+  if [ "$state" -eq 0 ]; then
+    return 0
   fi
-  recorded=$(cat "$hold/starttime" 2>/dev/null || true)
-  current=$(proc_starttime "$pid" || true)
-  if [ -n "$recorded" ] && [ -n "$current" ]; then
-    if [ "$recorded" = "$current" ]; then
-      return 0
-    fi
+  if [ "$state" -eq 1 ]; then
     return 1
   fi
-  # No starttime to compare (another OS, or a lock that only stored a PID).
-  # A live-looking PID must not wait forever.
-  # No starttime. A timestamp bounds the wait; a PID alone does not.
-  started=$(cat "$hold/started" 2>/dev/null || true)
-  case "$started" in
+  # Alive, but neither /proc nor ps could identify the process. A normal
+  # update removes this network when it exits, so a waiter does not sit here
+  # for the whole bound. The bound only applies to a live PID we cannot
+  # timestamp; a dead PID is state 1 and is reaped immediately.
+  case "$wall" in
     ""|*[!0-9]*) return 1 ;;
   esac
   now=$(date +%s)
-  if [ $((now - started)) -lt 7200 ]; then
+  if [ $((now - wall)) -lt 7200 ]; then
     return 0
   fi
   return 1
 }
 
-# Shared by every client of one daemon. Not mode 700 under one home: another
-# user of the same daemon builds the same artex-ymh:local tag.
-prepare_shared_dir(){
-  local dir=$1
-  if [ -L "$dir" ]; then
-    die "更新锁目录是符号链接，已拒绝：$dir"
-  fi
-  if [ ! -d "$dir" ]; then
-    mkdir -p -- "$dir" || die "无法创建更新锁目录：$dir"
-  fi
-  if [ -L "$dir" ] || [ ! -d "$dir" ]; then
-    die "更新锁目录是符号链接，已拒绝：$dir"
-  fi
-  if [ -n "$(find "$dir" -maxdepth 0 -user "$(id -u)" -print)" ]; then
-    chmod 777 -- "$dir" || die "无法设置更新锁目录权限：$dir"
-    if [ -L "$dir" ] || [ -z "$(find "$dir" -maxdepth 0 -perm 777 -print)" ]; then
-      die "更新锁目录权限异常：$dir"
-    fi
-    return 0
-  fi
-  [ -w "$dir" ] || die "无法写入更新锁目录：$dir"
-}
-
-# Hold the lock until this process exits.
 acquire_update_lock(){
-  local daemon_id lock_root lock_dir lock_file lock_umask
-  local lock_hold announced pid empty_wait start
-  # artex-ymh:local is one tag per daemon, shared by every user and every
-  # spelling of DOCKER_HOST. docker info's ID is that daemon. A path under
-  # one home, or a hash of the host string, lets a second client build it.
+  local daemon_id net start pid st wall announced empty_wait state
   command -v docker >/dev/null 2>&1 || die "未检测到 docker，无法锁定 artex-ymh:local"
   daemon_id=$(docker info --format '{{.ID}}') || die "无法读取 Docker daemon ID，已停止更新"
   daemon_id=$(printf '%s' "$daemon_id" | tr -d '[:space:]')
   case "$daemon_id" in
-    ""|*/*|*..*) die "Docker daemon ID 无效，已停止更新" ;;
+    ""|*/*|*..*|*[!A-Za-z0-9._-]*) die "Docker daemon ID 无效，已停止更新" ;;
   esac
-  lock_root=/tmp/artex-ymh-update-locks
-  prepare_shared_dir "$lock_root"
-  lock_dir=$lock_root/$daemon_id
-  prepare_shared_dir "$lock_dir"
-  lock_file=$lock_dir/docker-update.lock
-  refuse_symlink "$lock_file"
-  if [ -e "$lock_file" ] && [ ! -f "$lock_file" ]; then
-    die "更新锁路径不是普通文件：$lock_file"
-  fi
-
-  lock_hold=$lock_file.d
+  net=artexymh$daemon_id
+  start=$(proc_starttime $$ || true)
+  wall=$(date +%s)
   announced=0
   empty_wait=0
-  # Exit on the signal. The EXIT trap releases the directory we hold.
   trap release_update_lock EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  refuse_symlink "$lock_hold"
-  if [ -e "$lock_hold" ] && [ ! -d "$lock_hold" ]; then
-    die "更新锁路径不是目录：$lock_hold"
-  fi
-  while ! mkdir -- "$lock_hold" 2>/dev/null; do
-    refuse_symlink "$lock_hold"
-    pid=$(cat "$lock_hold/pid" 2>/dev/null || true)
+  while ! docker network create \
+      --label "artex.lock/pid=$$" \
+      --label "artex.lock/start=$start" \
+      --label "artex.lock/wall=$wall" \
+      "$net" >/dev/null 2>&1; do
+    pid=$(lock_label "$net" artex.lock/pid)
+    st=$(lock_label "$net" artex.lock/start)
+    wall=$(lock_label "$net" artex.lock/wall)
     if [ -z "$pid" ]; then
-      # Same window as an empty reaper: the owner has not published a PID.
-      # Sleep, and stop after the bound instead of waiting forever.
       empty_wait=$((empty_wait + 1))
       if [ "$empty_wait" -ge 5 ]; then
-        die "更新锁目录没有进程号，已停止。确认没有更新在运行后删除：$lock_hold"
+        die "更新锁没有进程号，已停止。确认没有更新在运行后删除网络：$net"
       fi
       sleep 1
       continue
     fi
     empty_wait=0
-    if ! owner_holds_lock "$pid" "$lock_hold"; then
-      reap_stale_update_lock "$lock_hold" "$pid"
+    if owner_holds_lock "$pid" "$st" "$wall"; then
+      if [ "$announced" -eq 0 ]; then
+        info "另一个更新正在构建或部署，等待它结束后继续…"
+        announced=1
+      fi
+      sleep 1
       continue
     fi
-    if [ "$announced" -eq 0 ]; then
-      info "另一个更新正在构建或部署，等待它结束后继续…"
-      announced=1
-    fi
-    sleep 1
+    reap_stale_update_lock "$net" "$pid" "$st"
   done
-  UPDATE_LOCK_DIR=$lock_hold
-  # Publish identity before the PID so a waiter never sees a PID-only lock.
-  printf '%s\n' "$(date +%s)" > "$lock_hold/started"
-  start=$(proc_starttime "$$" || true)
-  printf '%s\n' "$start" > "$lock_hold/starttime"
-  printf '%s\n' "$$" > "$lock_hold/pid"
-  chmod 644 -- "$lock_hold/pid" "$lock_hold/starttime" "$lock_hold/started" || die "无法设置更新锁权限：$lock_hold"
-  # Open the directory only after the identity files are readable.
-  chmod 777 -- "$lock_hold" || die "无法设置更新锁目录权限：$lock_hold"
-
-  if command -v flock >/dev/null 2>&1; then
-    lock_umask=$(umask)
-    umask 000
-    # Append so a pre-existing file is not truncated before the lock is held.
-    # Mode 666 so another user of this daemon can flock the same file.
-    if ! exec 9>>"$lock_file"; then
-      umask "$lock_umask"
-      die "无法打开更新锁：$lock_file"
-    fi
-    umask "$lock_umask"
-    chmod 666 -- "$lock_file" 2>/dev/null || true
-    refuse_symlink "$lock_file"
-    if ! flock -n 9; then
-      info "另一个更新正在构建或部署，等待它结束后继续…"
-      flock 9
-    fi
-  fi
+  UPDATE_LOCK_NET=$net
 }
