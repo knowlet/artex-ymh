@@ -13,6 +13,7 @@ on:
       - 'scripts/test_update_docker.py'
       - 'scripts/test_postgres_upgrade.sh'
       - 'docs/POSTGRES-UPGRADE.md'
+      - '.dockerignore'
       - '.github/workflows/postgres-upgrade.yml'
   workflow_dispatch:
 

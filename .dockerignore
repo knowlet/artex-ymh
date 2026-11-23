@@ -7,3 +7,6 @@ server/webui/dist
 data
 *.db
 transcripts
+# Upgrade backups (database dumps, .env copies, data archives) must never
+# reach the Docker build context; Dockerfile.source runs COPY . .
+backups

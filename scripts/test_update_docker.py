@@ -304,6 +304,18 @@ class DockerUpdateTests(unittest.TestCase):
         self.assertEqual(lock.parent.stat().st_uid, os.getuid())
         self.assertEqual(list(Path(self.env["TMPDIR"]).glob("artex-docker-update*")), [legacy])
 
+    def test_upgrade_backups_are_excluded_from_the_build_context(self):
+        import re
+        guide = (ROOT / "docs" / "POSTGRES-UPGRADE.md").read_text()
+        dirs = set(re.findall(r'backup_dir="\$PWD/([^/"]+)/', guide))
+        self.assertEqual(dirs, {"backups"})
+        patterns = [
+            line.strip().strip("/")
+            for line in (ROOT / ".dockerignore").read_text().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        self.assertIn("backups", patterns)
+
     def test_lock_directory_checks_do_not_need_gnu_stat(self):
         # macOS stat is BSD stat, which has no -c option.
         bsd_stat = self.root / "bin" / "stat"
