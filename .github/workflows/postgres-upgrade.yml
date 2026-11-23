@@ -31,6 +31,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Allow the unprivileged mount namespaces the preflight tests use
+        # Ubuntu 24.04 runners restrict unprivileged user namespaces through
+        # AppArmor, so `unshare --user --mount` cannot write uid_map there.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Validate shell syntax and preflight/update behavior
         run: |
           bash -n install.sh update.sh scripts/check_postgres_version.sh scripts/test_postgres_upgrade.sh

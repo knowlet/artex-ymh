@@ -218,6 +218,11 @@ exit "$status"
         )
         after = {p.name: p.read_bytes() for p in volume.iterdir() if p.is_file()}
         self.assertEqual(before, after, "preflight changed the mounted volume")
+        self.assertTrue(
+            self.calls.exists(),
+            "preflight never reached Docker inside the mount namespace "
+            f"(exit {result.returncode}): {result.stderr}",
+        )
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertEqual(len(calls), 1, "preflight invoked an extra container operation")
         return result
