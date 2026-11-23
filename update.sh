@@ -24,11 +24,42 @@ sync_repo(){
 # artex-ymh:local is one tag on the Docker daemon, shared by every checkout.
 # The lock follows that tag and the daemon, not the working directory.
 UPDATE_LOCK_DIR=
+UPDATE_LOCK_REAPER=
 release_update_lock(){
+  if [ -n "${UPDATE_LOCK_REAPER:-}" ]; then
+    rm -rf -- "$UPDATE_LOCK_REAPER"
+    UPDATE_LOCK_REAPER=
+  fi
   if [ -n "${UPDATE_LOCK_DIR:-}" ]; then
     rm -rf -- "$UPDATE_LOCK_DIR"
     UPDATE_LOCK_DIR=
   fi
+}
+
+# Remove a directory lock whose owner died, at most one waiter at a time, and
+# only if it still names the dead PID the caller read. Two waiters can read the
+# same dead PID; without the recheck the second would delete the lock the
+# first had just taken, and both would build. A reaper killed between mkdir
+# and cleanup is itself recognised by its dead PID and cleared.
+reap_stale_update_lock(){
+  local lock_hold=$1 dead_pid=$2 reaper=$1.reap current
+  refuse_symlink "$reaper"
+  if ! mkdir -- "$reaper" 2>/dev/null; then
+    current=$(cat "$reaper/pid" 2>/dev/null || true)
+    if [ -n "$current" ] && ! kill -0 "$current" 2>/dev/null; then
+      rm -rf -- "$reaper"
+    fi
+    return 0
+  fi
+  UPDATE_LOCK_REAPER=$reaper
+  printf '%s\n' "$$" > "$reaper/pid"
+  refuse_symlink "$lock_hold"
+  current=$(cat "$lock_hold/pid" 2>/dev/null || true)
+  if [ "$current" = "$dead_pid" ] && ! kill -0 "$current" 2>/dev/null; then
+    rm -rf -- "$lock_hold"
+  fi
+  rm -rf -- "$reaper"
+  UPDATE_LOCK_REAPER=
 }
 
 prepare_private_dir(){
@@ -117,7 +148,7 @@ acquire_update_lock(){
     refuse_symlink "$lock_hold"
     pid=$(cat "$lock_hold/pid" 2>/dev/null || true)
     if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-      rm -rf -- "$lock_hold"
+      reap_stale_update_lock "$lock_hold" "$pid"
       continue
     fi
     if [ "$announced" -eq 0 ]; then

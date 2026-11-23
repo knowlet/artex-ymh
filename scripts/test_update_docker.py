@@ -346,6 +346,80 @@ class DockerUpdateTests(unittest.TestCase):
                 dest.symlink_to(source)
         return f"{self.root / 'bin'}:{bindir}"
 
+    def dead_pid(self):
+        proc = subprocess.Popen(["true"])
+        proc.wait()
+        return proc.pid
+
+    def test_directory_lock_stale_takeover_rechecks_before_removing(self):
+        env = self.env.copy()
+        env["PATH"] = self.path_without_flock()
+        hold = Path(str(self.daemon_lock_path(env)) + ".d")
+        hold.parent.mkdir(parents=True)
+        hold.parent.chmod(0o700)
+        hold.mkdir()
+        (hold / "pid").write_text(f"{self.dead_pid()}\n")
+        # A live process standing in for the waiter that won the stale lock.
+        winner = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(winner.kill)
+        # The first read of the lock PID returns the dead owner; right after
+        # it, the other waiter takes the lock over (its PID is now there).
+        stub = self.root / "bin" / "cat"
+        stub.write_text(
+            "#!" + shutil.which("bash") + "\n"
+            'case "${1:-}" in *.lock.d/pid)\n'
+            '  if [ ! -e "$TEST_RACE_MARK" ]; then\n'
+            '    : > "$TEST_RACE_MARK"\n'
+            f'    {shutil.which("cat")} "$1"\n'
+            '    printf \'%s\\n\' "$TEST_RACE_WINNER" > "$1"\n'
+            "    exit 0\n"
+            "  fi;;\n"
+            "esac\n"
+            f'exec {shutil.which("cat")} "$@"\n'
+        )
+        stub.chmod(0o755)
+        env["TEST_RACE_MARK"] = str(self.root / "race-mark")
+        env["TEST_RACE_WINNER"] = str(winner.pid)
+        proc = subprocess.Popen(
+            ["bash", str(self.root / "update.sh")],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=env, cwd=self.root,
+        )
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        proc.stdin.write("1\n")
+        proc.stdin.flush()
+        deadline = time.monotonic() + 2.5
+        while time.monotonic() < deadline and proc.poll() is None:
+            time.sleep(0.05)
+        calls = self.log.read_text() if self.log.exists() else ""
+        self.assertTrue((self.root / "race-mark").exists(), "stale PID was never read")
+        self.assertNotIn('"build"', calls, "took a live lock away from its owner")
+        self.assertEqual((hold / "pid").read_text().strip(), str(winner.pid))
+        # Once the owner releases its lock, the waiter proceeds normally.
+        shutil.rmtree(hold)
+        stdout, stderr = proc.communicate(timeout=10)
+        self.assertEqual(proc.returncode, 0, stderr)
+        self.assertIn("更新完成", stdout)
+        self.assertEqual(list(hold.parent.glob("*.reap")), [])
+
+    def test_directory_lock_left_by_dead_owner_is_reaped(self):
+        env = self.env.copy()
+        env["PATH"] = self.path_without_flock()
+        hold = Path(str(self.daemon_lock_path(env)) + ".d")
+        hold.parent.mkdir(parents=True)
+        hold.parent.chmod(0o700)
+        hold.mkdir()
+        (hold / "pid").write_text(f"{self.dead_pid()}\n")
+        # A reaper killed mid-removal is cleared the same way.
+        reaper = Path(str(hold) + ".reap")
+        reaper.mkdir()
+        (reaper / "pid").write_text(f"{self.dead_pid()}\n")
+        result, calls = self.run_script(env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(call[:3] == ["compose", "build", "artex"] for call in calls))
+        self.assertFalse(hold.exists())
+        self.assertFalse(reaper.exists())
+
     def test_directory_lock_signals_exit_before_compose_up(self):
         env = self.env.copy()
         env["PATH"] = self.path_without_flock()
