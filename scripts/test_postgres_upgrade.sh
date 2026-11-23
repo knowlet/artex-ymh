@@ -272,4 +272,39 @@ check_version
 docker compose stop postgres
 export COMPOSE_FILE="$base_compose_files"
 
-printf '%s\n' 'PASS: fresh install, mounted PGDATA, legacy directory guard, both major mismatch directions, PG16 recovery, schema replay, isolated PG16-to-PG17 restore, and a subdirectory cluster.'
+printf '%s\n' '11. An anonymous image volume is not the named data volume.'
+export COMPOSE_PROJECT_NAME="$project16"
+export POSTGRES_IMAGE=postgres:16-alpine
+anon_before="$(fingerprint)"
+cat > "$TEST_DIR/compose.anon.yml" <<'YAML'
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      PGDATA: /var/lib/postgresql/data
+YAML
+export COMPOSE_FILE="$TEST_DIR/compose.anon.yml"
+# The image VOLUME still produces a mount. The old mountinfo check would accept it.
+if ! docker compose run --rm --no-deps --entrypoint sh postgres -c \
+  "awk '\$5 == \"/var/lib/postgresql/data\" { found = 1 } END { exit !found }' /proc/self/mountinfo"
+then
+  fail 'postgres image did not mount an anonymous volume at /var/lib/postgresql/data'
+fi
+volumes_before="$(docker volume ls -q | LC_ALL=C sort)"
+if check_version > "$TEST_DIR/anon.log" 2>&1; then
+  cat "$TEST_DIR/anon.log"
+  fail 'anonymous image volume was accepted as the named data volume'
+fi
+cat "$TEST_DIR/anon.log"
+output="$(< "$TEST_DIR/anon.log")"
+[[ "$output" == *'does not mount a named volume'* \
+  && "$output" == *'anonymous volume from the image'* ]] \
+  || fail 'anonymous-volume error does not say the named volume is missing'
+[[ -z "$(docker compose ps --status running --quiet postgres)" ]] \
+  || fail 'anonymous-volume preflight started PostgreSQL'
+volumes_after="$(docker volume ls -q | LC_ALL=C sort)"
+[[ "$volumes_before" == "$volumes_after" ]] || fail 'preflight created a volume while rejecting an anonymous mount'
+[[ "$(fingerprint)" == "$anon_before" ]] || fail 'anonymous-volume preflight changed the named data volume'
+export COMPOSE_FILE="$base_compose_files"
+
+printf '%s\n' 'PASS: fresh install, mounted PGDATA, legacy directory guard, both major mismatch directions, PG16 recovery, schema replay, isolated PG16-to-PG17 restore, a subdirectory cluster, and rejection of an anonymous image volume.'

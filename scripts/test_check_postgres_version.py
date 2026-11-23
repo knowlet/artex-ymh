@@ -37,9 +37,22 @@ class PostgresVersionTests(unittest.TestCase):
             f"#!{sys.executable}\n"
             "import json, os, subprocess, sys\n"
             "args = sys.argv[1:]\n"
-            "with open(os.environ['TEST_CALLS'], 'a') as log:\n"
-            "    log.write(json.dumps(args[:-1]) + '\\n')\n"
             "prefix = ['compose', 'run', '--rm', '--no-deps', '-T', '--entrypoint', 'sh', 'postgres', '-ec']\n"
+            "with open(os.environ['TEST_CALLS'], 'a') as log:\n"
+            "    logged = args[:-1] if args[:-1] == prefix else args\n"
+            "    log.write(json.dumps(logged) + '\\n')\n"
+            "if args[:3] == ['compose', 'config', '--format']:\n"
+            "    mode = os.environ.get('TEST_VOLUME_CONFIG', 'named')\n"
+            "    if mode == 'anon':\n"
+            "        doc = {'services': {'postgres': {'volumes': [{'type': 'volume', 'target': '/var/lib/postgresql/data', 'volume': {}}]}}}\n"
+            "    elif mode == 'bind':\n"
+            "        doc = {'services': {'postgres': {'volumes': [{'type': 'bind', 'source': '/tmp/pg', 'target': '/var/lib/postgresql/data'}]}}}\n"
+            "    elif mode == 'missing':\n"
+            "        doc = {'services': {'postgres': {}}}\n"
+            "    else:\n"
+            "        doc = {'services': {'postgres': {'volumes': [{'type': 'volume', 'source': 'pgdata', 'target': '/var/lib/postgresql/data', 'volume': {}}]}}, 'volumes': {'pgdata': {'name': 'test_pgdata'}}}\n"
+            "    sys.stdout.write(json.dumps(doc))\n"
+            "    sys.exit(0)\n"
             "if args[:-1] != prefix:\n"
             "    sys.exit('unexpected Docker invocation')\n"
             "sys.exit(subprocess.run(['/bin/sh', '-ec', args[-1]]).returncode)\n",
@@ -100,8 +113,7 @@ exec bash "$PREFLIGHT_SCRIPT"
             )
         after = {p.name: p.read_bytes() for p in self.data.iterdir() if p.is_file()}
         self.assertEqual(before, after, "preflight changed the data directory")
-        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        self.assertEqual(len(calls), 1, "preflight invoked an extra container operation")
+        self.assert_volume_then_one_run()
         return result
 
     def test_pg16_volume_rejects_pg17_without_changing_data(self):
@@ -186,6 +198,25 @@ exec bash "$PREFLIGHT_SCRIPT"
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Unrecognized postgres --version", result.stderr)
 
+    def test_missing_named_volume_stops_before_the_container(self):
+        self.env["TEST_VOLUME_CONFIG"] = "missing"
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not mount a named volume", result.stderr)
+        self.assertIn("anonymous volume from the image", result.stderr)
+
+    def test_explicit_anonymous_volume_stops_before_the_container(self):
+        self.env["TEST_VOLUME_CONFIG"] = "anon"
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not mount a named volume", result.stderr)
+
+    def test_bind_mount_is_not_the_named_volume(self):
+        self.env["TEST_VOLUME_CONFIG"] = "bind"
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not mount a named volume", result.stderr)
+
     def test_compose_pins_pgdata_on_named_volume(self):
         text = (ROOT / "docker-compose.yml").read_text()
         self.assertIn("pgdata:/var/lib/postgresql/data", text)
@@ -251,9 +282,20 @@ exit "$status"
             "preflight never reached Docker inside the mount namespace "
             f"(exit {result.returncode}): {result.stderr}",
         )
-        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        self.assertEqual(len(calls), 1, "preflight invoked an extra container operation")
+        self.assert_volume_then_one_run()
         return result
+
+    def assert_volume_then_one_run(self):
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        configs = [call for call in calls if call[:2] == ["compose", "config"]]
+        runs = [call for call in calls if call[:2] == ["compose", "run"]]
+        self.assertEqual(len(configs), 1, calls)
+        mode = self.env.get("TEST_VOLUME_CONFIG", "named")
+        if mode == "named":
+            self.assertEqual(len(runs), 1, "preflight invoked an extra container operation")
+        else:
+            self.assertEqual(runs, [], "preflight started a container without a named volume")
+        return calls
 
     def test_image_default_pgdata_outside_mounted_volume_is_rejected(self):
         result = self.run_with_mounted_volume("/var/lib/postgresql/18/docker", lambda volume: None)

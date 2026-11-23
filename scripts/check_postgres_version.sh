@@ -8,6 +8,48 @@ command -v docker >/dev/null 2>&1 || {
   echo "PostgreSQL preflight requires Docker / Compose." >&2
   exit 1
 }
+command -v python3 >/dev/null 2>&1 || {
+  echo "PostgreSQL preflight requires python3 to read the Compose config." >&2
+  exit 1
+}
+
+# The official image declares VOLUME /var/lib/postgresql/data. Docker then
+# mounts an anonymous volume there even when Compose did not. That mount
+# satisfies a mountinfo check while the named project volume, and any cluster
+# on it, stays detached. The effective config has to name the volume.
+compose_config=$(docker compose config --format json) || {
+  echo "PostgreSQL preflight: cannot read the effective Compose config." >&2
+  exit 1
+}
+printf '%s\n' "$compose_config" | python3 -c '
+import json, sys
+try:
+    doc = json.load(sys.stdin)
+except json.JSONDecodeError:
+    sys.stderr.write("PostgreSQL preflight: Compose config is not valid JSON.\n")
+    sys.exit(1)
+services = doc.get("services") or {}
+postgres = services.get("postgres") or {}
+declared = doc.get("volumes") or {}
+for mount in postgres.get("volumes") or []:
+    if not isinstance(mount, dict):
+        continue
+    source = mount.get("source") or ""
+    if (
+        mount.get("type") == "volume"
+        and mount.get("target") == "/var/lib/postgresql/data"
+        and source
+        and source in declared
+    ):
+        sys.exit(0)
+sys.stderr.write(
+    "PostgreSQL preflight: effective Compose config does not mount a named "
+    "volume at /var/lib/postgresql/data. An anonymous volume from the image "
+    "is not the project data volume.\n"
+)
+sys.stderr.write("Keep the existing data volume. See docs/POSTGRES-UPGRADE.md.\n")
+sys.exit(1)
+'
 
 # Compose resolves .env, COMPOSE_FILE/COMPOSE_PROJECT_NAME, image overrides and
 # PGDATA exactly as it does for the real service. Do not infer a major from a tag

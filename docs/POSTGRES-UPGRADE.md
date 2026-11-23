@@ -34,9 +34,11 @@ which is not compatible with this version 17.12.
   若沒有偵測到，會把新叢集寫進容器層，容器重建後資料消失。不要為了 18 的新目錄把既有
   volume 改掛到 `/var/lib/postgresql`，那會讓 16／17 的叢集檔落在伺服器尋找的資料目錄之外。
 - `bash scripts/check_postgres_version.sh` 比對選定映像與資料目錄的 `PG_VERSION`，
-  不會啟動 PostgreSQL 或執行版本轉換。預檢要求具名 volume 已掛在
-  `/var/lib/postgresql/data`；沒有這個掛載，或解析後的 `PGDATA` 不在該掛載上，都拒絕，
-  不會把空目錄當成可初始化的新叢集。讀 `PG_VERSION` 用的是解析後的路徑，所以
+  不會啟動 PostgreSQL 或執行版本轉換。預檢先讀有效的 Compose 設定，要求 postgres
+  服務把已宣告的具名 volume 掛在 `/var/lib/postgresql/data`。映像自帶的匿名 volume
+  也會在這個路徑出現掛載，不能代替具名 volume；沒有具名掛載時預檢不會啟動容器。
+  容器內再確認這個掛載存在，且解析後的 `PGDATA` 在該掛載上。沒有這個掛載，或
+  `PGDATA` 不在其上，都拒絕，不會把空目錄當成可初始化的新叢集。讀 `PG_VERSION` 用的是解析後的路徑，所以
   `/var/lib/postgresql/data/missing/..` 會看到掛載點上的既有叢集，不能把它藏起來。
   `/var/lib/postgresql/data/../data` 或指向該目錄的符號連結就是標準目錄，不是第二個叢集。
   `PGDATA` 若在標準目錄裡面（例如 `/var/lib/postgresql/data/pgdata`），父目錄只因為放著

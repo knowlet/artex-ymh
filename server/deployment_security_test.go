@@ -77,7 +77,7 @@ func installerPythonStub(t *testing.T, bin string) {
 
 func installerDockerStub(t *testing.T, dir, bin string) {
 	t.Helper()
-	body := "#!/bin/sh\nif [ \"$1\" = info ]; then\n  printf '%s\\n' testdaemon\n  exit 0\nfi\nif [ \"$1\" = network ]; then\n  exit 0\nfi\nif [ \"$1\" = compose ] && [ \"$2\" = run ]; then\n  : > postgres-preflight-ran\nfi\nexit 0\n"
+	body := "#!/bin/sh\nif [ \"$1\" = info ]; then\n  printf '%s\\n' testdaemon\n  exit 0\nfi\nif [ \"$1\" = network ] && [ \"$2\" = create ]; then\n  printf '%s\\n' testnetid\n  exit 0\nfi\nif [ \"$1\" = network ]; then\n  exit 0\nfi\nif [ \"$1\" = compose ] && [ \"$2\" = config ]; then\n  printf '%s\\n' '{\"services\":{\"postgres\":{\"volumes\":[{\"type\":\"volume\",\"source\":\"pgdata\",\"target\":\"/var/lib/postgresql/data\"}]}},\"volumes\":{\"pgdata\":{\"name\":\"fixture_pgdata\"}}}'\n  exit 0\nfi\nif [ \"$1\" = compose ] && [ \"$2\" = run ]; then\n  : > postgres-preflight-ran\nfi\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(body), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestInstallerCreatesPrivateConfigOverExistingPublicFile(t *testing.T) {
 }
 
 func TestInstallerCreatesPrivateDotEnv(t *testing.T) {
-	dir, bin, bash := deploymentFixture(t, "install.sh", "bash", "dirname", "cp", "chmod", "head", "base64", "tr", "sed", "rm", "mkdir", "find", "id", "cksum", "awk", "cat", "date")
+	dir, bin, bash := deploymentFixture(t, "install.sh", "bash", "dirname", "cp", "chmod", "head", "base64", "tr", "sed", "rm", "mkdir", "find", "id", "cksum", "awk", "cat", "date", "readlink", "python3")
 	installerDockerStub(t, dir, bin)
 	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte("POSTGRES_PASSWORD=\nANTHROPIC_API_KEY=\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestInstallerCreatesPrivateDotEnv(t *testing.T) {
 }
 
 func TestInstallerTightensExistingDotEnv(t *testing.T) {
-	dir, bin, bash := deploymentFixture(t, "install.sh", "bash", "dirname", "chmod", "mkdir", "find", "id", "cksum", "awk", "cat", "rm", "tr", "date")
+	dir, bin, bash := deploymentFixture(t, "install.sh", "bash", "dirname", "chmod", "mkdir", "find", "id", "cksum", "awk", "cat", "rm", "tr", "date", "readlink", "python3")
 	installerDockerStub(t, dir, bin)
 	path := filepath.Join(dir, ".env")
 	if err := os.WriteFile(path, []byte("POSTGRES_PASSWORD=synthetic-secret\n"), 0644); err != nil {
