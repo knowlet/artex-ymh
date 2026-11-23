@@ -304,6 +304,24 @@ class DockerUpdateTests(unittest.TestCase):
         self.assertEqual(lock.parent.stat().st_uid, os.getuid())
         self.assertEqual(list(Path(self.env["TMPDIR"]).glob("artex-docker-update*")), [legacy])
 
+    def test_lock_directory_checks_do_not_need_gnu_stat(self):
+        # macOS stat is BSD stat, which has no -c option.
+        bsd_stat = self.root / "bin" / "stat"
+        bsd_stat.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = -c ]; then\n"
+            "  echo 'stat: illegal option -- c' >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            "exec /usr/bin/stat \"$@\"\n"
+        )
+        bsd_stat.chmod(0o755)
+        result, calls = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(["preflight"], calls)
+        lock_dir = self.daemon_lock_path(self.env).parent
+        self.assertEqual(lock_dir.stat().st_mode & 0o777, 0o700)
+
     def test_lock_refuses_symlink_without_truncating_the_target(self):
         lock = self.daemon_lock_path(self.env)
         lock.parent.mkdir(parents=True)
@@ -330,6 +348,7 @@ class DockerUpdateTests(unittest.TestCase):
             "awk",
             "cksum",
             "stat",
+            "find",
             "id",
             "chmod",
             "mkdir",

@@ -73,11 +73,13 @@ prepare_private_dir(){
   if [ -L "$dir" ] || [ ! -d "$dir" ]; then
     die "更新锁目录是符号链接，已拒绝：$dir"
   fi
-  if [ "$(stat -c %u -- "$dir")" != "$(id -u)" ]; then
+  # find -user/-perm work with both GNU and BSD (macOS) find; stat -c is
+  # GNU-only and BSD stat rejects it.
+  if [ -z "$(find "$dir" -maxdepth 0 -user "$(id -u)" -print)" ]; then
     die "更新锁目录必须属于当前用户：$dir"
   fi
   chmod 700 -- "$dir" || die "无法设置更新锁目录权限：$dir"
-  if [ -L "$dir" ] || [ "$(stat -c %a -- "$dir")" != 700 ]; then
+  if [ -L "$dir" ] || [ -z "$(find "$dir" -maxdepth 0 -perm 700 -print)" ]; then
     die "更新锁目录权限异常：$dir"
   fi
 }
