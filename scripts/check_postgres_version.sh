@@ -31,17 +31,35 @@ except json.JSONDecodeError:
 services = doc.get("services") or {}
 postgres = services.get("postgres") or {}
 declared = doc.get("volumes") or {}
+
+def root_subpath(mount):
+    volume = mount.get("volume") or {}
+    if not isinstance(volume, dict):
+        return ""
+    return str(volume.get("subpath") or "").strip()
+
 for mount in postgres.get("volumes") or []:
     if not isinstance(mount, dict):
         continue
     source = mount.get("source") or ""
-    if (
+    if not (
         mount.get("type") == "volume"
         and mount.get("target") == "/var/lib/postgresql/data"
         and source
         and source in declared
     ):
-        sys.exit(0)
+        continue
+    subpath = root_subpath(mount)
+    if subpath not in ("", ".", "/"):
+        sys.stderr.write(
+            "PostgreSQL preflight: named volume %s is mounted with "
+            "volume.subpath %r, which hides the cluster at the volume root. "
+            "Refusing to initialize a database on that subdirectory.\n"
+            % (source, subpath)
+        )
+        sys.stderr.write("Keep the existing data volume. See docs/POSTGRES-UPGRADE.md.\n")
+        sys.exit(1)
+    sys.exit(0)
 sys.stderr.write(
     "PostgreSQL preflight: effective Compose config does not mount a named "
     "volume at /var/lib/postgresql/data. An anonymous volume from the image "

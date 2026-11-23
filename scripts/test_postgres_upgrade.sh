@@ -307,4 +307,51 @@ volumes_after="$(docker volume ls -q | LC_ALL=C sort)"
 [[ "$(fingerprint)" == "$anon_before" ]] || fail 'anonymous-volume preflight changed the named data volume'
 export COMPOSE_FILE="$base_compose_files"
 
-printf '%s\n' 'PASS: fresh install, mounted PGDATA, legacy directory guard, both major mismatch directions, PG16 recovery, schema replay, isolated PG16-to-PG17 restore, a subdirectory cluster, and rejection of an anonymous image volume.'
+printf '%s\n' '12. A volume subpath cannot hide the cluster at the volume root.'
+export COMPOSE_PROJECT_NAME="$project16"
+export POSTGRES_IMAGE=postgres:17-alpine
+[[ "$(volume_read 'cat /source/PG_VERSION')" == 16 ]] || fail 'subpath fixture is not a PG16 volume'
+docker run --rm --network none \
+  --mount "type=volume,src=${project16}_pgdata,dst=/source" \
+  postgres:16-alpine sh -c 'mkdir -p /source/cluster'
+cat > "$TEST_DIR/compose.subpath.yml" <<'YAML'
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - type: volume
+        source: pgdata
+        target: /var/lib/postgresql/data
+        volume:
+          subpath: cluster
+volumes:
+  pgdata:
+    name: ${COMPOSE_PROJECT_NAME}_pgdata
+    external: true
+YAML
+export COMPOSE_FILE="$TEST_DIR/compose.subpath.yml"
+if check_version > "$TEST_DIR/subpath.log" 2>&1; then
+  cat "$TEST_DIR/subpath.log"
+  fail 'volume subpath was accepted as the cluster root'
+fi
+cat "$TEST_DIR/subpath.log"
+output="$(< "$TEST_DIR/subpath.log")"
+[[ "$output" == *'volume.subpath'* && "$output" == *'cluster'* ]] \
+  || fail 'subpath error does not name the subdirectory'
+[[ "$output" != *'may be initialized'* ]] || fail 'subpath was treated as an empty database'
+[[ -z "$(docker compose ps --status running --quiet postgres)" ]] \
+  || fail 'subpath preflight started PostgreSQL'
+[[ "$(volume_read 'cat /source/PG_VERSION')" == 16 ]] \
+  || fail 'subpath preflight changed the volume root'
+# The subdirectory mount itself does not contain the root cluster. The old
+# in-container check would treat that empty directory as a new database.
+docker compose run --rm --no-deps --entrypoint sh postgres -c \
+  'test ! -e /var/lib/postgresql/data/PG_VERSION'
+[[ "$(volume_read 'cat /source/PG_VERSION')" == 16 ]] \
+  || fail 'subpath mount changed the volume root'
+export COMPOSE_FILE="$base_compose_files"
+export POSTGRES_IMAGE=
+
+printf '%s\n' 'PASS: fresh install, mounted PGDATA, legacy directory guard, both major mismatch directions, PG16 recovery, schema replay, isolated PG16-to-PG17 restore, a subdirectory cluster, rejection of an anonymous image volume, and rejection of a volume subpath.'

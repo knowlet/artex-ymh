@@ -49,6 +49,10 @@ class PostgresVersionTests(unittest.TestCase):
             "        doc = {'services': {'postgres': {'volumes': [{'type': 'bind', 'source': '/tmp/pg', 'target': '/var/lib/postgresql/data'}]}}}\n"
             "    elif mode == 'missing':\n"
             "        doc = {'services': {'postgres': {}}}\n"
+            "    elif mode == 'subpath':\n"
+            "        doc = {'services': {'postgres': {'volumes': [{'type': 'volume', 'source': 'pgdata', 'target': '/var/lib/postgresql/data', 'volume': {'subpath': 'cluster'}}]}}, 'volumes': {'pgdata': {'name': 'test_pgdata'}}}\n"
+            "    elif mode == 'subpath-root':\n"
+            "        doc = {'services': {'postgres': {'volumes': [{'type': 'volume', 'source': 'pgdata', 'target': '/var/lib/postgresql/data', 'volume': {'subpath': '.'}}]}}, 'volumes': {'pgdata': {'name': 'test_pgdata'}}}\n"
             "    else:\n"
             "        doc = {'services': {'postgres': {'volumes': [{'type': 'volume', 'source': 'pgdata', 'target': '/var/lib/postgresql/data', 'volume': {}}]}}, 'volumes': {'pgdata': {'name': 'test_pgdata'}}}\n"
             "    sys.stdout.write(json.dumps(doc))\n"
@@ -211,6 +215,20 @@ exec bash "$PREFLIGHT_SCRIPT"
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("does not mount a named volume", result.stderr)
 
+    def test_volume_subpath_hides_the_cluster_root(self):
+        self.env["TEST_VOLUME_CONFIG"] = "subpath"
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("volume.subpath", result.stderr)
+        self.assertIn("cluster", result.stderr)
+        self.assertNotIn("may be initialized", result.stdout)
+
+    def test_root_volume_subpath_still_reaches_the_cluster(self):
+        self.env["TEST_VOLUME_CONFIG"] = "subpath-root"
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("empty PGDATA", result.stdout)
+
     def test_bind_mount_is_not_the_named_volume(self):
         self.env["TEST_VOLUME_CONFIG"] = "bind"
         result = self.run_guard()
@@ -291,7 +309,7 @@ exit "$status"
         runs = [call for call in calls if call[:2] == ["compose", "run"]]
         self.assertEqual(len(configs), 1, calls)
         mode = self.env.get("TEST_VOLUME_CONFIG", "named")
-        if mode == "named":
+        if mode in ("named", "subpath-root"):
             self.assertEqual(len(runs), 1, "preflight invoked an extra container operation")
         else:
             self.assertEqual(runs, [], "preflight started a container without a named volume")
