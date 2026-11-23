@@ -53,16 +53,69 @@ reap_stale_update_lock(){
   UPDATE_LOCK_REAPER_WAIT=0
   UPDATE_LOCK_REAPER=$reaper
   printf '%s\n' "$$" > "$reaper/pid"
+  chmod 777 -- "$reaper" 2>/dev/null || true
+  chmod 644 -- "$reaper/pid" 2>/dev/null || true
   refuse_symlink "$lock_hold"
   current=$(cat "$lock_hold/pid" 2>/dev/null || true)
-  if [ "$current" = "$dead_pid" ] && ! kill -0 "$current" 2>/dev/null; then
+  if [ "$current" = "$dead_pid" ] && ! owner_holds_lock "$current" "$lock_hold"; then
     rm -rf -- "$lock_hold"
   fi
   rm -rf -- "$reaper"
   UPDATE_LOCK_REAPER=
 }
 
-prepare_private_dir(){
+refuse_symlink(){
+  if [ -L "$1" ]; then
+    die "更新锁是符号链接，已拒绝：$1"
+  fi
+}
+
+# Field 22 of /proc/pid/stat (starttime). Empty when /proc is unavailable.
+# Combined with the PID, it identifies one process: a reused PID has a new value.
+proc_starttime(){
+  local stat=/proc/$1/stat
+  [ -r "$stat" ] || return 0
+  awk -F ')' 'NF > 1 {
+    n = split($2, f, " ")
+    if (n >= 20 && f[20] ~ /^[0-9]+$/) print f[20]
+  }' "$stat"
+}
+
+# 0: keep waiting. 1: the recorded owner is gone or is a reused PID.
+owner_holds_lock(){
+  local pid=$1 hold=$2 recorded current started now err
+  err=$(kill -0 "$pid" 2>&1 >/dev/null || true)
+  if [ -n "$err" ]; then
+    case "$err" in
+      *"not permitted"*) ;;
+      *) return 1 ;;
+    esac
+  fi
+  recorded=$(cat "$hold/starttime" 2>/dev/null || true)
+  current=$(proc_starttime "$pid" || true)
+  if [ -n "$recorded" ] && [ -n "$current" ]; then
+    if [ "$recorded" = "$current" ]; then
+      return 0
+    fi
+    return 1
+  fi
+  # No starttime to compare (another OS, or a lock that only stored a PID).
+  # A live-looking PID must not wait forever.
+  # No starttime. A timestamp bounds the wait; a PID alone does not.
+  started=$(cat "$hold/started" 2>/dev/null || true)
+  case "$started" in
+    ""|*[!0-9]*) return 1 ;;
+  esac
+  now=$(date +%s)
+  if [ $((now - started)) -lt 7200 ]; then
+    return 0
+  fi
+  return 1
+}
+
+# Shared by every client of one daemon. Not mode 700 under one home: another
+# user of the same daemon builds the same artex-ymh:local tag.
+prepare_shared_dir(){
   local dir=$1
   if [ -L "$dir" ]; then
     die "更新锁目录是符号链接，已拒绝：$dir"
@@ -73,61 +126,34 @@ prepare_private_dir(){
   if [ -L "$dir" ] || [ ! -d "$dir" ]; then
     die "更新锁目录是符号链接，已拒绝：$dir"
   fi
-  # find -user/-perm work with both GNU and BSD (macOS) find; stat -c is
-  # GNU-only and BSD stat rejects it.
-  if [ -z "$(find "$dir" -maxdepth 0 -user "$(id -u)" -print)" ]; then
-    die "更新锁目录必须属于当前用户：$dir"
+  if [ -n "$(find "$dir" -maxdepth 0 -user "$(id -u)" -print)" ]; then
+    chmod 777 -- "$dir" || die "无法设置更新锁目录权限：$dir"
+    if [ -L "$dir" ] || [ -z "$(find "$dir" -maxdepth 0 -perm 777 -print)" ]; then
+      die "更新锁目录权限异常：$dir"
+    fi
+    return 0
   fi
-  chmod 700 -- "$dir" || die "无法设置更新锁目录权限：$dir"
-  if [ -L "$dir" ] || [ -z "$(find "$dir" -maxdepth 0 -perm 700 -print)" ]; then
-    die "更新锁目录权限异常：$dir"
-  fi
-}
-
-refuse_symlink(){
-  if [ -L "$1" ]; then
-    die "更新锁是符号链接，已拒绝：$1"
-  fi
-}
-
-# Unset DOCKER_HOST and the engine's default socket are the same daemon.
-# DOCKER_CONTEXT=default is that daemon too. Any other host string stays as given.
-daemon_scope_name(){
-  local host=${DOCKER_HOST:-}
-  host=${host%/}
-  case "$host" in
-    ""|unix:///var/run/docker.sock)
-      if [ -n "${DOCKER_CONTEXT:-}" ] && [ "$DOCKER_CONTEXT" != default ]; then
-        printf 'context:%s\n' "$DOCKER_CONTEXT"
-      else
-        printf 'default\n'
-      fi
-      ;;
-    *)
-      printf '%s\n' "$host"
-      ;;
-  esac
+  [ -w "$dir" ] || die "无法写入更新锁目录：$dir"
 }
 
 # Hold the lock until this process exits.
 acquire_update_lock(){
-  local state_home lock_dir daemon_scope scope_key lock_file lock_umask
-  local lock_hold announced pid empty_wait
-  # One directory per user. XDG_STATE_HOME is ignored so two updates from the
-  # same home cannot miss each other by exporting a different state directory.
-  # The directory stays under that home, mode 700. A shared /tmp name can be
-  # created by a user who cannot access Docker, and kill -0 returns EPERM for
-  # another user's live process, which is indistinguishable from a dead owner.
-  if [ -z "${HOME:-}" ]; then
-    die "无法创建更新锁：HOME 未设置"
-  fi
-  state_home=$HOME/.local/state
-  lock_dir=$state_home/artex-ymh
-  prepare_private_dir "$lock_dir"
-
-  daemon_scope=$(daemon_scope_name)
-  scope_key=$(printf '%s' "artex-ymh:local|$daemon_scope" | cksum | awk '{print $1}')
-  lock_file=$lock_dir/docker-update.$scope_key.lock
+  local daemon_id lock_root lock_dir lock_file lock_umask
+  local lock_hold announced pid empty_wait start
+  # artex-ymh:local is one tag per daemon, shared by every user and every
+  # spelling of DOCKER_HOST. docker info's ID is that daemon. A path under
+  # one home, or a hash of the host string, lets a second client build it.
+  command -v docker >/dev/null 2>&1 || die "未检测到 docker，无法锁定 artex-ymh:local"
+  daemon_id=$(docker info --format '{{.ID}}') || die "无法读取 Docker daemon ID，已停止更新"
+  daemon_id=$(printf '%s' "$daemon_id" | tr -d '[:space:]')
+  case "$daemon_id" in
+    ""|*/*|*..*) die "Docker daemon ID 无效，已停止更新" ;;
+  esac
+  lock_root=/tmp/artex-ymh-update-locks
+  prepare_shared_dir "$lock_root"
+  lock_dir=$lock_root/$daemon_id
+  prepare_shared_dir "$lock_dir"
+  lock_file=$lock_dir/docker-update.lock
   refuse_symlink "$lock_file"
   if [ -e "$lock_file" ] && [ ! -f "$lock_file" ]; then
     die "更新锁路径不是普通文件：$lock_file"
@@ -158,7 +184,7 @@ acquire_update_lock(){
       continue
     fi
     empty_wait=0
-    if ! kill -0 "$pid" 2>/dev/null; then
+    if ! owner_holds_lock "$pid" "$lock_hold"; then
       reap_stale_update_lock "$lock_hold" "$pid"
       continue
     fi
@@ -169,17 +195,26 @@ acquire_update_lock(){
     sleep 1
   done
   UPDATE_LOCK_DIR=$lock_hold
+  # Publish identity before the PID so a waiter never sees a PID-only lock.
+  printf '%s\n' "$(date +%s)" > "$lock_hold/started"
+  start=$(proc_starttime "$$" || true)
+  printf '%s\n' "$start" > "$lock_hold/starttime"
   printf '%s\n' "$$" > "$lock_hold/pid"
+  chmod 644 -- "$lock_hold/pid" "$lock_hold/starttime" "$lock_hold/started" || die "无法设置更新锁权限：$lock_hold"
+  # Open the directory only after the identity files are readable.
+  chmod 777 -- "$lock_hold" || die "无法设置更新锁目录权限：$lock_hold"
 
   if command -v flock >/dev/null 2>&1; then
     lock_umask=$(umask)
-    umask 077
+    umask 000
     # Append so a pre-existing file is not truncated before the lock is held.
+    # Mode 666 so another user of this daemon can flock the same file.
     if ! exec 9>>"$lock_file"; then
       umask "$lock_umask"
       die "无法打开更新锁：$lock_file"
     fi
     umask "$lock_umask"
+    chmod 666 -- "$lock_file" 2>/dev/null || true
     refuse_symlink "$lock_file"
     if ! flock -n 9; then
       info "另一个更新正在构建或部署，等待它结束后继续…"

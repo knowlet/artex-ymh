@@ -62,14 +62,42 @@ class PostgresVersionTests(unittest.TestCase):
 
     def run_guard(self):
         before = {p.name: p.read_bytes() for p in self.data.iterdir() if p.is_file()}
-        result = subprocess.run(
-            ["bash", str(ROOT / "scripts/check_postgres_version.sh")],
-            cwd=self.root,
-            env=self.env,
-            text=True,
-            capture_output=True,
-            timeout=10,
-        )
+        pgdata = self.env.get("PGDATA", "")
+        host = str(self.data)
+        env = self.env.copy()
+        if pgdata == host or pgdata.startswith(host + "/"):
+            # The preflight requires the named volume to be mounted. Bind the
+            # disposable directory there and address it by that path.
+            env["PGDATA"] = "/var/lib/postgresql/data" + pgdata[len(host):]
+            env["HOST_VOLUME"] = host
+            env["PREFLIGHT_SCRIPT"] = str(ROOT / "scripts/check_postgres_version.sh")
+            result = subprocess.run(
+                [
+                    "unshare", "--user", "--mount", "--map-root-user",
+                    "bash", "-c",
+                    """
+set -euo pipefail
+mount -t tmpfs tmpfs /var/lib
+mkdir -p /var/lib/postgresql/data
+mount --bind "$HOST_VOLUME" /var/lib/postgresql/data
+exec bash "$PREFLIGHT_SCRIPT"
+""",
+                ],
+                cwd=self.root,
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+        else:
+            result = subprocess.run(
+                ["bash", str(ROOT / "scripts/check_postgres_version.sh")],
+                cwd=self.root,
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
         after = {p.name: p.read_bytes() for p in self.data.iterdir() if p.is_file()}
         self.assertEqual(before, after, "preflight changed the data directory")
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
@@ -359,6 +387,59 @@ exit "$status"
             result.stderr,
         )
         self.assertIn("PGDATA is /var/lib/postgresql/data/pgdata", result.stderr)
+
+    def test_missing_volume_mount_rejects_empty_pgdata(self):
+        env = self.env.copy()
+        env.update(
+            PGDATA="/var/lib/postgresql/18/docker",
+            PREFLIGHT_SCRIPT=str(ROOT / "scripts/check_postgres_version.sh"),
+        )
+        result = subprocess.run(
+            [
+                "unshare", "--user", "--mount", "--map-root-user",
+                "bash", "-c",
+                """
+set -euo pipefail
+mount -t tmpfs tmpfs /var/lib
+mkdir -p /var/lib/postgresql/data
+exec bash "$PREFLIGHT_SCRIPT"
+""",
+            ],
+            cwd=self.root,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("not mounted at /var/lib/postgresql/data", result.stderr)
+        self.assertNotIn("empty PGDATA", result.stdout)
+
+    def test_dotdot_through_missing_component_sees_existing_cluster(self):
+        def populate(volume):
+            (volume / "PG_VERSION").write_text("16\n")
+            (volume / "sentinel").write_bytes(b"existing")
+
+        result = self.run_with_mounted_volume(
+            "/var/lib/postgresql/data/missing/..", populate
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("existing PG16 cluster matches server 16.12", result.stdout)
+        self.assertNotIn("empty PGDATA", result.stdout)
+
+    def test_dotdot_through_missing_component_does_not_hide_mismatch(self):
+        self.env["TEST_POSTGRES_VERSION"] = "postgres (PostgreSQL) 17.12"
+
+        def populate(volume):
+            (volume / "PG_VERSION").write_text("16\n")
+
+        result = self.run_with_mounted_volume(
+            "/var/lib/postgresql/data/missing/..", populate
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Data directory uses PostgreSQL 16", result.stderr)
+        self.assertIn("image runs PostgreSQL 17", result.stderr)
+        self.assertNotIn("empty PGDATA", result.stdout)
 
     def test_nested_mount_is_not_the_volume(self):
         result = self.run_with_mounted_volume(

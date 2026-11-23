@@ -150,7 +150,7 @@ PHP2Shell Scanner、OSV-Scanner、Trivy、ZAP、ffuf。
 
 - **應用程式 schema 更新**：ARTEX 啟動時會執行資料表 migration，前提是 PostgreSQL 已能正常啟動。更新前應備份 `./data` 與資料庫；重啟程式不會轉換 PostgreSQL 的大版本資料格式。
 - **PostgreSQL 大版本與部署預檢**：手動更新 Docker 部署前執行 `bash scripts/check_postgres_version.sh`；預檢失敗時先處理映像與資料目錄的版本對應。16 → 17 須另外執行 dump/restore 或 `pg_upgrade`，不能只改 image。復原、獨立 volume 遷移及回復界線見 [PostgreSQL 升級與復原指南](docs/POSTGRES-UPGRADE.md)。
-- **Docker 更新不會並行部署**：`./update.sh` 與 `./install.sh` 的 Docker 路徑在預檢、重建 `artex-ymh:local` 與啟動服務期間持有同一把排他鎖。鎖在該使用者 home 的 `.local/state`（不跟隨 `XDG_STATE_HOME`），對應同一個 Docker daemon 上的 `artex-ymh:local`；未設定 `DOCKER_HOST` 與 `unix:///var/run/docker.sock` 是同一把鎖。有沒有 `flock` 都會先取得這個目錄鎖。不同工作目錄會一起排隊，避免另一個 checkout 的建置最後完成並把容器啟動成那份映像。
+- **Docker 更新不會並行部署**：`./update.sh` 與 `./install.sh` 的 Docker 路徑在預檢、重建 `artex-ymh:local` 與啟動服務期間持有同一把排他鎖。鎖對應 `docker info` 的 daemon ID，放在 `/tmp/artex-ymh-update-locks/<daemon-id>`，不跟使用者 home、`XDG_STATE_HOME` 或 `DOCKER_HOST` 的寫法拆開。目錄鎖記下 PID 與 `/proc` 的 starttime；PID 被重用時視為過期。無法核對 starttime 時，等待超過兩小時就停止。
 - ⚠️ **二开版一键安装保持禁用**：检查更新只查询 `knowlet/artex-ymh`，不会回退到上游。独立发布与签名链尚待单独审核；即使以后建立 Release，也不会自动启用安装。API、下载暂存与启动换装入口均阻止远程更新，旧暂存文件会保留但不执行。升级请从本 fork 更新源码并重新编译（方式二）。
 
 ## 配置

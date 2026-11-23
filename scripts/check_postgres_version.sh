@@ -105,12 +105,15 @@ esac
 volume_mount=/var/lib/postgresql/data
 resolved=$(resolve_path "$data_dir") || fail "Cannot resolve PGDATA $data_dir."
 volume_phys=$(resolve_path "$volume_mount") || fail "Cannot resolve the mounted volume $volume_mount."
-if awk -v mp="$volume_mount" '$5 == mp { found = 1 } END { exit !found }' /proc/self/mountinfo; then
-  data_mount=$(mount_covering "$resolved") || fail "Cannot determine the mount backing PGDATA $data_dir."
-  volume_backing=$(mount_covering "$volume_phys") || fail "Cannot determine the mount backing $volume_mount."
-  if [ "$data_mount" != "$volume_backing" ]; then
-    fail "PGDATA $data_dir is outside the mounted volume $volume_mount. Refusing to initialize a cluster that would not persist across container recreation."
-  fi
+# The named volume has to be mounted. Skipping this when it is absent accepts
+# an empty image-default PGDATA and lets initdb write outside pgdata.
+if ! awk -v mp="$volume_mount" '$5 == mp { found = 1 } END { exit !found }' /proc/self/mountinfo; then
+  fail "Named volume is not mounted at $volume_mount. Refusing to initialize a cluster that would not persist across container recreation."
+fi
+data_mount=$(mount_covering "$resolved") || fail "Cannot determine the mount backing PGDATA $data_dir."
+volume_backing=$(mount_covering "$volume_phys") || fail "Cannot determine the mount backing $volume_mount."
+if [ "$data_mount" != "$volume_backing" ]; then
+  fail "PGDATA $data_dir is outside the mounted volume $volume_mount. Refusing to initialize a cluster that would not persist across container recreation."
 fi
 
 # Reject a standard directory that is not the configured cluster. Compare the
@@ -183,9 +186,12 @@ if [ "$resolved" != "$volume_phys" ] && [ -e "$volume_phys" ]; then
   esac
 fi
 
-if [ -e "$data_dir/PG_VERSION" ]; then
-  [ -f "$data_dir/PG_VERSION" ] || fail "PG_VERSION is not a regular file."
-  data_major=$(cat "$data_dir/PG_VERSION") || fail "Cannot read $data_dir/PG_VERSION."
+# Read the cluster at the resolved path. PGDATA=/var/lib/postgresql/data/missing/..
+# does not exist until "missing" is created, so the raw path hides PG_VERSION
+# that ".." walks back onto.
+if [ -e "$resolved/PG_VERSION" ]; then
+  [ -f "$resolved/PG_VERSION" ] || fail "PG_VERSION is not a regular file."
+  data_major=$(cat "$resolved/PG_VERSION") || fail "Cannot read $resolved/PG_VERSION."
   case "$data_major" in
     ""|*[!0-9]*) fail "Invalid PG_VERSION in $data_dir; refusing to treat it as an empty database." ;;
   esac
@@ -194,9 +200,9 @@ if [ -e "$data_dir/PG_VERSION" ]; then
   fi
   printf "PostgreSQL preflight: existing PG%s cluster matches server %s.\n" "$data_major" "$version"
 else
-  if [ -e "$data_dir" ]; then
-    [ -d "$data_dir" ] || fail "PGDATA is not a directory."
-    entries=$(ls -A "$data_dir") || fail "Cannot inspect $data_dir."
+  if [ -e "$resolved" ]; then
+    [ -d "$resolved" ] || fail "PGDATA is not a directory."
+    entries=$(ls -A "$resolved") || fail "Cannot inspect $resolved."
     [ -z "$entries" ] || fail "Nonempty PGDATA has no PG_VERSION; refusing initialization."
   fi
   printf "PostgreSQL preflight: empty PGDATA; new PG%s cluster may be initialized.\n" "$server_major"

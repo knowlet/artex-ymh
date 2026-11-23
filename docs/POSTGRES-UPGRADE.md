@@ -34,13 +34,15 @@ which is not compatible with this version 17.12.
   若沒有偵測到，會把新叢集寫進容器層，容器重建後資料消失。不要為了 18 的新目錄把既有
   volume 改掛到 `/var/lib/postgresql`，那會讓 16／17 的叢集檔落在伺服器尋找的資料目錄之外。
 - `bash scripts/check_postgres_version.sh` 比對選定映像與資料目錄的 `PG_VERSION`，
-  不會啟動 PostgreSQL 或執行版本轉換。掛載存在時，預檢拒絕不在該掛載點上的 `PGDATA`。
-  比較的是解析後的實體路徑：`/var/lib/postgresql/data/../data` 或指向該目錄的符號連結
-  就是標準目錄，不是第二個叢集。`PGDATA` 若在標準目錄裡面（例如
-  `/var/lib/postgresql/data/pgdata`），父目錄只因為放著這條路徑而非空時可以通過；
-  父目錄本身有 `PG_VERSION`，或有這條路徑以外的項目，仍會拒絕。`PGDATA` 完全不在
-  標準目錄裡時，標準目錄已有叢集或非空也會拒絕。安裝／更新腳本會使用此預檢；手動執行
-  Compose 時也應先執行。版本不符時先處理資料與映像的對應，再啟動服務。
+  不會啟動 PostgreSQL 或執行版本轉換。預檢要求具名 volume 已掛在
+  `/var/lib/postgresql/data`；沒有這個掛載，或解析後的 `PGDATA` 不在該掛載上，都拒絕，
+  不會把空目錄當成可初始化的新叢集。讀 `PG_VERSION` 用的是解析後的路徑，所以
+  `/var/lib/postgresql/data/missing/..` 會看到掛載點上的既有叢集，不能把它藏起來。
+  `/var/lib/postgresql/data/../data` 或指向該目錄的符號連結就是標準目錄，不是第二個叢集。
+  `PGDATA` 若在標準目錄裡面（例如 `/var/lib/postgresql/data/pgdata`），父目錄只因為放著
+  這條路徑而非空時可以通過；父目錄本身有 `PG_VERSION`，或有這條路徑以外的項目，仍會拒絕。
+  `PGDATA` 完全不在標準目錄裡時，標準目錄已有叢集或非空也會拒絕。安裝／更新腳本會使用
+  此預檢；手動執行 Compose 時也應先執行。版本不符時先處理資料與映像的對應，再啟動服務。
 - `POSTGRES_IMAGE` 只選擇伺服器映像，並不代表同時執行 PostgreSQL 大版本升級。
 
 預檢依照 Compose 解析後的映像、掛載與 `PGDATA` 工作；本指南使用倉庫的標準 16／17

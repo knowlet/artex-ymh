@@ -40,6 +40,8 @@ class DockerUpdateTests(unittest.TestCase):
             "args = sys.argv[1:]\n"
             "with open(os.environ['TEST_CALLS'], 'a') as log:\n"
             "    log.write(json.dumps(args) + '\\n')\n"
+            "if args == ['info', '--format', '{{.ID}}']:\n"
+            "    sys.stdout.write(os.environ.get('TEST_DOCKER_ID', 'testdaemon') + '\\n')\n"
             "failure = os.environ.get('TEST_DOCKER_FAIL', '')\n"
             "if failure and args == json.loads(failure):\n"
             "    sys.exit(1)\n"
@@ -87,8 +89,14 @@ class DockerUpdateTests(unittest.TestCase):
             # Present, and different from HOME, so a lock that still follows
             # XDG_STATE_HOME fails the shared-lock tests below.
             XDG_STATE_HOME=str(self.root / "ignored-xdg"),
+            TEST_DOCKER_ID=self.root.name,
         )
         (self.root / "tmp").mkdir()
+        self.addCleanup(
+            shutil.rmtree,
+            Path("/tmp/artex-ymh-update-locks") / self.root.name,
+            True,
+        )
 
     def run_script(self, name="update.sh", root=None, env=None, timeout=10):
         root = root or self.root
@@ -118,6 +126,7 @@ class DockerUpdateTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
+                ["info", "--format", "{{.ID}}"],
                 ["compose", "version"],
                 ["preflight"],
                 ["compose", "build", "artex"],
@@ -131,7 +140,10 @@ class DockerUpdateTests(unittest.TestCase):
         self.env["TEST_PREFLIGHT_EXIT"] = "1"
         result, calls = self.run_script()
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(calls, [["compose", "version"], ["preflight"]])
+        self.assertEqual(
+            calls,
+            [["info", "--format", "{{.ID}}"], ["compose", "version"], ["preflight"]],
+        )
         self.assertNotIn("更新完成", result.stdout)
         self.assert_configuration_unchanged()
 
@@ -164,7 +176,10 @@ class DockerUpdateTests(unittest.TestCase):
         self.env["TEST_PREFLIGHT_EXIT"] = "1"
         result, calls = self.run_script("install.sh")
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(calls, [["compose", "version"], ["preflight"]])
+        self.assertEqual(
+            calls,
+            [["compose", "version"], ["info", "--format", "{{.ID}}"], ["preflight"]],
+        )
         self.assertNotIn("启动完成", result.stdout)
         self.assert_configuration_unchanged()
 
@@ -175,6 +190,7 @@ class DockerUpdateTests(unittest.TestCase):
             calls,
             [
                 ["compose", "version"],
+                ["info", "--format", "{{.ID}}"],
                 ["preflight"],
                 ["compose", "build", "artex"],
                 ["compose", "up", "-d", "--no-deps", "--wait", "--wait-timeout", "120", "postgres"],
@@ -209,14 +225,18 @@ class DockerUpdateTests(unittest.TestCase):
         peak = int((self.root / "peak").read_text().strip())
         self.assertEqual(peak, 1)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        sequence = [
+        # docker info runs before the lock, so the two identity reads can
+        # precede either build. The build-and-deploy calls stay serialized.
+        info = ["info", "--format", "{{.ID}}"]
+        body = [
             ["compose", "version"],
             ["preflight"],
             ["compose", "build", "artex"],
             ["compose", "up", "-d", "--no-deps", "--wait", "--wait-timeout", "120", "postgres"],
             ["compose", "up", "-d", "--no-deps", "--no-build", "--pull", "never", "artex"],
         ]
-        self.assertEqual(calls, sequence + sequence)
+        self.assertEqual([call for call in calls if call == info], [info, info])
+        self.assertEqual([call for call in calls if call != info], body + body)
         self.assert_configuration_unchanged()
 
     def shell_out(self, script, arg):
@@ -224,21 +244,9 @@ class DockerUpdateTests(unittest.TestCase):
             ["bash", "-c", script, "bash", arg], text=True
         ).strip()
 
-    def daemon_scope(self, env):
-        host = env.get("DOCKER_HOST", "").rstrip("/")
-        context = env.get("DOCKER_CONTEXT", "")
-        if host in ("", "unix:///var/run/docker.sock"):
-            if context and context != "default":
-                return f"context:{context}"
-            return "default"
-        return host
-
     def daemon_lock_path(self, env):
-        key = self.shell_out(
-            "printf '%s' \"$1\" | cksum | awk '{print $1}'",
-            f"artex-ymh:local|{self.daemon_scope(env)}",
-        )
-        return Path(env["HOME"]) / ".local" / "state" / "artex-ymh" / f"docker-update.{key}.lock"
+        daemon = env.get("TEST_DOCKER_ID", "testdaemon")
+        return Path("/tmp/artex-ymh-update-locks") / daemon / "docker-update.lock"
 
     def legacy_lock_path(self, env, checkout):
         key = self.shell_out(
@@ -290,14 +298,16 @@ class DockerUpdateTests(unittest.TestCase):
         peak = int((self.root / "peak").read_text().strip())
         self.assertEqual(peak, 1)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        sequence = [
+        info = ["info", "--format", "{{.ID}}"]
+        body = [
             ["compose", "version"],
             ["preflight"],
             ["compose", "build", "artex"],
             ["compose", "up", "-d", "--no-deps", "--wait", "--wait-timeout", "120", "postgres"],
             ["compose", "up", "-d", "--no-deps", "--no-build", "--pull", "never", "artex"],
         ]
-        self.assertEqual(calls, sequence + sequence)
+        self.assertEqual([call for call in calls if call == info], [info, info])
+        self.assertEqual([call for call in calls if call != info], body + body)
 
     def test_lock_file_is_private_and_existing_contents_survive(self):
         lock = self.daemon_lock_path(self.env)
@@ -311,7 +321,7 @@ class DockerUpdateTests(unittest.TestCase):
         self.assertEqual(lock.read_text(), "keep-new\n")
         self.assertEqual(legacy.read_text(), "keep-old\n")
         self.assertFalse(lock.is_symlink())
-        self.assertEqual(lock.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(lock.parent.stat().st_mode & 0o777, 0o777)
         self.assertEqual(lock.parent.stat().st_uid, os.getuid())
         self.assertEqual(list(Path(self.env["TMPDIR"]).glob("artex-docker-update*")), [legacy])
 
@@ -343,7 +353,7 @@ class DockerUpdateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(["preflight"], calls)
         lock_dir = self.daemon_lock_path(self.env).parent
-        self.assertEqual(lock_dir.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(lock_dir.stat().st_mode & 0o777, 0o777)
 
     def test_lock_refuses_symlink_without_truncating_the_target(self):
         lock = self.daemon_lock_path(self.env)
@@ -374,6 +384,8 @@ class DockerUpdateTests(unittest.TestCase):
             "find",
             "id",
             "chmod",
+            "date",
+            "tr",
             "mkdir",
             "cat",
             "rm",
@@ -404,6 +416,11 @@ class DockerUpdateTests(unittest.TestCase):
         # A live process standing in for the waiter that won the stale lock.
         winner = subprocess.Popen(["sleep", "30"])
         self.addCleanup(winner.kill)
+        # The live owner publishes starttime before its PID is visible. The
+        # stub reveals that PID only after the first stale read.
+        winner_stat = Path(f"/proc/{winner.pid}/stat").read_text().split(")", 1)[1].split()
+        (hold / "starttime").write_text(winner_stat[19] + "\n")
+        (hold / "started").write_text(f"{int(time.time())}\n")
         # The first read of the lock PID returns the dead owner; right after
         # it, the other waiter takes the lock over (its PID is now there).
         stub = self.root / "bin" / "cat"
@@ -496,8 +513,7 @@ class DockerUpdateTests(unittest.TestCase):
                 calls = [json.loads(line) for line in self.log.read_text().splitlines()]
                 self.assertTrue(any(call[:3] == ["compose", "build", "artex"] for call in calls))
                 self.assertFalse(any("up" in call for call in calls), calls)
-                state = Path(env["HOME"]) / ".local" / "state"
-                self.assertEqual(list(state.rglob("*.lock.d")), [])
+                self.assertFalse(Path(str(self.daemon_lock_path(env)) + ".d").exists())
 
     def hold_build(self, env):
         env = env.copy()
@@ -581,6 +597,69 @@ class DockerUpdateTests(unittest.TestCase):
         self.assertTrue(reaper.is_dir())
         self.assertFalse((reaper / "pid").exists())
         self.assertFalse(any(call[:2] == ["compose", "build"] for call in calls))
+
+    def test_different_homes_and_host_spellings_share_one_daemon_lock(self):
+        first = self.hold_build(self.env)
+        second = self.hold_build(self.env)
+        second["HOME"] = str(self.root / "other-home")
+        first["DOCKER_HOST"] = "unix://localhost/var/run/docker.sock"
+        second["DOCKER_HOST"] = "tcp://127.0.0.1:2375"
+        second["DOCKER_CONTEXT"] = "remote"
+        self.env = first
+        self.assert_serialized((first, second), ("update.sh", "update.sh"))
+        lock = self.daemon_lock_path(first)
+        self.assertEqual(lock, self.daemon_lock_path(second))
+        self.assertFalse(str(lock).startswith(str(first["HOME"])))
+        self.assertFalse(str(lock).startswith(str(second["HOME"])))
+
+    def test_different_daemon_ids_do_not_share_the_lock(self):
+        first = self.hold_build(self.env)
+        second = self.hold_build(self.env)
+        second["TEST_DOCKER_ID"] = self.root.name + "other"
+        self.addCleanup(
+            shutil.rmtree,
+            Path("/tmp/artex-ymh-update-locks") / second["TEST_DOCKER_ID"],
+            True,
+        )
+        self.env = first
+        procs = [
+            subprocess.Popen(
+                ["bash", str(self.root / "update.sh")],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                cwd=self.root,
+            )
+            for env in (first, second)
+        ]
+        for proc in procs:
+            proc.stdin.write("1\n")
+            proc.stdin.flush()
+        outputs = [proc.communicate(timeout=15) for proc in procs]
+        for proc, (stdout, stderr) in zip(procs, outputs):
+            self.assertEqual(proc.returncode, 0, stderr)
+            self.assertIn("更新完成", stdout)
+        self.assertEqual(int((self.root / "peak").read_text().strip()), 2)
+        self.assertNotEqual(self.daemon_lock_path(first), self.daemon_lock_path(second))
+
+    def test_reused_pid_does_not_block_the_directory_lock(self):
+        env = self.env.copy()
+        env["PATH"] = self.path_without_flock()
+        hold = Path(str(self.daemon_lock_path(env)) + ".d")
+        hold.parent.mkdir(parents=True)
+        hold.parent.chmod(0o777)
+        hold.mkdir()
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: holder.poll() is None and holder.kill())
+        (hold / "pid").write_text(f"{holder.pid}\n")
+        (hold / "starttime").write_text("1\n")
+        (hold / "started").write_text(f"{int(time.time())}\n")
+        result, calls = self.run_script(env=env, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(call[:3] == ["compose", "build", "artex"] for call in calls))
+        self.assertFalse(hold.exists() and (hold / "pid").read_text().strip() == str(holder.pid))
 
     def test_lock_directory_without_pid_stops(self):
         hold = Path(str(self.daemon_lock_path(self.env)) + ".d")
