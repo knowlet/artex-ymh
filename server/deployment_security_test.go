@@ -47,7 +47,7 @@ func deploymentRun(t *testing.T, dir, bin, bash, script, input string, args ...s
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bash, append([]string{filepath.Join(dir, script)}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+bin, "ARTEX_PG_DSN=", "PGPASSWORD=", "ARTEX_TEST_SQL_CAPTURE="+filepath.Join(dir, "sql"), "ARTEX_TEST_PASSWORD_CAPTURE="+filepath.Join(dir, "password"))
+	cmd.Env = append(os.Environ(), "PATH="+bin, "HOME="+dir, "ARTEX_PG_DSN=", "PGPASSWORD=", "ARTEX_TEST_SQL_CAPTURE="+filepath.Join(dir, "sql"), "ARTEX_TEST_PASSWORD_CAPTURE="+filepath.Join(dir, "password"))
 	cmd.Stdin = strings.NewReader(input)
 	return cmd.CombinedOutput()
 }
@@ -81,15 +81,17 @@ func installerDockerStub(t *testing.T, dir, bin string) {
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(body), 0700); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(filepath.Join("..", "scripts", "check_postgres_version.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Mkdir(filepath.Join(dir, "scripts"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "scripts", "check_postgres_version.sh"), raw, 0600); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"check_postgres_version.sh", "docker_update_lock.sh"} {
+		raw, err := os.ReadFile(filepath.Join("..", "scripts", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "scripts", name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -115,7 +117,7 @@ func TestInstallerCreatesPrivateConfigOverExistingPublicFile(t *testing.T) {
 }
 
 func TestInstallerCreatesPrivateDotEnv(t *testing.T) {
-	dir, bin, bash := deploymentFixture(t, "install.sh", "bash", "dirname", "cp", "chmod", "head", "base64", "tr", "sed", "rm")
+	dir, bin, bash := deploymentFixture(t, "install.sh", "bash", "dirname", "cp", "chmod", "head", "base64", "tr", "sed", "rm", "mkdir", "find", "id", "cksum", "awk", "cat")
 	installerDockerStub(t, dir, bin)
 	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte("POSTGRES_PASSWORD=\nANTHROPIC_API_KEY=\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -133,7 +135,7 @@ func TestInstallerCreatesPrivateDotEnv(t *testing.T) {
 }
 
 func TestInstallerTightensExistingDotEnv(t *testing.T) {
-	dir, bin, bash := deploymentFixture(t, "install.sh", "bash", "dirname", "chmod")
+	dir, bin, bash := deploymentFixture(t, "install.sh", "bash", "dirname", "chmod", "mkdir", "find", "id", "cksum", "awk", "cat", "rm")
 	installerDockerStub(t, dir, bin)
 	path := filepath.Join(dir, ".env")
 	if err := os.WriteFile(path, []byte("POSTGRES_PASSWORD=synthetic-secret\n"), 0644); err != nil {

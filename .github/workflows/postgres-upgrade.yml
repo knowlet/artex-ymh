@@ -9,6 +9,7 @@ on:
       - 'update.sh'
       - 'db/schema.sql'
       - 'scripts/check_postgres_version.sh'
+      - 'scripts/docker_update_lock.sh'
       - 'scripts/test_check_postgres_version.py'
       - 'scripts/test_update_docker.py'
       - 'scripts/test_postgres_upgrade.sh'
@@ -38,7 +39,8 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Validate shell syntax and preflight/update behavior
         run: |
-          bash -n install.sh update.sh scripts/check_postgres_version.sh scripts/test_postgres_upgrade.sh
+          bash -n install.sh update.sh scripts/check_postgres_version.sh scripts/docker_update_lock.sh scripts/test_postgres_upgrade.sh
+          test "$(git ls-files -s update.sh | awk '{print $1}')" = 100755
           python3 -m unittest discover -s scripts -p 'test_check_postgres_version.py' -v
           python3 -m unittest discover -s scripts -p 'test_update_docker.py' -v
       - name: Rehearse against real PostgreSQL 16 and 17 volumes

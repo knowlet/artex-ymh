@@ -72,6 +72,10 @@ class DockerUpdateTests(unittest.TestCase):
             'printf \'["preflight"]\\n\' >> "$TEST_CALLS"\n'
             'exit "${TEST_PREFLIGHT_EXIT:-0}"\n'
         )
+        shutil.copyfile(
+            ROOT / "scripts" / "docker_update_lock.sh",
+            self.root / "scripts" / "docker_update_lock.sh",
+        )
         self.env = os.environ.copy()
         self.env.update(
             PATH=f"{self.root / 'bin'}:{self.env['PATH']}",
@@ -79,7 +83,10 @@ class DockerUpdateTests(unittest.TestCase):
             TEST_PREFLIGHT_EXIT="0",
             TEST_DOCKER_FAIL="",
             TMPDIR=str(self.root / "tmp"),
-            XDG_STATE_HOME=str(self.root / "state"),
+            HOME=str(self.root / "home"),
+            # Present, and different from HOME, so a lock that still follows
+            # XDG_STATE_HOME fails the shared-lock tests below.
+            XDG_STATE_HOME=str(self.root / "ignored-xdg"),
         )
         (self.root / "tmp").mkdir()
 
@@ -218,20 +225,20 @@ class DockerUpdateTests(unittest.TestCase):
         ).strip()
 
     def daemon_scope(self, env):
-        host = env.get("DOCKER_HOST", "")
+        host = env.get("DOCKER_HOST", "").rstrip("/")
         context = env.get("DOCKER_CONTEXT", "")
-        if host:
-            return host
-        if context and context != "default":
-            return f"context:{context}"
-        return "default"
+        if host in ("", "unix:///var/run/docker.sock"):
+            if context and context != "default":
+                return f"context:{context}"
+            return "default"
+        return host
 
     def daemon_lock_path(self, env):
         key = self.shell_out(
             "printf '%s' \"$1\" | cksum | awk '{print $1}'",
             f"artex-ymh:local|{self.daemon_scope(env)}",
         )
-        return Path(env["XDG_STATE_HOME"]) / "artex-ymh" / f"docker-update.{key}.lock"
+        return Path(env["HOME"]) / ".local" / "state" / "artex-ymh" / f"docker-update.{key}.lock"
 
     def legacy_lock_path(self, env, checkout):
         key = self.shell_out(
@@ -249,6 +256,10 @@ class DockerUpdateTests(unittest.TestCase):
             "#!/usr/bin/env bash\n"
             "printf '[\"preflight\"]\\n' >> \"$TEST_CALLS\"\n"
             "exit \"${TEST_PREFLIGHT_EXIT:-0}\"\n"
+        )
+        shutil.copyfile(
+            ROOT / "scripts" / "docker_update_lock.sh",
+            root / "scripts" / "docker_update_lock.sh",
         )
 
     def test_different_checkouts_share_one_daemon_image_lock(self):
@@ -485,8 +496,102 @@ class DockerUpdateTests(unittest.TestCase):
                 calls = [json.loads(line) for line in self.log.read_text().splitlines()]
                 self.assertTrue(any(call[:3] == ["compose", "build", "artex"] for call in calls))
                 self.assertFalse(any("up" in call for call in calls), calls)
-                state = Path(env["XDG_STATE_HOME"])
+                state = Path(env["HOME"]) / ".local" / "state"
                 self.assertEqual(list(state.rglob("*.lock.d")), [])
+
+    def hold_build(self, env):
+        env = env.copy()
+        env["TEST_HOLD_BUILD"] = "0.6"
+        env["TEST_CRITICAL"] = str(self.root / "critical")
+        env["TEST_PEAK"] = str(self.root / "peak")
+        return env
+
+    def assert_serialized(self, envs, scripts):
+        procs = [
+            subprocess.Popen(
+                ["bash", str(self.root / script)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                cwd=self.root,
+            )
+            for env, script in zip(envs, scripts)
+        ]
+        for proc in procs:
+            proc.stdin.write("1\n")
+            proc.stdin.flush()
+        outputs = [proc.communicate(timeout=20) for proc in procs]
+        for proc, (stdout, stderr) in zip(procs, outputs):
+            self.assertEqual(proc.returncode, 0, stderr)
+            self.assertTrue("更新完成" in stdout or "启动完成" in stdout, stdout)
+        peak = int((self.root / "peak").read_text().strip())
+        self.assertEqual(peak, 1)
+
+    def test_update_script_stays_executable(self):
+        recorded = subprocess.check_output(
+            ["git", "ls-files", "-s", "--", "update.sh"],
+            cwd=ROOT,
+            text=True,
+        )
+        self.assertTrue(recorded.startswith("100755 "), recorded)
+
+    def test_flock_and_directory_callers_share_one_lock(self):
+        with_flock = self.hold_build(self.env)
+        without = self.hold_build(self.env)
+        without["PATH"] = self.path_without_flock()
+        self.env = with_flock
+        self.assert_serialized((with_flock, without), ("update.sh", "update.sh"))
+
+    def test_default_socket_spelling_shares_the_lock(self):
+        plain = self.hold_build(self.env)
+        explicit = self.hold_build(self.env)
+        explicit["DOCKER_HOST"] = "unix:///var/run/docker.sock/"
+        self.env = plain
+        self.assert_serialized((plain, explicit), ("update.sh", "update.sh"))
+
+    def test_xdg_state_home_does_not_split_the_lock(self):
+        first = self.hold_build(self.env)
+        second = self.hold_build(self.env)
+        second["XDG_STATE_HOME"] = str(self.root / "other-xdg")
+        self.env = first
+        self.assert_serialized((first, second), ("update.sh", "update.sh"))
+
+    def test_install_and_update_share_the_image_lock(self):
+        env = self.hold_build(self.env)
+        self.env = env
+        self.assert_serialized((env, env), ("update.sh", "install.sh"))
+
+    def test_reaper_without_pid_stops_instead_of_spinning(self):
+        hold = Path(str(self.daemon_lock_path(self.env)) + ".d")
+        hold.parent.mkdir(parents=True)
+        hold.parent.chmod(0o700)
+        hold.mkdir()
+        (hold / "pid").write_text(f"{self.dead_pid()}\n")
+        reaper = Path(str(hold) + ".reap")
+        reaper.mkdir()
+        started = time.monotonic()
+        result, calls = self.run_script(timeout=20)
+        elapsed = time.monotonic() - started
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("没有进程号", result.stderr)
+        self.assertGreaterEqual(elapsed, 3)
+        self.assertLess(elapsed, 15)
+        self.assertTrue(reaper.is_dir())
+        self.assertFalse((reaper / "pid").exists())
+        self.assertFalse(any(call[:2] == ["compose", "build"] for call in calls))
+
+    def test_lock_directory_without_pid_stops(self):
+        hold = Path(str(self.daemon_lock_path(self.env)) + ".d")
+        hold.parent.mkdir(parents=True)
+        hold.parent.chmod(0o700)
+        hold.mkdir()
+        result, calls = self.run_script(timeout=20)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("更新锁目录没有进程号", result.stderr)
+        self.assertTrue(hold.is_dir())
+        self.assertFalse(any(call[:2] == ["compose", "build"] for call in calls))
 
 
 if __name__ == "__main__":

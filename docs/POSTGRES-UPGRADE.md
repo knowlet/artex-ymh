@@ -35,9 +35,12 @@ which is not compatible with this version 17.12.
   volume 改掛到 `/var/lib/postgresql`，那會讓 16／17 的叢集檔落在伺服器尋找的資料目錄之外。
 - `bash scripts/check_postgres_version.sh` 比對選定映像與資料目錄的 `PG_VERSION`，
   不會啟動 PostgreSQL 或執行版本轉換。掛載存在時，預檢拒絕不在該掛載點上的 `PGDATA`。
-  `PGDATA` 若與 `/var/lib/postgresql/data` 不同，標準目錄裡已有 `PG_VERSION`，或目錄非空
-  但沒有 `PG_VERSION`，也都會拒絕，避免不完整的舊目錄被當成可忽略。安裝／更新腳本會使用
-  此預檢；手動執行 Compose 時也應先執行。版本不符時先處理資料與映像的對應，再啟動服務。
+  比較的是解析後的實體路徑：`/var/lib/postgresql/data/../data` 或指向該目錄的符號連結
+  就是標準目錄，不是第二個叢集。`PGDATA` 若在標準目錄裡面（例如
+  `/var/lib/postgresql/data/pgdata`），父目錄只因為放著這條路徑而非空時可以通過；
+  父目錄本身有 `PG_VERSION`，或有這條路徑以外的項目，仍會拒絕。`PGDATA` 完全不在
+  標準目錄裡時，標準目錄已有叢集或非空也會拒絕。安裝／更新腳本會使用此預檢；手動執行
+  Compose 時也應先執行。版本不符時先處理資料與映像的對應，再啟動服務。
 - `POSTGRES_IMAGE` 只選擇伺服器映像，並不代表同時執行 PostgreSQL 大版本升級。
 
 預檢依照 Compose 解析後的映像、掛載與 `PGDATA` 工作；本指南使用倉庫的標準 16／17

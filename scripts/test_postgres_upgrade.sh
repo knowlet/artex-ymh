@@ -15,7 +15,8 @@ project17="artex-pg-upgrade-${suffix,,}-17"
 image_alias="artex-pg-upgrade-test:${suffix,,}"
 project_mount="artex-pg-upgrade-${suffix,,}-mount"
 project_partial="artex-pg-upgrade-${suffix,,}-partial"
-projects=("$project16" "$project17" "$project_mount" "$project_partial")
+project_sub="artex-pg-upgrade-${suffix,,}-sub"
+projects=("$project16" "$project17" "$project_mount" "$project_partial" "$project_sub")
 
 # Explicit files exclude the operator's default override; the forced volume name
 # and project names make cleanup independent of any deployed ARTEX instance.
@@ -253,4 +254,22 @@ output="$(< "$TEST_DIR/partial.log")"
 [[ "$(fingerprint)" == "$partial_before" ]] || fail 'preflight changed the partial volume'
 export COMPOSE_FILE="$base_compose_files"
 
-printf '%s\n' 'PASS: fresh install, mounted PGDATA, legacy directory guard, both major mismatch directions, PG16 recovery, schema replay, and isolated PG16-to-PG17 restore.'
+printf '%s\n' '10. A cluster created under the configured PGDATA subdirectory stays acceptable.'
+export COMPOSE_PROJECT_NAME="$project_sub"
+export POSTGRES_IMAGE=
+cat > "$TEST_DIR/compose.sub.yml" <<'YAML'
+services:
+  postgres:
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+YAML
+export COMPOSE_FILE="$base_compose_files:$TEST_DIR/compose.sub.yml"
+check_version
+start_postgres
+[[ "$(sql 'SHOW server_version_num')" == 16???? ]] || fail 'subdirectory PGDATA did not start PG16'
+[[ "$(volume_read 'cat /source/pgdata/PG_VERSION')" == 16 ]] || fail 'subdirectory cluster is not on the volume'
+check_version
+docker compose stop postgres
+export COMPOSE_FILE="$base_compose_files"
+
+printf '%s\n' 'PASS: fresh install, mounted PGDATA, legacy directory guard, both major mismatch directions, PG16 recovery, schema replay, isolated PG16-to-PG17 restore, and a subdirectory cluster.'

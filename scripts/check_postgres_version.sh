@@ -103,9 +103,9 @@ esac
 # A textual prefix is not enough: data/../other and a symlink or nested mount
 # under the mount point can be backed by a different filesystem.
 volume_mount=/var/lib/postgresql/data
+resolved=$(resolve_path "$data_dir") || fail "Cannot resolve PGDATA $data_dir."
+volume_phys=$(resolve_path "$volume_mount") || fail "Cannot resolve the mounted volume $volume_mount."
 if awk -v mp="$volume_mount" '$5 == mp { found = 1 } END { exit !found }' /proc/self/mountinfo; then
-  resolved=$(resolve_path "$data_dir") || fail "Cannot resolve PGDATA $data_dir."
-  volume_phys=$(resolve_path "$volume_mount") || fail "Cannot resolve the mounted volume $volume_mount."
   data_mount=$(mount_covering "$resolved") || fail "Cannot determine the mount backing PGDATA $data_dir."
   volume_backing=$(mount_covering "$volume_phys") || fail "Cannot determine the mount backing $volume_mount."
   if [ "$data_mount" != "$volume_backing" ]; then
@@ -113,18 +113,74 @@ if awk -v mp="$volume_mount" '$5 == mp { found = 1 } END { exit !found }' /proc/
   fi
 fi
 
-# A changed PGDATA must not hide the standard volume. A partial directory
-# with no PG_VERSION is still existing data, not an unused mount.
-legacy_dir=$volume_mount
-if [ "$data_dir" != "$legacy_dir" ] && [ -e "$legacy_dir" ]; then
-  if [ -e "$legacy_dir/PG_VERSION" ]; then
-    fail "Existing cluster found at $legacy_dir, but PGDATA is $data_dir. Refusing to initialize another cluster."
+# Reject a standard directory that is not the configured cluster. Compare the
+# physical paths: /var/lib/postgresql/data/../data and a symlink to that
+# directory are the same cluster, not a second one. A PGDATA inside the
+# volume (…/data/pgdata) makes the parent nonempty; that parent is the
+# cluster's ancestor, not unrelated data, unless it has its own PG_VERSION
+# or any entry other than the path down to PGDATA.
+reject_legacy_contents() {
+  dir=$1
+  shown=$2
+  if [ -e "$dir/PG_VERSION" ]; then
+    fail "Existing cluster found at $dir, but PGDATA is $shown. Refusing to initialize another cluster."
   fi
-  if [ ! -d "$legacy_dir" ]; then
-    fail "Data path $legacy_dir exists but is not a directory, while PGDATA is $data_dir."
+  if [ ! -d "$dir" ]; then
+    fail "Data path $dir exists but is not a directory, while PGDATA is $shown."
   fi
-  legacy_entries=$(ls -A "$legacy_dir") || fail "Cannot inspect $legacy_dir."
-  [ -z "$legacy_entries" ] || fail "Nonempty data directory at $legacy_dir has no PG_VERSION, but PGDATA is $data_dir. Refusing to initialize another cluster."
+  hidden_entries=$(ls -A "$dir") || fail "Cannot inspect $dir."
+  [ -z "$hidden_entries" ] || fail "Nonempty data directory at $dir has no PG_VERSION, but PGDATA is $shown. Refusing to initialize another cluster."
+}
+
+reject_legacy_siblings() {
+  dir=$1
+  seg=$2
+  shown=$3
+  hidden_other=
+  if [ ! -e "$dir" ]; then
+    return 0
+  fi
+  if [ -e "$dir/PG_VERSION" ]; then
+    fail "Existing cluster found at $dir, but PGDATA is $shown. Refusing to initialize another cluster."
+  fi
+  if [ ! -d "$dir" ]; then
+    fail "Data path $dir exists but is not a directory, while PGDATA is $shown."
+  fi
+  hidden_entries=$(ls -A "$dir") || fail "Cannot inspect $dir."
+  while IFS= read -r hidden_entry; do
+    [ -n "$hidden_entry" ] || continue
+    [ "$hidden_entry" = "$seg" ] && continue
+    hidden_other=1
+    break
+  done <<EOF
+$hidden_entries
+EOF
+  [ -z "$hidden_other" ] || fail "Nonempty data directory at $dir has no PG_VERSION, but PGDATA is $shown. Refusing to initialize another cluster."
+}
+
+if [ "$resolved" != "$volume_phys" ] && [ -e "$volume_phys" ]; then
+  case "$resolved" in
+    "$volume_phys"/*)
+      hidden_cursor=$volume_phys
+      hidden_rest=${resolved#"$volume_phys"/}
+      while [ -n "$hidden_rest" ]; do
+        hidden_seg=${hidden_rest%%/*}
+        case "$hidden_rest" in
+          */*) hidden_rest=${hidden_rest#*/} ;;
+          *) hidden_rest= ;;
+        esac
+        reject_legacy_siblings "$hidden_cursor" "$hidden_seg" "$data_dir"
+        if [ "$hidden_cursor" = / ]; then
+          hidden_cursor=/$hidden_seg
+        else
+          hidden_cursor=$hidden_cursor/$hidden_seg
+        fi
+      done
+      ;;
+    *)
+      reject_legacy_contents "$volume_phys" "$data_dir"
+      ;;
+  esac
 fi
 
 if [ -e "$data_dir/PG_VERSION" ]; then

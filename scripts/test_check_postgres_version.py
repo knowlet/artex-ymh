@@ -287,6 +287,79 @@ exit "$status"
         self.assertIn("/var/lib/postgresql/data/escape", result.stderr)
         self.assertNotIn("empty PGDATA", result.stdout)
 
+    def test_dotdot_alias_of_existing_cluster_matches(self):
+        def populate(volume):
+            (volume / "PG_VERSION").write_text("16\n")
+            (volume / "sentinel").write_bytes(b"existing")
+
+        result = self.run_with_mounted_volume(
+            "/var/lib/postgresql/data/../data", populate
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("existing PG16 cluster matches server 16.12", result.stdout)
+
+    def test_dotdot_alias_still_rejects_major_mismatch(self):
+        self.env["TEST_POSTGRES_VERSION"] = "postgres (PostgreSQL) 17.12"
+
+        def populate(volume):
+            (volume / "PG_VERSION").write_text("16\n")
+
+        result = self.run_with_mounted_volume(
+            "/var/lib/postgresql/data/../data", populate
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Data directory uses PostgreSQL 16", result.stderr)
+        self.assertNotIn("Existing cluster found", result.stderr)
+
+    def test_symlink_to_the_mounted_cluster_matches(self):
+        def populate(volume):
+            (volume / "PG_VERSION").write_text("16\n")
+
+        result = self.run_with_mounted_volume(
+            "/var/lib/postgresql/data/alias",
+            populate,
+            "ln -s /var/lib/postgresql/data /var/lib/postgresql/data/alias\n",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("existing PG16 cluster matches server 16.12", result.stdout)
+
+    def test_missing_subdirectory_on_empty_volume_can_initialize(self):
+        result = self.run_with_mounted_volume(
+            "/var/lib/postgresql/data/pgdata", lambda volume: None
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("empty PGDATA", result.stdout)
+
+    def test_cluster_in_configured_subdirectory_is_accepted(self):
+        def populate(volume):
+            cluster = volume / "pgdata"
+            cluster.mkdir()
+            (cluster / "PG_VERSION").write_text("16\n")
+            (cluster / "sentinel").write_bytes(b"existing")
+
+        result = self.run_with_mounted_volume(
+            "/var/lib/postgresql/data/pgdata", populate
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("existing PG16 cluster matches server 16.12", result.stdout)
+
+    def test_sibling_beside_configured_subdirectory_is_rejected(self):
+        def populate(volume):
+            cluster = volume / "pgdata"
+            cluster.mkdir()
+            (cluster / "PG_VERSION").write_text("16\n")
+            (volume / "partial.dat").write_text("unrelated")
+
+        result = self.run_with_mounted_volume(
+            "/var/lib/postgresql/data/pgdata", populate
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "Nonempty data directory at /var/lib/postgresql/data has no PG_VERSION",
+            result.stderr,
+        )
+        self.assertIn("PGDATA is /var/lib/postgresql/data/pgdata", result.stderr)
+
     def test_nested_mount_is_not_the_volume(self):
         result = self.run_with_mounted_volume(
             "/var/lib/postgresql/data/nested",

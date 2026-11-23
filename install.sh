@@ -43,6 +43,12 @@ install_docker(){
     chmod 600 .env
     info "沿用已存在的 .env"
   fi
+  # Hold the updater's lock before preflight, through the image build, until
+  # this process exits (after the final up). An install that builds
+  # artex-ymh:local while an update is in --no-build would otherwise publish
+  # the other checkout's image.
+  source scripts/docker_update_lock.sh
+  acquire_update_lock
   # 重跑安装也可能遇到已有 pgdata；必须先验证，不能隐式升级数据库大版本。
   info "检查 PostgreSQL 数据目录与目标镜像的大版本…"
   bash scripts/check_postgres_version.sh
