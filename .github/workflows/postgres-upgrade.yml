@@ -1,0 +1,47 @@
+name: PostgreSQL upgrade safety
+
+on:
+  pull_request:
+    paths:
+      - 'docker-compose.yml'
+      - '.env.example'
+      - 'install.sh'
+      - 'update.sh'
+      - 'db/schema.sql'
+      - 'scripts/check_postgres_version.sh'
+      - 'scripts/docker_update_lock.sh'
+      - 'scripts/test_check_postgres_version.py'
+      - 'scripts/test_update_docker.py'
+      - 'scripts/test_postgres_upgrade.sh'
+      - 'docs/POSTGRES-UPGRADE.md'
+      - '.dockerignore'
+      - '.github/workflows/postgres-upgrade.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-upgrade-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  existing-volume-upgrade:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Allow the unprivileged mount namespaces the preflight tests use
+        # Ubuntu 24.04 runners restrict unprivileged user namespaces through
+        # AppArmor, so `unshare --user --mount` cannot write uid_map there.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Validate shell syntax and preflight/update behavior
+        run: |
+          bash -n install.sh update.sh scripts/check_postgres_version.sh scripts/docker_update_lock.sh scripts/test_postgres_upgrade.sh
+          test "$(git ls-files -s update.sh | awk '{print $1}')" = 100755
+          python3 -m unittest discover -s scripts -p 'test_check_postgres_version.py' -v
+          python3 -m unittest discover -s scripts -p 'test_update_docker.py' -v
+      - name: Rehearse against real PostgreSQL 16 and 17 volumes
+        run: bash scripts/test_postgres_upgrade.sh

@@ -47,7 +47,7 @@ func deploymentRun(t *testing.T, dir, bin, bash, script, input string, args ...s
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bash, append([]string{filepath.Join(dir, script)}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+bin, "ARTEX_PG_DSN=", "PGPASSWORD=", "ARTEX_TEST_SQL_CAPTURE="+filepath.Join(dir, "sql"), "ARTEX_TEST_PASSWORD_CAPTURE="+filepath.Join(dir, "password"))
+	cmd.Env = append(os.Environ(), "PATH="+bin, "HOME="+dir, "ARTEX_PG_DSN=", "PGPASSWORD=", "ARTEX_TEST_SQL_CAPTURE="+filepath.Join(dir, "sql"), "ARTEX_TEST_PASSWORD_CAPTURE="+filepath.Join(dir, "password"))
 	cmd.Stdin = strings.NewReader(input)
 	return cmd.CombinedOutput()
 }
@@ -75,6 +75,26 @@ func installerPythonStub(t *testing.T, bin string) {
 	}
 }
 
+func installerDockerStub(t *testing.T, dir, bin string) {
+	t.Helper()
+	body := "#!/bin/sh\nif [ \"$1\" = info ]; then\n  printf '%s\\n' testdaemon\n  exit 0\nfi\nif [ \"$1\" = image ]; then\n  exit 0\nfi\nif [ \"$1\" = run ]; then\n  printf '%s\\n' testlockid\n  exit 0\nfi\nif [ \"$1\" = container ] || [ \"$1\" = inspect ]; then\n  printf '%s\\n' true\n  exit 0\nfi\nif [ \"$1\" = rm ]; then\n  exit 0\nfi\nif [ \"$1\" = compose ] && [ \"$2\" = config ]; then\n  printf '%s\\n' '{\"services\":{\"postgres\":{\"volumes\":[{\"type\":\"volume\",\"source\":\"pgdata\",\"target\":\"/var/lib/postgresql/data\"}]}},\"volumes\":{\"pgdata\":{\"name\":\"fixture_pgdata\"}}}'\n  exit 0\nfi\nif [ \"$1\" = compose ] && [ \"$2\" = run ]; then\n  : > postgres-preflight-ran\nfi\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "scripts"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"check_postgres_version.sh", "docker_update_lock.sh"} {
+		raw, err := os.ReadFile(filepath.Join("..", "scripts", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "scripts", name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestInstallerCreatesPrivateConfigOverExistingPublicFile(t *testing.T) {
 	dir, bin, bash := deploymentFixture(t, "install.sh", "dirname", "mktemp", "cat", "chmod", "mv")
 	installerPythonStub(t, bin)
@@ -97,10 +117,8 @@ func TestInstallerCreatesPrivateConfigOverExistingPublicFile(t *testing.T) {
 }
 
 func TestInstallerCreatesPrivateDotEnv(t *testing.T) {
-	dir, bin, bash := deploymentFixture(t, "install.sh", "dirname", "cp", "chmod", "head", "base64", "tr", "sed", "rm")
-	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
+	dir, bin, bash := deploymentFixture(t, "install.sh", "bash", "dirname", "cp", "chmod", "head", "base64", "tr", "sed", "rm", "mkdir", "find", "id", "cksum", "awk", "cat", "date", "readlink", "python3")
+	installerDockerStub(t, dir, bin)
 	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte("POSTGRES_PASSWORD=\nANTHROPIC_API_KEY=\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -111,13 +129,14 @@ func TestInstallerCreatesPrivateDotEnv(t *testing.T) {
 	if err != nil || st.Mode().Perm() != 0600 {
 		t.Fatalf("env permissions: %v %v", st, err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "postgres-preflight-ran")); err != nil {
+		t.Fatalf("installer did not run PostgreSQL preflight: %v", err)
+	}
 }
 
 func TestInstallerTightensExistingDotEnv(t *testing.T) {
-	dir, bin, bash := deploymentFixture(t, "install.sh", "dirname", "chmod")
-	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
+	dir, bin, bash := deploymentFixture(t, "install.sh", "bash", "dirname", "chmod", "mkdir", "find", "id", "cksum", "awk", "cat", "rm", "tr", "date", "readlink", "python3")
+	installerDockerStub(t, dir, bin)
 	path := filepath.Join(dir, ".env")
 	if err := os.WriteFile(path, []byte("POSTGRES_PASSWORD=synthetic-secret\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -128,6 +147,9 @@ func TestInstallerTightensExistingDotEnv(t *testing.T) {
 	st, err := os.Stat(path)
 	if err != nil || st.Mode().Perm() != 0600 {
 		t.Fatalf("existing env permissions: %v %v", st, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "postgres-preflight-ran")); err != nil {
+		t.Fatalf("installer did not run PostgreSQL preflight: %v", err)
 	}
 }
 

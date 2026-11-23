@@ -1,14 +1,24 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    # Keep existing PG16 volumes readable during ordinary ARTEX updates.
+    # PG17 requires an explicit migration to a new volume; see docs/POSTGRES-UPGRADE.md.
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-artex}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-artex}
+      # Official PostgreSQL 18+ images default PGDATA to
+      # /var/lib/postgresql/<major>/docker, which this mount does not cover.
+      # Keep the cluster on the named volume. Existing PG16/PG17 files already
+      # live at this path; do not move the mount to /var/lib/postgresql.
+      PGDATA: /var/lib/postgresql/data
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # TCP, not the Unix socket. The image's temporary init server listens only
+    # on the socket, so a socket pg_isready succeeds before the real postmaster
+    # is accepting connections.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-artex} -d ${POSTGRES_DB:-artex}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-artex} -d ${POSTGRES_DB:-artex}"]
       interval: 5s
       timeout: 3s
       retries: 10
