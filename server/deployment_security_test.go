@@ -77,7 +77,7 @@ func installerPythonStub(t *testing.T, bin string) {
 
 func installerDockerStub(t *testing.T, dir, bin string) {
 	t.Helper()
-	body := "#!/bin/sh\nif [ \"$1\" = info ]; then\n  printf '%s\\n' testdaemon\n  exit 0\nfi\nif [ \"$1\" = network ] && [ \"$2\" = create ]; then\n  printf '%s\\n' testnetid\n  exit 0\nfi\nif [ \"$1\" = network ]; then\n  exit 0\nfi\nif [ \"$1\" = compose ] && [ \"$2\" = config ]; then\n  printf '%s\\n' '{\"services\":{\"postgres\":{\"volumes\":[{\"type\":\"volume\",\"source\":\"pgdata\",\"target\":\"/var/lib/postgresql/data\"}]}},\"volumes\":{\"pgdata\":{\"name\":\"fixture_pgdata\"}}}'\n  exit 0\nfi\nif [ \"$1\" = compose ] && [ \"$2\" = run ]; then\n  : > postgres-preflight-ran\nfi\nexit 0\n"
+	body := "#!/bin/sh\nif [ \"$1\" = info ]; then\n  printf '%s\\n' testdaemon\n  exit 0\nfi\nif [ \"$1\" = image ]; then\n  exit 0\nfi\nif [ \"$1\" = run ]; then\n  printf '%s\\n' testlockid\n  exit 0\nfi\nif [ \"$1\" = container ] || [ \"$1\" = inspect ]; then\n  printf '%s\\n' true\n  exit 0\nfi\nif [ \"$1\" = rm ]; then\n  exit 0\nfi\nif [ \"$1\" = compose ] && [ \"$2\" = config ]; then\n  printf '%s\\n' '{\"services\":{\"postgres\":{\"volumes\":[{\"type\":\"volume\",\"source\":\"pgdata\",\"target\":\"/var/lib/postgresql/data\"}]}},\"volumes\":{\"pgdata\":{\"name\":\"fixture_pgdata\"}}}'\n  exit 0\nfi\nif [ \"$1\" = compose ] && [ \"$2\" = run ]; then\n  : > postgres-preflight-ran\nfi\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(body), 0700); err != nil {
 		t.Fatal(err)
 	}

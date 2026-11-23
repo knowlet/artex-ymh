@@ -58,66 +58,103 @@ class DockerUpdateTests(unittest.TestCase):
             "    path.mkdir(parents=True, exist_ok=True)\n"
             "    (path / 'labels').write_text(json.dumps(labels))\n"
             "\n"
-            "if args[:1] == ['network']:\n"
-            "    def record(labels):\n"
-            "        keys = ['id', 'artex.lock/pid', 'artex.lock/start', 'artex.lock/wall', 'artex.lock/host', 'artex.lock/pidns']\n"
-            "        return '|'.join(str(labels.get(key, '')) for key in keys)\n"
-            "    if args[1] == 'create':\n"
-            "        labels = {}\n"
-            "        name = None\n"
-            "        i = 2\n"
-            "        while i < len(args):\n"
-            "            if args[i] == '--label':\n"
-            "                key, value = args[i + 1].split('=', 1)\n"
-            "                labels[key] = value\n"
-            "                i += 2\n"
-            "                continue\n"
-            "            name = args[i]\n"
-            "            i += 1\n"
-            "        path = net_root() / name\n"
-            "        try:\n"
-            "            path.mkdir()\n"
-            "        except FileExistsError:\n"
-            "            sys.exit(1)\n"
-            "        labels['id'] = uuid.uuid4().hex\n"
-            "        (path / 'labels').write_text(json.dumps(labels))\n"
-            "        sys.stdout.write(labels['id'] + '\\n')\n"
+            "def record(labels):\n"
+            "    keys = ['id', 'artex.lock/pid', 'artex.lock/start', 'artex.lock/wall', 'artex.lock/host', 'artex.lock/pidns', 'artex.lock/uid']\n"
+            "    return '|'.join(str(labels.get(key, '')) for key in keys)\n"
+            "\n"
+            "def create_lock(name, labels, kind):\n"
+            "    path = net_root() / name\n"
+            "    try:\n"
+            "        path.mkdir()\n"
+            "    except FileExistsError:\n"
+            "        sys.exit(1)\n"
+            "    labels['id'] = labels.get('id') or uuid.uuid4().hex\n"
+            "    labels['kind'] = kind\n"
+            "    labels['running'] = kind == 'container'\n"
+            "    (path / 'labels').write_text(json.dumps(labels))\n"
+            "    sys.stdout.write(labels['id'] + '\\n')\n"
+            "    sys.exit(0)\n"
+            "\n"
+            "def find_lock(target):\n"
+            "    if (net_root() / target).is_dir():\n"
+            "        return target\n"
+            "    for path in net_root().iterdir():\n"
+            "        if path.is_dir() and read_labels(path.name).get('id') == target:\n"
+            "            return path.name\n"
+            "    return None\n"
+            "\n"
+            "def inspect_lock(target, fmt):\n"
+            "    name = find_lock(target)\n"
+            "    if name is None:\n"
+            "        sys.exit(1)\n"
+            "    labels = read_labels(name)\n"
+            "    if 'State.Running' in fmt:\n"
+            "        sys.stdout.write('true\\n' if labels.get('running') else 'false\\n')\n"
             "        sys.exit(0)\n"
-            "    if args[1] == 'inspect':\n"
-            "        name = args[-1]\n"
-            "        labels = read_labels(name)\n"
-            "        if not (net_root() / name).is_dir():\n"
-            "            sys.exit(1)\n"
-            "        replace = os.environ.get('TEST_REPLACE_LOCK') == '1' and not name.endswith('reap')\n"
-            "        swap_lock = os.environ.get('TEST_SWAP_LOCK') == '1' and not name.endswith('reap')\n"
-            "        swap_reaper = os.environ.get('TEST_SWAP_REAPER') == '1' and name.endswith('reap')\n"
-            "        if replace or swap_lock or swap_reaper:\n"
-            "            mark = net_root() / ('.replaced' if replace else '.swapped-lock' if swap_lock else '.swapped')\n"
-            "            if not mark.exists():\n"
-            "                old = record(labels)\n"
-            "                if replace:\n"
-            "                    labels['id'] = 'replacement-id'\n"
-            "                labels['artex.lock/pid'] = os.environ['TEST_LIVE_PID']\n"
-            "                labels['artex.lock/start'] = os.environ['TEST_LIVE_START']\n"
-            "                write_labels(name, labels)\n"
-            "                mark.write_text('1')\n"
-            "                sys.stdout.write(old + '\\n')\n"
-            "                sys.exit(0)\n"
-            "        sys.stdout.write(record(labels) + '\\n')\n"
-            "        sys.exit(0)\n"
-            "    if args[1] == 'rm':\n"
-            "        target = args[-1]\n"
-            "        with open(net_root() / 'rm.log', 'a') as log:\n"
-            "            log.write(target + '\\n')\n"
-            "        removed = False\n"
-            "        for path in list(net_root().iterdir()):\n"
-            "            if path.is_dir() and read_labels(path.name).get('id') == target:\n"
-            "                shutil.rmtree(path)\n"
-            "                removed = True\n"
-            "        if not removed and (net_root() / target).is_dir():\n"
-            "            shutil.rmtree(net_root() / target)\n"
-            "        sys.exit(0)\n"
-            "    sys.exit(1)\n"
+            "    replace = os.environ.get('TEST_REPLACE_LOCK') == '1' and not name.endswith('reap')\n"
+            "    swap_lock = os.environ.get('TEST_SWAP_LOCK') == '1' and not name.endswith('reap')\n"
+            "    swap_reaper = os.environ.get('TEST_SWAP_REAPER') == '1' and name.endswith('reap')\n"
+            "    if replace or swap_lock or swap_reaper:\n"
+            "        mark = net_root() / ('.replaced' if replace else '.swapped-lock' if swap_lock else '.swapped')\n"
+            "        if not mark.exists():\n"
+            "            old = record(labels)\n"
+            "            if replace:\n"
+            "                labels['id'] = 'replacement-id'\n"
+            "            labels['artex.lock/pid'] = os.environ['TEST_LIVE_PID']\n"
+            "            labels['artex.lock/start'] = os.environ['TEST_LIVE_START']\n"
+            "            write_labels(name, labels)\n"
+            "            mark.write_text('1')\n"
+            "            sys.stdout.write(old + '\\n')\n"
+            "            sys.exit(0)\n"
+            "    sys.stdout.write(record(labels) + '\\n')\n"
+            "    sys.exit(0)\n"
+            "\n"
+            "def remove_lock(target):\n"
+            "    with open(net_root() / 'rm.log', 'a') as log:\n"
+            "        log.write(target + '\\n')\n"
+            "    removed = False\n"
+            "    for path in list(net_root().iterdir()):\n"
+            "        if path.is_dir() and read_labels(path.name).get('id') == target:\n"
+            "            shutil.rmtree(path)\n"
+            "            removed = True\n"
+            "    if not removed and (net_root() / target).is_dir():\n"
+            "        shutil.rmtree(net_root() / target)\n"
+            "    sys.exit(0)\n"
+            "\n"
+            "if args[:2] == ['image', 'inspect']:\n"
+            "    sys.exit(0)\n"
+            "if args[:1] == ['run']:\n"
+            "    labels = {}\n"
+            "    name = None\n"
+            "    i = 1\n"
+            "    while i < len(args):\n"
+            "        if args[i] == '--name':\n"
+            "            name = args[i + 1]\n"
+            "            i += 2\n"
+            "            continue\n"
+            "        if args[i] == '--label':\n"
+            "            key, value = args[i + 1].split('=', 1)\n"
+            "            labels[key] = value\n"
+            "            i += 2\n"
+            "            continue\n"
+            "        i += 1\n"
+            "    create_lock(name, labels, 'container')\n"
+            "if args[:2] == ['network', 'create']:\n"
+            "    create_lock(args[-1], {}, 'network')\n"
+            "if args[:2] == ['network', 'prune']:\n"
+            "    for path in list(net_root().iterdir()):\n"
+            "        if path.is_dir() and read_labels(path.name).get('kind') == 'network':\n"
+            "            shutil.rmtree(path)\n"
+            "    sys.exit(0)\n"
+            "if args[:2] == ['container', 'prune']:\n"
+            "    for path in list(net_root().iterdir()):\n"
+            "        if path.is_dir() and not read_labels(path.name).get('running'):\n"
+            "            shutil.rmtree(path)\n"
+            "    sys.exit(0)\n"
+            "if args[:2] == ['container', 'inspect'] or args[:1] == ['inspect']:\n"
+            "    inspect_lock(args[-1], args[args.index('-f') + 1] if '-f' in args else '')\n"
+            "if args[:1] == ['rm']:\n"
+            "    remove_lock(args[-1])\n"
             "\n"
             "with open(os.environ['TEST_CALLS'], 'a') as log:\n"
             "    log.write(json.dumps(args) + '\\n')\n"
@@ -328,6 +365,9 @@ class DockerUpdateTests(unittest.TestCase):
         labels = dict(labels)
         labels.setdefault("artex.lock/host", Path("/etc/machine-id").read_text().strip())
         labels.setdefault("artex.lock/pidns", os.readlink("/proc/self/ns/pid"))
+        labels.setdefault("artex.lock/uid", str(os.getuid()))
+        labels.setdefault("kind", "container")
+        labels.setdefault("running", True)
         labels.setdefault("id", "id-" + name)
         path = self.net_locks / name
         path.mkdir(parents=True, exist_ok=True)
@@ -517,7 +557,7 @@ class DockerUpdateTests(unittest.TestCase):
         proc.stdin.write("1\n")
         proc.stdin.flush()
         mark = self.net_locks / ".swapped-lock"
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + 15
         while time.monotonic() < deadline and not mark.exists():
             time.sleep(0.05)
         calls = self.log.read_text() if self.log.exists() else ""
@@ -569,7 +609,7 @@ class DockerUpdateTests(unittest.TestCase):
                 )
                 proc.stdin.write("1\n")
                 proc.stdin.flush()
-                deadline = time.monotonic() + 5
+                deadline = time.monotonic() + 15
                 while time.monotonic() < deadline:
                     if self.log.exists() and '"build"' in self.log.read_text():
                         break
@@ -761,7 +801,7 @@ class DockerUpdateTests(unittest.TestCase):
         proc.stdin.write("1\n")
         proc.stdin.flush()
         mark = self.net_locks / ".swapped"
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + 15
         while time.monotonic() < deadline and not mark.exists():
             time.sleep(0.05)
         self.assertTrue(mark.exists(), "reaper owner was never read")
@@ -884,7 +924,7 @@ class DockerUpdateTests(unittest.TestCase):
         proc.stdin.write("1\n")
         proc.stdin.flush()
         mark = self.net_locks / ".replaced"
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + 15
         while time.monotonic() < deadline and not mark.exists():
             time.sleep(0.05)
         self.assertTrue(mark.exists(), "lock identity was never read")
@@ -898,6 +938,65 @@ class DockerUpdateTests(unittest.TestCase):
         calls = self.log.read_text() if self.log.exists() else ""
         self.assertNotIn('"build"', calls)
         proc.kill()
+
+    def test_hidden_other_uid_is_not_reaped(self):
+        net = self.network_name(self.env)
+        planted = self.plant_network(net, {
+            "artex.lock/pid": str(self.dead_pid()),
+            "artex.lock/start": "hidden",
+            "artex.lock/wall": str(int(time.time())),
+            "artex.lock/uid": "65534",
+        })
+        result, calls = self.run_script(timeout=8)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("其他用户", result.stderr)
+        self.assertTrue(planted.is_dir())
+        labels = json.loads((planted / "labels").read_text())
+        self.assertEqual(labels["artex.lock/uid"], "65534")
+        self.assertFalse(any(call[:2] == ["compose", "build"] for call in calls))
+
+    def test_network_and_container_prune_keep_the_running_lock(self):
+        env = self.hold_build(self.env)
+        env["TEST_HOLD_BUILD"] = "1.2"
+        procs = [
+            subprocess.Popen(
+                ["bash", str(self.root / "update.sh")],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                cwd=self.root,
+            )
+            for _ in range(2)
+        ]
+        for proc in procs:
+            proc.stdin.write("1\n")
+            proc.stdin.flush()
+        deadline = time.monotonic() + 15
+        held = None
+        while time.monotonic() < deadline and held is None:
+            for path in self.net_locks.iterdir():
+                if path.is_dir() and (path / "labels").is_file():
+                    held = path
+                    break
+            time.sleep(0.05)
+        self.assertIsNotNone(held, "lock container was not created")
+        for command in (["network", "prune", "-f"], ["container", "prune", "-f"]):
+            pruned = subprocess.run(
+                [str(self.root / "bin" / "docker"), *command],
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+            self.assertEqual(pruned.returncode, 0, pruned.stderr)
+        self.assertTrue(held.is_dir(), "prune removed the running lock")
+        outputs = [proc.communicate(timeout=20) for proc in procs]
+        for proc, (stdout, stderr) in zip(procs, outputs):
+            self.assertEqual(proc.returncode, 0, stderr)
+            self.assertIn("更新完成", stdout)
+        self.assertEqual(int((self.root / "peak").read_text().strip()), 1)
 
     def test_lock_directory_without_pid_stops(self):
         net = self.plant_network(self.network_name(self.env), {})

@@ -150,7 +150,7 @@ PHP2Shell Scanner、OSV-Scanner、Trivy、ZAP、ffuf。
 
 - **應用程式 schema 更新**：ARTEX 啟動時會執行資料表 migration，前提是 PostgreSQL 已能正常啟動。更新前應備份 `./data` 與資料庫；重啟程式不會轉換 PostgreSQL 的大版本資料格式。
 - **PostgreSQL 大版本與部署預檢**：手動更新 Docker 部署前執行 `bash scripts/check_postgres_version.sh`；預檢失敗時先處理映像與資料目錄的版本對應。16 → 17 須另外執行 dump/restore 或 `pg_upgrade`，不能只改 image。復原、獨立 volume 遷移及回復界線見 [PostgreSQL 升級與復原指南](docs/POSTGRES-UPGRADE.md)。
-- **Docker 更新不會並行部署**：`./update.sh` 與 `./install.sh` 的 Docker 路徑在預檢、重建 `artex-ymh:local` 與啟動服務期間持有同一把鎖。鎖是該 daemon 上的 network，名稱來自 `docker info` 的 daemon ID，因此不同 home、`XDG_STATE_HOME` 或 `DOCKER_HOST` 寫法會一起排隊。標籤記下 PID、行程啟動時間（Linux 用 `/proc` 的 starttime，macOS 用 `ps` 的 lstart）、主機識別與 PID namespace。只有同一台主機、同一個 PID namespace 會用 PID 判斷持有者是否已結束；否則停止，不刪鎖。讀不到啟動時間時，以鎖上的牆鐘時間為上限等兩小時，時間到就停止並說明原因，不會一直重試，也不會把看不清的鎖刪掉。正常更新在結束時按 network ID 刪除自己建立的那一條。
+- **Docker 更新不會並行部署**：`./update.sh` 與 `./install.sh` 的 Docker 路徑在預檢、重建 `artex-ymh:local` 與啟動服務期間持有同一把鎖。鎖是該 daemon 上一個正在運行的容器，名稱來自 `docker info` 的 daemon ID，因此不同 home、`XDG_STATE_HOME` 或 `DOCKER_HOST` 寫法會一起排隊。沒有容器的 network 會被 `docker network prune` 刪掉，所以不用它當鎖。標籤記下 PID、UID、行程啟動時間（Linux 用 `/proc` 的 starttime，macOS 用 `ps` 的 lstart）、主機識別與 PID namespace。只有同一台主機、同一個 PID namespace、且看得到該 UID 的進程時，才用 PID 判斷持有者是否已結束。`/proc` 設了 `hidepid` 而看不到其他用戶的進程時停止，不刪鎖。讀不到啟動時間時，以鎖上的牆鐘時間為上限等兩小時，時間到就停止並說明原因。正常更新在結束時按容器 ID 刪除自己建立的那一個。
 - ⚠️ **二开版一键安装保持禁用**：检查更新只查询 `knowlet/artex-ymh`，不会回退到上游。独立发布与签名链尚待单独审核；即使以后建立 Release，也不会自动启用安装。API、下载暂存与启动换装入口均阻止远程更新，旧暂存文件会保留但不执行。升级请从本 fork 更新源码并重新编译（方式二）。
 
 ## 配置
