@@ -49,6 +49,10 @@
 
 報告技能接回現有漏洞與流量證據流程，並保留上游三語模板。來源固定、相依工具索引、使用方式與驗證範圍見 [AntiFox 整合說明](providers/antifox/README.md)。外部工具須另驗證安裝狀態；AntiFox 的獨立 DOCX 報告引擎尚未移植。
 
+### 4.2 Context1337 外部情報查詢
+
+新增明確啟動的唯讀操作員 CLI：`artex context1337 status|search`。獨立服務、專用唯讀 API Key，僅回傳資源數量與完整 CVE 識別碼參考，不自動匯入外部資料或改變任務工具。部署與安全邊界見 [Context1337 整合說明](providers/context1337/README.md)。
+
 ### 5. 稳定性（实战中踩出来的）
 
 - **deadline 冻结感知**：宿主机睡眠/VM 冻结（时钟跳变 >60s）时自动顺延任务 deadline，不再出现"睡一晚任务全烧死"。
