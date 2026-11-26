@@ -1,0 +1,253 @@
+name: Docker OTA
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 20 * * *'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Channel to publish from the trusted main workflow'
+        type: choice
+        options: [main, nightly, stable]
+        default: main
+        required: true
+      release_tag:
+        description: 'Stable only: published vMAJOR.MINOR.PATCH release on main history'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-ota-${{ github.event.pull_request.number || 'publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  OTA_IMAGE: ghcr.io/knowlet/artex-ymh
+  OTA_SIGNER: https://github.com/knowlet/artex-ymh/.github/workflows/docker-ota.yml@refs/heads/main
+  OTA_ISSUER: https://token.actions.githubusercontent.com
+
+jobs:
+  metadata:
+    if: github.repository == 'knowlet/artex-ymh'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      commit: ${{ steps.resolve.outputs.commit }}
+      channel: ${{ steps.resolve.outputs.channel }}
+      version: ${{ steps.resolve.outputs.version }}
+      publish: ${{ steps.resolve.outputs.publish }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: resolve
+        name: Resolve trusted source and channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_HOST: github.com
+        run: python3 scripts/ota_release_metadata.py resolve
+
+  test:
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: artex
+          POSTGRES_PASSWORD: ota-ci-only
+          POSTGRES_DB: artex
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -h 127.0.0.1 -U artex -d artex'
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      ARTEX_PG_DSN: postgres://artex:ota-ci-only@127.0.0.1:5432/artex?sslmode=disable
+      ARTEX_OTA_REQUIRE_SOCKET_TESTS: '1'
+    outputs:
+      schema: ${{ steps.schema.outputs.schema }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Updater and publishing unit regressions
+        run: |
+          python3 scripts/test_ota_release_metadata.py -v
+          python3 scripts/test_docker_ota.py -v
+          python3 scripts/test_docker_ota_recovery.py -v
+      - name: Backend race checks and full PostgreSQL regressions
+        run: |
+          test -z "$(gofmt -l server/docker_ota*.go)"
+          go test -race -count=1 ./server -run '^TestDockerOTA' -v
+          go vet ./...
+          go test -count=1 -p=1 -timeout=15m ./...
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Frontend validation and embedded production build
+        working-directory: web
+        run: |
+          npm ci --ignore-scripts
+          node --test src/lib/update-channel.test.mjs src/lib/docker-ota.test.mjs
+          npx tsc --noEmit
+          npm run build:static
+      - name: Build fork binary with source identity
+        env:
+          ARTEX_BUILD_VERSION: ${{ needs.metadata.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.metadata.outputs.commit }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test -z "$(git status --porcelain)"
+          mkdir -p server/webui/dist dist/amd64
+          cp -a web/out/. server/webui/dist/
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags embedui -buildvcs=true -trimpath \
+            -ldflags "-s -w -X main.version=${ARTEX_BUILD_VERSION}" -o dist/amd64/artex ./cmd/artex
+          dist/amd64/artex -h
+      - id: schema
+        name: Fingerprint persistent-format and migration code
+        run: echo "schema=$(python3 scripts/ota_release_metadata.py schema)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ota-linux-amd64
+          path: dist/amd64/artex
+          if-no-files-found: error
+          retention-days: 7
+
+  rehearsal:
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          persist-credentials: false
+      - name: Real Docker update and recovery rehearsal
+        env:
+          ARTEX_REQUIRE_DOCKER_OTA: '1'
+        run: python3 scripts/test_ota_docker_integration.py
+
+  image:
+    needs: [metadata, test, rehearsal]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ota-linux-amd64
+          path: dist/amd64
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: artex-ota-ci:local
+          build-args: |
+            ARTEX_BUILD_VERSION=${{ needs.metadata.outputs.version }}
+            ARTEX_BUILD_REVISION=${{ needs.metadata.outputs.commit }}
+            ARTEX_OTA_SCHEMA=${{ needs.test.outputs.schema }}
+          cache-from: type=gha,scope=ota-runtime-amd64
+          cache-to: type=gha,scope=ota-runtime-amd64,mode=max
+      - name: Smoke test packaged runtime without external traffic
+        run: |
+          docker run --rm --network none --entrypoint /bin/sh artex-ota-ci:local -ec \
+            'test "$(node -p process.arch)" = x64; node --version; playwright-cli --help; /app/artex -h'
+      - name: Boot packaged ARTEX with PostgreSQL and verify readiness
+        run: |
+          python3 scripts/smoke_ota_image.py --image artex-ota-ci:local --postgres-image postgres:16-alpine
+          python3 scripts/smoke_ota_image.py --image artex-ota-ci:local --postgres-image postgres:17-alpine
+
+  publish:
+    needs: [metadata, test, rehearsal, image]
+    if: >-
+      github.repository == 'knowlet/artex-ymh' && github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request' && needs.metadata.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ota-linux-amd64
+          path: dist/amd64
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          cosign-release: v3.1.6
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          # Channel aliases are only advanced after digest smoke + signature verification.
+          tags: ghcr.io/knowlet/artex-ymh:build-${{ github.run_id }}-${{ github.run_attempt }}
+          build-args: |
+            ARTEX_BUILD_VERSION=${{ needs.metadata.outputs.version }}
+            ARTEX_BUILD_REVISION=${{ needs.metadata.outputs.commit }}
+            ARTEX_OTA_SCHEMA=${{ needs.test.outputs.schema }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=ota-runtime-amd64
+      - name: Smoke, sign and verify immutable image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_COMMIT: ${{ needs.metadata.outputs.commit }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image="${OTA_IMAGE}@${DIGEST}"
+          docker pull "$image"
+          docker run --rm --network none --entrypoint /bin/sh "$image" -ec \
+            'test "$(node -p process.arch)" = x64; playwright-cli --help; /app/artex -h'
+          cosign sign --yes -a "source-commit=${SOURCE_COMMIT}" "$image"
+          cosign verify --certificate-identity "$OTA_SIGNER" --certificate-oidc-issuer "$OTA_ISSUER" \
+            -a "source-commit=${SOURCE_COMMIT}" "$image" > "$RUNNER_TEMP/ota-signature.json"
+      - name: Promote verified digest to channel
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          CHANNEL: ${{ needs.metadata.outputs.channel }}
+          SOURCE_COMMIT: ${{ needs.metadata.outputs.commit }}
+        run: |
+          set -euo pipefail
+          # A slow previous run must not overwrite a newer main/nightly channel.
+          if [ "$CHANNEL" != stable ]; then
+            latest=$(git ls-remote --exit-code origin refs/heads/main | cut -f1)
+            test "$latest" = "$SOURCE_COMMIT"
+          fi
+          docker buildx imagetools create --prefer-index=false --tag "${OTA_IMAGE}:${CHANNEL}" "${OTA_IMAGE}@${DIGEST}"
+          promoted=$(docker buildx imagetools inspect "${OTA_IMAGE}:${CHANNEL}" --format '{{.Manifest.Digest}}')
+          test "$promoted" = "$DIGEST"
+          printf '### Docker OTA published\n\n- Channel: `%s`\n- Commit: `%s`\n- Image: `%s@%s`\n- Platform: `linux/amd64`\n' \
+            "$CHANNEL" "$SOURCE_COMMIT" "$OTA_IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

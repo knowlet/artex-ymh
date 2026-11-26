@@ -49,16 +49,23 @@ func (e *Engine) inflightCounter(taskID string) *int64 {
 // has already installed its barrier. The delete handler can therefore wait for
 // inflight==0 without a check-then-start race recreating files after cleanup.
 func (e *Engine) beginTaskOperation(taskID string) bool {
+	if !e.otaGate.enter() {
+		return false
+	}
 	e.deleteMu.RLock()
 	defer e.deleteMu.RUnlock()
 	if e.IsDeleting(taskID) {
+		e.otaGate.leave()
 		return false
 	}
 	atomic.AddInt64(e.inflightCounter(taskID), 1)
 	return true
 }
 
-func (e *Engine) decInflight(taskID string) { atomic.AddInt64(e.inflightCounter(taskID), -1) }
+func (e *Engine) decInflight(taskID string) {
+	atomic.AddInt64(e.inflightCounter(taskID), -1)
+	e.otaGate.leave()
+}
 func (e *Engine) inflightCount(taskID string) int64 {
 	return atomic.LoadInt64(e.inflightCounter(taskID))
 }
@@ -224,6 +231,14 @@ func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 
 // settleTask runs the ordered settle sequence once (§4 steps ①–⑥).
 func (e *Engine) settleTask(ctx context.Context, t *Task) {
+	// A paused task's wall-clock deadline can expire during an update. Wait
+	// before marking it settling so maintenance cannot strand its coordinator.
+	for !e.otaGate.enter() {
+		if sleepCtx(ctx, time.Second) {
+			return
+		}
+	}
+	defer e.otaGate.leave()
 	if !e.markSettling(t.ID) {
 		return
 	}

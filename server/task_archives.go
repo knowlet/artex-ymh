@@ -88,6 +88,11 @@ func (s *Server) notifyTaskArchiveWorker() {
 }
 
 func (s *Server) runOneTaskArchiveJob() error {
+	gate := s.otaGate()
+	if !gate.enter() {
+		return nil
+	}
+	defer gate.leave()
 	job, err := s.m.pg.ClaimTaskArchiveJob(s.ctx)
 	if err != nil || job == nil {
 		return err

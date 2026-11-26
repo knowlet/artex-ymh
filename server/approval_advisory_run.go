@@ -20,6 +20,11 @@ type advisoryRunResult struct {
 // runApprovalAdvisoryReview performs one bounded review. It never changes approval status.
 func (s *Server) runApprovalAdvisoryReview(parent context.Context, pendingID int64, trigger string) (advisoryRunResult, error) {
 	var empty advisoryRunResult
+	gate := s.otaGate()
+	if !gate.enter() {
+		return empty, errDockerOTAMaintenance
+	}
+	defer gate.leave()
 	if s.m == nil || s.m.pg == nil {
 		return empty, errors.New("database unavailable")
 	}

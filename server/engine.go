@@ -92,6 +92,7 @@ func retryableWorkerModelError(reason harness.TerminalReason, err error) bool {
 type Engine struct {
 	m        *Manager
 	debounce time.Duration
+	otaGate  *dockerOTAGate // initialized before any worker starts
 
 	bc *Broadcaster // live activity pub/sub (SSE)
 
@@ -1045,7 +1046,10 @@ func (e *Engine) workerLoop(ctx context.Context, t *Task, name string) {
 			continue // 任务已终态(done/failed/timeout):停止领取遗留意图,别在完成后空跑 frontier
 		}
 		if !e.beginTaskOperation(t.ID) {
-			return
+			if e.IsDeleting(t.ID) || sleepCtx(ctx, time.Second) {
+				return
+			}
+			continue // a maintenance barrier must not destroy the worker loop
 		}
 		claimed := e.runWorkerStep(ctx, t, name, worker)
 		e.decInflight(t.ID)

@@ -108,6 +108,11 @@ func (s *Server) admitPausedTask(t *Task) (queued bool, err error) {
 }
 
 func (s *Server) admitTaskWhen(t *Task, mode string, requirePaused bool) (queued bool, err error) {
+	gate := s.otaGate()
+	if !gate.enter() {
+		return false, errDockerOTAMaintenance
+	}
+	defer gate.leave()
 	if t == nil {
 		return false, fmt.Errorf("task not found")
 	}
@@ -251,6 +256,11 @@ func (s *Server) startAdmittedTask(t *Task, mode string) {
 }
 
 func (s *Server) reconcileConcurrency() {
+	gate := s.otaGate()
+	if !gate.enter() {
+		return
+	}
+	defer gate.leave()
 	s.concMu.Lock()
 	defer s.concMu.Unlock()
 	enabled, limit := s.m.ConcurrencyLimit()

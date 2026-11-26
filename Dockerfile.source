@@ -19,6 +19,7 @@ RUN npm run build:static
 
 # ---------- ② Go 编译(内嵌前端) ----------
 FROM golang:1.27.4-alpine AS gobuild
+ARG ARTEX_BUILD_VERSION=dev
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=$GOPROXY
 ENV GOTOOLCHAIN=auto
@@ -29,10 +30,20 @@ COPY . .
 RUN mkdir -p server/webui/dist
 COPY --from=fe /src/web/out/ server/webui/dist/
 # CGO_ENABLED=0 纯静态产物,alpine(musl)构建的二进制在 bookworm 运行时同样可跑
-RUN CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w" -o /out/artex ./cmd/artex
+RUN CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w -X main.version=${ARTEX_BUILD_VERSION}" -o /out/artex ./cmd/artex
 
 # ---------- ③ 运行时(与 Dockerfile 工具层一致) ----------
 FROM python:3.12-slim-bookworm
+ARG ARTEX_BUILD_VERSION=dev
+ARG ARTEX_BUILD_REVISION=
+ARG ARTEX_OTA_SCHEMA=
+# Source builds may leave revision/schema unknown. A label is not a signature;
+# only the trusted publishing workflow produces remotely installable OTA images.
+LABEL org.opencontainers.image.source="https://github.com/knowlet/artex-ymh" \
+      org.opencontainers.image.version="${ARTEX_BUILD_VERSION}" \
+      org.opencontainers.image.revision="${ARTEX_BUILD_REVISION}" \
+      io.artex.ota.protocol="1" \
+      io.artex.ota.schema="${ARTEX_OTA_SCHEMA}"
 # 可选构建参数:APT 镜像站(默认官方 deb.debian.org;国内可传 mirrors.aliyun.com 或 mirrors.ustc.edu.cn)
 ARG APT_MIRROR=
 ARG NPM_REGISTRY=https://registry.npmjs.org
