@@ -58,6 +58,7 @@ type Server struct {
 	tickets      sseTicketStore      // SSE 一次性票据(F6,见 auth.go),零值可用
 	authkv       authKV              // auth 持久层注入(测试用);nil = 走 m.pg
 	loginLimiter authAttemptLimiter  // login throttling is independent of the optional gate
+	dockerOTA    *dockerOTA          // optional host updater; no Docker Engine access
 
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
@@ -165,6 +166,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		profChatAgents: map[int64]*agent.ChatAgent{},
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
 		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1)}
+	s.dockerOTA, err = newDockerOTA()
+	if err != nil {
+		log.Fatalf("[docker-ota] configuration: %v", err)
+	}
+	s.engine.otaGate = s.otaGate()
 	s.initSideQuestions()
 	s.initStage(dataDir)        // 受管文件投递暂存(F13);失败降级为关闭,不影响启动
 	checkToolsManifest(dataDir) // 期 6 外部工具清单自检(缺失常态,只打汇总日志)
@@ -724,6 +730,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/update/apply", s.updateApply)
 	mux.HandleFunc("POST /api/update/rollback", s.updateRollback)
 	mux.HandleFunc("GET /api/update/stream", s.updateStream)
+	// The single authenticated ARTEX account administers deployments. These
+	// routes are not exposed as Agent/Planner tools or SSE ticket capabilities.
+	mux.HandleFunc("GET /api/update/docker/status", s.dockerOTAStatus)
+	mux.HandleFunc("POST /api/update/docker/check", s.dockerOTACheck)
+	mux.HandleFunc("POST /api/update/docker/apply", s.dockerOTAApply)
+	mux.HandleFunc("POST /api/update/docker/rollback", s.dockerOTARollback)
 
 	mux.HandleFunc("GET /api/tasks", s.listTasks)
 	mux.HandleFunc("POST /api/tasks", s.createTask)
@@ -1022,7 +1034,7 @@ func (s *Server) Handler() http.Handler {
 	// 伪装门控(F14)包在最外层:静态 SPA、/api/*(含 /api/health)、SSE、favicon
 	// 全部在门控后,未过门控一律返回假 nginx 欢迎页而不是 JSON 401。
 	// /s/ 是唯一例外:暂存下载面目标机器不可能有门控 cookie,gate 对该前缀放行(见 gate.go)。
-	api := cors(s.requireAuth(mux))
+	api := cors(s.requireAuth(s.dockerOTAMutations(mux)))
 	root := http.NewServeMux()
 	root.Handle("/api/", api)
 	root.HandleFunc("GET /s/{token}/{name}", s.stageDownload)

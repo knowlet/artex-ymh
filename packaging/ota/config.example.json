@@ -1,0 +1,17 @@
+{
+  "project_dir": "/opt/artex-ymh",
+  "project_name": "artex-ymh",
+  "compose_files": [
+    "/opt/artex-ymh/docker-compose.yml",
+    "/opt/artex-ymh/packaging/ota/compose.ota.yml"
+  ],
+  "env_file": "/opt/artex-ymh/.env",
+  "state_dir": "/var/lib/artex-updater",
+  "socket_path": "/run/artex-updater/api.sock",
+  "docker": "/usr/bin/docker",
+  "docker_socket": "/var/run/docker.sock",
+  "cosign": "/usr/local/bin/cosign",
+  "health_timeout": 180,
+  "command_timeout": 600,
+  "min_free_bytes": 2147483648
+}

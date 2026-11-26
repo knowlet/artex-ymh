@@ -12,6 +12,14 @@
 #   docker build -t artex:local .
 FROM python:3.12-slim-bookworm
 ARG TARGETARCH
+ARG ARTEX_BUILD_VERSION=dev
+ARG ARTEX_BUILD_REVISION=
+ARG ARTEX_OTA_SCHEMA=
+LABEL org.opencontainers.image.source="https://github.com/knowlet/artex-ymh" \
+      org.opencontainers.image.version="${ARTEX_BUILD_VERSION}" \
+      org.opencontainers.image.revision="${ARTEX_BUILD_REVISION}" \
+      io.artex.ota.protocol="1" \
+      io.artex.ota.schema="${ARTEX_OTA_SCHEMA}"
 # 常用工具：ripgrep / curl / vim，加一批 recon 常备件（按需增删）。
 ARG NODE_DIST_BASE=https://nodejs.org/dist
 ARG NODE_VERSION=22.23.4

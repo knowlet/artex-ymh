@@ -650,6 +650,11 @@ func (s *Server) readTriggerBehavior(agentKey string) triggerBehavior {
 // merging by task / all / none); parallel → run each fire in its own concurrent
 // conversation up to trigger_max_parallel. Distinct agents always run concurrently.
 func (s *Server) StartTriggeredRun(agentKey, title, message string, taskID int64, mergeable bool, taskDesc, taskGoal string) {
+	gate := s.otaGate()
+	if !gate.enter() {
+		return
+	}
+	defer gate.leave()
 	if s.m.pg == nil || s.chatAgentRef() == nil {
 		return
 	}

@@ -115,6 +115,11 @@ func (sc *Scheduler) init() {
 }
 
 func (sc *Scheduler) step() {
+	gate := sc.s.otaGate()
+	if !gate.enter() {
+		return
+	}
+	defer gate.leave()
 	triggers, err := sc.pg.ListEnabledTriggers()
 	if err != nil {
 		return

@@ -1,0 +1,22 @@
+# Opt-in overlay; append this after the deployment's existing Compose files.
+# prepare must run before the first recreation so existing authentication keys
+# survive. This file never changes the PostgreSQL service or existing volumes.
+services:
+  artex:
+    environment:
+      ARTEX_OTA_SOCKET: /run/artex-updater/api.sock
+      ARTEX_OTA_STATE_DIR: /run/artex-ota-state
+      ARTEX_OTA_HEALTH_SOCKET: /tmp/artex-ota-health.sock
+    volumes:
+      - type: bind
+        source: /run/artex-updater
+        target: /run/artex-updater
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/artex-updater/public
+        target: /run/artex-ota-state
+        read_only: true
+        bind:
+          create_host_path: false
