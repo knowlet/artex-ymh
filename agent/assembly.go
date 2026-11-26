@@ -18,6 +18,7 @@ import (
 type DeferredInfo struct {
 	FindingGuidance  string            // derived from the final permitted tools, including DB overrides
 	RecoveryGuidance string            // capability discovery routes present in the final permitted tools
+	MetadataGuidance string            // fixed reporting boundaries for the final permitted metadata tool
 	Deferred         []string          // all MCP tool names (schema withheld)
 	GlobalNames      []string          // MCP names to list in the system-prompt block
 	Unlock           *actool.UnlockSet // shared call-gate; nil when no MCP tools

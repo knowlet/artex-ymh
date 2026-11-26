@@ -60,6 +60,11 @@ func run() int {
 		return runProvider(os.Args[2:])
 	}
 
+	// Explicit operator-only remote intelligence; never starts agents or the service.
+	if len(os.Args) > 1 && os.Args[1] == "context1337" {
+		return runContext1337CLI(os.Args[2:])
+	}
+
 	// Offline intelligence lookup never initializes the service or agents.
 	if len(os.Args) > 1 && os.Args[1] == "intel" {
 		return runIntelCLI(os.Args[2:])
