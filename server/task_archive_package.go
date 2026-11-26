@@ -584,6 +584,12 @@ func writeTaskArchivePackage(path, payloadDir string, snapshot *pgdb.TaskArchive
 			log.Printf("[task-archive] 跳过符号链接（归档不支持，不影响其它文件）：%s", current)
 			return nil
 		}
+		if !entry.IsDir() && !info.Mode().IsRegular() {
+			// Only directories and regular files are supported by the unpacker.
+			// Opening a FIFO may block; sockets and devices cannot be restored.
+			log.Printf("[task-archive] 跳过非普通文件（归档不支持）：%s", current)
+			return nil
+		}
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
