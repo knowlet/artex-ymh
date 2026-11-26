@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -33,6 +34,7 @@ FIXTURE_APP = r'''#!/usr/bin/env python3
 import json
 import os
 from pathlib import Path
+import signal
 import socketserver
 import sys
 import threading
@@ -42,6 +44,10 @@ if len(sys.argv) > 1 and sys.argv[1] == "doctor":
     # The host backend independently checks and dumps the real database.  This
     # fixture supplies only the application process/HTTP half of readiness.
     sys.exit(0)
+
+# Match the real application's graceful container shutdown. Python as PID 1
+# otherwise waits for Docker's forced-stop deadline on every replacement.
+signal.signal(signal.SIGTERM, lambda *_args: sys.exit(0))
 
 data = Path("/app/data")
 data.mkdir(parents=True, exist_ok=True)
@@ -127,13 +133,13 @@ class DockerFixture:
             "&& rm -rf /var/lib/apt/lists/*\n"
             "WORKDIR /app\n"
             "COPY artex /app/artex\n"
-            "RUN chmod 755 /app/artex\n"
+            "RUN cp /app/artex /app/start.sh && chmod 755 /app/artex /app/start.sh\n"
             'LABEL io.artex.ota.protocol="1"\n'
             f'LABEL io.artex.ota.schema="{schema}"\n'
             f'LABEL org.opencontainers.image.revision="{version[0] * 40}"\n'
             'LABEL org.opencontainers.image.source="https://github.com/knowlet/artex-ymh"\n'
             f"ENV FIXTURE_VERSION={version} FIXTURE_UNHEALTHY={int(unhealthy)}\n"
-            'ENTRYPOINT ["/app/artex"]\n'
+            'ENTRYPOINT ["/app/start.sh"]\n'
         )
         tag = f"{self.project}:{version}"
         self.docker("build", "--quiet", "-t", tag, str(build), timeout=600)
@@ -262,7 +268,7 @@ class DockerRehearsalTests(unittest.TestCase):
 
     def setUp(self):
         self.fixture = DockerFixture()
-        self.addCleanup(self.fixture.close)
+        self.addCleanup(self.cleanup_fixture)
         self.fixture.build_image("a-old", schema="1" * 64)
         self.fixture.build_image("b-good", schema="1" * 64)
         self.fixture.build_image("c-unhealthy", schema="1" * 64, unhealthy=True)
@@ -287,6 +293,24 @@ class DockerRehearsalTests(unittest.TestCase):
         self.verified = []
         self.updater = ota.Updater(self.config, backend=self.backend, registry=self.registry,
                                    verifier=self.verified.append)
+
+    def cleanup_fixture(self):
+        # The production Runner suppresses child stderr because deployments can
+        # contain secrets. These disposable fixtures contain only test values;
+        # preserve bounded diagnostics before their containers are removed.
+        result = self._outcome.result
+        if any(test is self for test, _error in result.failures + result.errors):
+            print(f"\nFixture diagnostics for {self.id()}:", file=sys.stderr)
+            probes = [lambda: self.fixture.compose("ps", "-a", "--format", "json"),
+                      lambda: self.fixture.compose("logs", "--no-color", "--tail", "35", "artex", "postgres")]
+            if hasattr(self, "backend"):
+                probes.append(lambda: self.backend.compose("config", "--hash", "artex").decode())
+            for probe in probes:
+                try:
+                    print(probe()[-12000:], file=sys.stderr)
+                except Exception as error:
+                    print(f"Fixture diagnostics unavailable: {error}", file=sys.stderr)
+        self.fixture.close()
 
     def wait_job(self):
         deadline = time.monotonic() + 120

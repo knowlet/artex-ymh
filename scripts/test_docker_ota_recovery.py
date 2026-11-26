@@ -206,6 +206,45 @@ class RuntimePreservationTests(HostTestCase):
             self.retain()
         self.assertEqual(expected.read_bytes(), b"unexpected existing contents")
 
+    def test_operator_owned_key_and_config_mounts_are_backed_up_without_replacement(self):
+        config = b'{"model":"operator-managed"}\n'
+        self.backend.app["Config"]["Env"] = ["ARTEX_GATE=off", "ARTEX_KEY_DIR=/run/secrets",
+                                                "ARTEX_CONFIG=/etc/artex/config.json"]
+        self.backend.files.update({"/run/secrets/jwt.key": JWT, "/etc/artex/config.json": config})
+        self.backend.app["Mounts"] = [
+            {"Type": "bind", "Source": "/operator/keys", "Destination": "/run/secrets", "RW": False},
+            {"Type": "bind", "Source": "/operator/config.json", "Destination": "/etc/artex/config.json", "RW": True}]
+        mounts = [{"type": "bind", "source": m["Source"], "target": m["Destination"],
+                   "read_only": not m["RW"]} for m in self.backend.app["Mounts"]]
+        directory = self.directory("backup")
+        retained = self.backend.retain_runtime(self.backend.app, directory)
+        self.assertEqual(retained, [])
+        self.assertEqual((directory / "retained-0").read_bytes(), JWT)
+        self.assertEqual((directory / "retained-1").read_bytes(), config)
+        path = self.root / "snapshot.json"
+        self.backend.snapshot({"config": {"services": {"artex": {"volumes": mounts}}}}, NEW, retained, path)
+        self.assertEqual(ota.read_json(path)["services"]["artex"]["volumes"], mounts)
+
+    def test_existing_helper_managed_key_mount_remains_in_managed_overlay(self):
+        first = self.retain("before")
+        self.backend.app["Mounts"] = [{"Type": "bind", "Source": first[0]["source"],
+                                        "Destination": "/app/jwt.key", "RW": False}]
+        retained = self.retain("after")
+        self.assertEqual(retained, first)
+        self.backend.persist(NEW, retained)
+        overlay = ota.read_json(self.config.state_dir / "active-image.json")
+        self.assertEqual(overlay["services"]["artex"]["volumes"], first)
+
+    def test_sibling_mount_and_tmpfs_do_not_count_as_durable_runtime_storage(self):
+        self.backend.app["Config"]["Env"] = ["ARTEX_GATE=off", "ARTEX_KEY_DIR=/run/secrets"]
+        self.backend.files["/run/secrets/jwt.key"] = JWT
+        self.backend.app["Mounts"] = [
+            {"Type": "bind", "Source": "/operator/keys", "Destination": "/run/secrets-other", "RW": False},
+            {"Type": "tmpfs", "Source": "", "Destination": "/run/secrets", "RW": True}]
+        retained = self.retain()
+        self.assertEqual([m["target"] for m in retained], ["/run/secrets/jwt.key"])
+        self.assertEqual(Path(retained[0]["source"]).read_bytes(), JWT)
+
     def test_snapshot_replaces_key_mount_without_recreating_postgres_configuration(self):
         retained = self.retain()
         postgres = {"image": "postgres:16-alpine", "volumes": [{"type": "volume", "source": "pgdata",

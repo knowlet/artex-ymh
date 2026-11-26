@@ -309,6 +309,12 @@ class DockerBackend:
         if daemon.get("OSType") != "linux" or daemon.get("Architecture") not in ("x86_64", "amd64"):
             raise OTAError("this OTA release requires a local linux/amd64 Docker host")
         appenv, pgenv = env_map(app), env_map(pg)
+        if app.get("Config", {}).get("WorkingDir") != "/app" or app.get("Config", {}).get("Entrypoint") != ["/app/start.sh"]:
+            raise OTAError("OTA requires the standard /app/start.sh entrypoint and /app working directory")
+        for mount in app.get("Mounts", []):
+            destination = mount.get("Destination", "").rstrip("/") or "/"
+            if destination in ("/", "/app", "/app/artex", "/app/start.sh"):
+                raise OTAError("a mount hides the application image's executable or entrypoint")
         for identifier in (pgenv.get("POSTGRES_USER", "postgres"),
                            pgenv.get("POSTGRES_DB", pgenv.get("POSTGRES_USER", "postgres"))):
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,62}", identifier):
@@ -442,6 +448,17 @@ class DockerBackend:
                     out.write(dest.read_bytes())
                     out.flush()
                     os.fsync(out.fileno())
+            covering = [mount for mount in app.get("Mounts", [])
+                        if mount.get("Type") in ("bind", "volume")
+                        and (path == mount.get("Destination") or path.startswith(mount.get("Destination", "").rstrip("/") + "/"))]
+            if covering:
+                existing = max(covering, key=lambda mount: len(mount["Destination"]))
+                source = Path(existing.get("Source", "/"))
+                if source.parent.resolve() != private.resolve():
+                    # The operator already persists this file. Its original
+                    # mount stays in the base Compose configuration; do not
+                    # replace that source or break their configuration rotation.
+                    continue
             retained.append({"type": "bind", "source": str(permanent), "target": path, "read_only": True,
                              "bind": {"create_host_path": False}})
         return retained
@@ -480,7 +497,7 @@ class DockerBackend:
                     raise OTAError("PostgreSQL container changed during update")
                 data = self.readiness(container)
                 if (all(data.get(key) is True for key in ("ready", "maintenance", "idle"))
-                        and data.get("ota_protocol") == 1):
+                        and data.get("ota_protocol") == 1 and data.get("data_dir") == "/app/data"):
                     consecutive += 1
                     if consecutive >= 3:
                         return
@@ -538,6 +555,11 @@ class Updater:
     def transition(self, phase, message):
         with self.lock:
             self.state.update(state=phase, message=message)
+            self.save()
+
+    def progress(self, **fields):
+        with self.lock:
+            self.state.update(fields)
             self.save()
 
     def status(self):
@@ -624,11 +646,10 @@ class Updater:
             else:
                 self.verifier(plan["image"])
                 image = self.backend.ensure_image(plan)
-            self.state["target_image"] = image
-            self.save()
+            self.progress(target_image=image)
             self.transition("preflight", "Checking deployment identity, storage and PostgreSQL compatibility")
             record = self.backend.preflight()
-            self.state.update(current_image=record["old_image"], current_schema=record["old_schema"])
+            self.progress(current_image=record["old_image"], current_schema=record["old_schema"])
             if record["old_image"] != plan["current_image"]:
                 raise OTAError("running image changed since the update was reviewed")
             self.backend.assert_unchanged(record)
@@ -637,8 +658,7 @@ class Updater:
             stopped = True
             self.backend.stop(record)
             self.transition("backup", "Backing up PostgreSQL, application data, configuration and encryption keys")
-            self.state["backup"] = str(backup_dir)
-            self.save()
+            self.progress(backup=str(backup_dir))
             retained = self.backend.backup(record, backup_dir)
             old_snapshot = self.backend.snapshot(record, record["old_image"], retained, backup_dir / "previous-compose.json")
             new_snapshot = self.backend.snapshot(record, image, retained, backup_dir / "candidate-compose.json")
@@ -650,10 +670,10 @@ class Updater:
             self.backend.health(container, image, record["postgres"]["Id"])
             self.backend.persist(image, retained)
             old_info = self.backend.image_info(record["old_image"])
-            self.state.update(current_image=image, current_schema=plan["schema"],
-                              current_revision=plan.get("revision", ""), previous_image=record["old_image"],
-                              previous={"image": record["old_image"], "schema": record["old_schema"],
-                                        "revision": (old_info.get("Config", {}).get("Labels") or {}).get("org.opencontainers.image.revision", "")})
+            self.progress(current_image=image, current_schema=plan["schema"],
+                          current_revision=plan.get("revision", ""), previous_image=record["old_image"],
+                          previous={"image": record["old_image"], "schema": record["old_schema"],
+                                    "revision": (old_info.get("Config", {}).get("Labels") or {}).get("org.opencontainers.image.revision", "")})
             self.finish("completed" if operation == "apply" else "rolled_back", "Verified deployment is ready", True)
         except Exception as exc:
             message = str(exc) if isinstance(exc, OTAError) else "Updater operation failed; inspect host prerequisites and backups"

@@ -79,7 +79,9 @@ def run(image: str, postgres_image: str) -> None:
 
             def healthy(maintenance):
                 status, body = readiness(app)
-                return status == 200 and body.get("ready") is True and body.get("ota_protocol") == 1 and body.get("maintenance") is maintenance
+                return (status == 200 and body.get("ready") is True and body.get("ota_protocol") == 1
+                        and body.get("maintenance") is maintenance and body.get("idle") is True
+                        and body.get("data_dir") == "/app/data" and body.get("gate_enabled") is True)
 
             wait_for("packaged ARTEX startup, database connection and OTA maintenance", lambda: healthy(True))
             mode = docker("exec", app, "stat", "-c", "%a", "/tmp/artex-ota-health.sock").stdout.strip()
