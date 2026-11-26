@@ -24,12 +24,16 @@ import (
 // capture is on) to add to EVERY agent's base list — the DB tools table then
 // filters them per-agent binding. Empty/nil → no host tools this run (capture off).
 func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.CoreTool, map[string][]string)) {
+	context1337Policy := configuredContext1337Exercises()
 	agent.ToolAugment = func(ctx context.Context, agentKey string) ([]actool.CoreTool, agent.DeferredInfo, func()) {
 		a, err := pg.GetAgentByKey(agentKey)
 		if err != nil || a == nil {
 			return nil, agent.DeferredInfo{}, nil
 		}
 		var extra []actool.CoreTool
+		if tool := context1337Policy.tool(ctx, pg, agentKey); tool != nil {
+			extra = append(extra, tool)
+		}
 
 		// --- skills: load visible skills into reg (used for the Skill meta-tool
 		// and to know which MCP servers are skill-gated). ---

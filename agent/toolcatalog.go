@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/Autumn-27/artex/context1337"
 	"github.com/Autumn-27/artex/skillknowledge"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -56,6 +57,11 @@ func builtinToolsByAgent() map[string][]actool.CoreTool {
 	for _, key := range []string{"planner", "worker", "auto", "pentest", "reporter"} {
 		byAgent[key] = append(byAgent[key], skillknowledge.Tools(nil)...)
 	}
+	// Catalog metadata only: runtime instances require the server's independent
+	// operator/task/binding checks. Never put this in the task-less domain registry.
+	for _, key := range []string{"planner", "worker"} {
+		byAgent[key] = append(byAgent[key], context1337.Tool(nil, nil))
+	}
 	return byAgent
 }
 
@@ -66,7 +72,7 @@ func builtinToolsByAgent() map[string][]actool.CoreTool {
 //
 // goal_met：绕过逐个 prove_goal、直接从全局宣布【整个任务完成】,权重大且有误判风险,又与
 // 「prove_goal 标记最后一个目标 → 自动收官」重复,故默认不给任何 agent,需要时再手动绑。
-var defaultUnbound = map[string]bool{"goal_met": true}
+var defaultUnbound = map[string]bool{"goal_met": true, context1337.ToolName: true}
 
 // BuiltinToolSeeds 把各 agent 的内置工具集去重合并成 seed 列表：同名工具（如 list_assets
 // 多个 agent 都有）合成一条，Agents 取并集；defaultUnbound 里的工具则强制绑定为空。

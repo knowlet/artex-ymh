@@ -3,6 +3,7 @@ package agent
 import (
 	"strings"
 
+	"github.com/Autumn-27/artex/context1337"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -32,8 +33,16 @@ func resolvedDeferredInfo(tools []actool.CoreTool, def DeferredInfo) DeferredInf
 	}
 	def.GlobalNames = intersect(def.GlobalNames, deferred)
 	def.RecoveryGuidance = capabilityRecoveryGuidance(present, len(def.Deferred) > 0)
+	def.MetadataGuidance = ""
+	if present[context1337.ToolName] {
+		def.MetadataGuidance = context1337ExerciseGuidance
+	}
 	return def
 }
+
+// Derived after final tool resolution and appended outside editable prompt/tool
+// descriptions, so catalog overrides cannot turn references into target evidence.
+const context1337ExerciseGuidance = "\n\n**CVE 中繼資料補充邊界**：lookup_cve_metadata 僅供目前已授權演練的驗證與報告補充；只傳完整 CVE 識別碼及 builtin／nuclei 來源，禁止傳目標、任務內容或證據。Context1337 外部參考、離線 CISA KEV／Nuclei 情報和實際目標證據必須分開標示來源。中繼資料不是目標證據，不得據此建立新意圖或攻擊路徑、擴大範圍、跟隨參考連結、執行工具或建立漏洞發現；確認漏洞仍須本次授權驗證取得可重現證據。查詢不可用或沒有匹配時可繼續既有離線流程，不代表目標存在或不存在漏洞。"
 
 // Only describe access routes that this session actually has. Tool schemas and
 // descriptions remain the detailed catalog; this small reminder supplies the

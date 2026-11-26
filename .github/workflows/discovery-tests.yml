@@ -4,6 +4,10 @@ on:
     paths:
       - 'discovery/**'
       - 'intelpack/**'
+      - 'context1337/**'
+      - 'server/context1337*'
+      - 'server/assembly.go'
+      - 'agent/**'
       - 'skillcheck/**'
       - 'skills/projectdiscovery-recon/**'
       - 'skills/vulnerability-triage/**'
@@ -79,6 +83,10 @@ jobs:
         run: go test -race ./discovery ./intelpack ./tools -count=1
       - name: Actual Norma skill loading and invocation
         run: go test -race ./skillcheck -count=1
+      - name: Bounded Context1337 metadata contracts (local HTTP fixtures only)
+        run: |
+          go test -race ./context1337 -count=1 -v
+          go test -race ./agent -run '^(TestContext1337|TestCapabilityGuidance|TestBuiltinToolSeeds)' -count=1 -v
       - name: CLI contracts without service initialization
         run: |
           go test -race ./cmd/artex/discovery.go ./cmd/artex/discovery_test.go -count=1

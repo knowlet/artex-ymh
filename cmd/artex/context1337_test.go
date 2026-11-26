@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Autumn-27/artex/context1337"
 )
 
 func context1337Env(endpoint string) func(string) string {
@@ -57,7 +59,7 @@ func TestContext1337ExactMetadataOnly(t *testing.T) {
 	if code := runContext1337(context.Background(), []string{"search", "--cve", "CVE-2999-1234", "--source", "nuclei"}, context1337Env(server.URL), &out, &errs); code != 0 {
 		t.Fatalf("code=%d %s", code, &errs)
 	}
-	var got context1337SearchResult
+	var got context1337.SearchResult
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil || len(got.Matches) != 1 ||
 		got.Matches[0].ResourceID != "absec://nuclei/vuln/CVE-2999-1234" ||
 		got.TargetVulnerability != "unverified" || !got.PageTruncated || strings.Contains(out.String(), "untrusted") {
@@ -67,12 +69,12 @@ func TestContext1337ExactMetadataOnly(t *testing.T) {
 
 func TestContext1337RejectConfig(t *testing.T) {
 	for _, endpoint := range []string{"", "http://example.com", "http://localhost:1337", "https://user:secret@example.com", "https://example.com/path", "https://example.com?token=secret"} {
-		if _, err := newContext1337Client(endpoint, "key"); err == nil {
+		if _, err := context1337.NewClient(endpoint, "key"); err == nil {
 			t.Errorf("accepted invalid origin %q", endpoint)
 		}
 	}
 	for _, key := range []string{"", "a b", "a\nB"} {
-		if _, err := newContext1337Client("https://example.com", key); err == nil {
+		if _, err := context1337.NewClient("https://example.com", key); err == nil {
 			t.Error("accepted invalid key")
 		}
 	}
@@ -85,10 +87,14 @@ func TestContext1337RejectConfig(t *testing.T) {
 }
 
 func TestContext1337HTTPFailuresAndRedaction(t *testing.T) {
-	for _, tc := range []struct { name string; status int; body string }{
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
 		{"auth", 401, "test-secret"},
 		{"unavailable", 503, "test-secret"},
-		{"oversize", 200, strings.Repeat("x", context1337MaxResponse+1)},
+		{"oversize", 200, strings.Repeat("x", context1337.MaxResponse+1)},
 		{"bad-json", 200, "test-secret"},
 		{"invalid-health", 200, `{"status":"ok"}`},
 		{"trailing-json", 200, `{"status":"ok","total_resources":0}{}`},
@@ -132,7 +138,7 @@ func TestContext1337RejectWrongResource(t *testing.T) {
 			fmt.Fprintf(w, `{"query_applied":true,"total":1,"items":[%s]}`, item)
 		}))
 		var out, errs bytes.Buffer
-		code := runContext1337(context.Background(), []string{"search","--cve","CVE-2999-1234"}, context1337Env(server.URL), &out, &errs)
+		code := runContext1337(context.Background(), []string{"search", "--cve", "CVE-2999-1234"}, context1337Env(server.URL), &out, &errs)
 		server.Close()
 		if code != 1 || out.Len() != 0 {
 			t.Fatal("out of scope resource accepted")

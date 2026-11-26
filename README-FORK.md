@@ -51,7 +51,7 @@
 
 ### 4.2 Context1337 外部情報查詢
 
-新增明確啟動的唯讀操作員 CLI：`artex context1337 status|search`。獨立服務、專用唯讀 API Key，僅回傳資源數量與完整 CVE 識別碼參考，不自動匯入外部資料或改變任務工具。部署與安全邊界見 [Context1337 整合說明](providers/context1337/README.md)。
+保留唯讀操作員 CLI `artex context1337 status|search`，另加入預設停用的 `lookup_cve_metadata` 演練工具。操作員須設定啟用旗標、完整任務 ID 白名單、固定服務位址與專用唯讀金鑰檔，並透過既有工具管理明確綁定 planner／worker；每次查詢重新檢查任務狀態與工具授權。僅傳送完整 CVE ID 與固定來源篩選，回傳標示為未驗證的識別碼與來源，不建立漏洞、不載入指令或執行外部內容。查詢受數量、併發與逾時限制；既有離線 KEV、Nuclei 與技能檢索獨立運作。設定、憑證邊界與驗證限制見 [Context1337 整合說明](providers/context1337/README.md)。
 
 ### 5. 稳定性（实战中踩出来的）
 
