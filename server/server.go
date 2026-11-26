@@ -1882,6 +1882,15 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// A fact is not necessarily a finding. Expose only an aggregate for manual
+	// review; do not reinterpret facts or modify planner behavior.
+	if t.Store != nil {
+		if count, err := t.Store.CountFactOnlyTerminalIntents(); err == nil {
+			dto.FactOnlyIntentsTotal = &count
+		} else {
+			log.Printf("[task] fact-only intent diagnostic unavailable for task %s: %v", t.ID, err)
+		}
+	}
 	writeJSON(w, 200, dto)
 }
 
