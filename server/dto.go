@@ -50,6 +50,7 @@ type TaskDTO struct {
 	Tokens             TokenTotalDTO      `json:"tokens"` // whole-task token consumption
 	GoalsTotal         int                `json:"goals_total"`
 	GoalsMet           int                `json:"goals_met"`
+	FactOnlyIntentsTotal *int              `json:"fact_only_intents_total,omitempty"` // detail-only diagnostic; nil means unavailable
 	InFlight           int                `json:"in_flight"`                // 运行中 Worker 数（state=running 的意图）
 	Findings           FindingSeverityDTO `json:"findings"`                 // 该任务已登记的漏洞数（findings 表，按严重度分档）
 	LLMProfileID       *int64             `json:"llm_profile_id,omitempty"` // LLM profile used for this task; nil = default
