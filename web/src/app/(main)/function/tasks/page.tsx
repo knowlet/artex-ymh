@@ -119,6 +119,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
+import { formatBytes, formatCompactTokens } from "@/lib/format";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { type SortDirection, useStoredSortPreference } from "@/lib/sort-preference";
 import type {
@@ -136,13 +137,6 @@ import type {
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-// fmtBytes renders a human file size for the upload manifest.
-function fmtBytes(n: number): string {
-  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)} MB`;
-  if (n >= 1 << 10) return `${(n / (1 << 10)).toFixed(1)} KB`;
-  return `${n} B`;
-}
-
 // UPLOAD_MARKER labels the auto-appended block of uploaded-file paths inside the task
 // description, so re-uploads append under the same block instead of adding a new header.
 const UPLOAD_MARKER = "【上传文件（绝对路径）】";
@@ -151,7 +145,7 @@ const UPLOAD_MARKER = "【上传文件（绝对路径）】";
 // Read/Bash-friendly manifest — the worker opens them by path. Keeps one marked block:
 // first upload adds the header, later uploads append bullets under it.
 function appendUploads(desc: string, atts: ChatAttachment[]): string {
-  const bullets = atts.map((a) => `- ${a.abs ?? a.path}（${fmtBytes(a.size)}）`).join("\n");
+  const bullets = atts.map((a) => `- ${a.abs ?? a.path}（${formatBytes(a.size)}）`).join("\n");
   if (desc.includes(UPLOAD_MARKER)) {
     return `${desc.replace(/\s*$/, "")}\n${bullets}\n`;
   }
@@ -163,13 +157,6 @@ function appendUploads(desc: string, atts: ChatAttachment[]): string {
 // worker), so the list has to be pulled; 10s is plenty for status / 进度 / token 变化.
 const POLL_MS = 10_000;
 const MAX_SOURCE_TASKS = 8;
-
-// fmtTokens renders a compact token count (1234 → 1.2k, 2_000_000 → 2M).
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + "M";
-  if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k";
-  return String(n);
-}
 
 // fmtDuration renders a run duration in seconds as a compact human string.
 function fmtDuration(sec: number): string {
@@ -1270,11 +1257,11 @@ const TaskRow = React.memo(function TaskRow({
       >
         {task.tokens ? (
           <span className="text-muted-foreground">
-            入 <span className="text-foreground">{fmtTokens(task.tokens.input_tokens)}</span>
+            入 <span className="text-foreground">{formatCompactTokens(task.tokens.input_tokens)}</span>
             {" · 缓 "}
-            <span className="text-foreground">{fmtTokens(task.tokens.cache_read_tokens)}</span>
+            <span className="text-foreground">{formatCompactTokens(task.tokens.cache_read_tokens)}</span>
             {" · 出 "}
-            <span className="text-foreground">{fmtTokens(task.tokens.output_tokens)}</span>
+            <span className="text-foreground">{formatCompactTokens(task.tokens.output_tokens)}</span>
           </span>
         ) : (
           "—"

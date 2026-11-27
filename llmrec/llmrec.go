@@ -153,7 +153,6 @@ func (r *Recorder) Stream(ctx context.Context, req llm.CompletionRequest) iter.S
 			thinkingBuf strings.Builder
 			usage       llm.Usage
 			stopReason  string
-			streamErr   error
 		)
 
 		finished := false
@@ -170,18 +169,15 @@ func (r *Recorder) Stream(ctx context.Context, req llm.CompletionRequest) iter.S
 			r.recordUsage(taskID, expID, worker, usage, int(time.Since(start).Milliseconds()), status)
 			// Heavy trace row — only when body recording is on.
 			if recordBodies {
-				r.record(req, session, taskID, worker, reqBody, capt, start, textBuf.String(), thinkingBuf.String(), usage, stopReason, err)
+				r.record(session, taskID, worker, reqBody, capt, start, textBuf.String(), thinkingBuf.String(), usage, stopReason, err)
 			}
 		}
 		defer func() { finish(ctx.Err()) }()
 
 		for ev, err := range r.inner.Stream(ctx, req) {
 			if err != nil {
-				streamErr = err
-				finish(streamErr)
-				if !yield(ev, err) {
-					return
-				}
+				finish(err)
+				yield(ev, err)
 				return
 			}
 			// Always track usage (cheap); accumulate text/thinking only for bodies.
@@ -213,7 +209,7 @@ func (r *Recorder) Stream(ctx context.Context, req llm.CompletionRequest) iter.S
 		}
 
 		// Stream completed normally.
-		finish(streamErr)
+		finish(nil)
 	}
 }
 
@@ -247,7 +243,7 @@ func (r *Recorder) Complete(ctx context.Context, req llm.CompletionRequest) (llm
 	}
 	r.recordUsage(taskID, expID, worker, usage, int(time.Since(start).Milliseconds()), status)
 	if recordBodies {
-		r.record(req, session, taskID, worker, reqBody, capt, start, msg.Text(), thinkingText(msg), usage, stopReason, err)
+		r.record(session, taskID, worker, reqBody, capt, start, msg.Text(), thinkingText(msg), usage, stopReason, err)
 	}
 	return msg, stopReason, usage, err
 }
@@ -293,7 +289,7 @@ func (r *Recorder) recordUsage(taskID string, expID int64, worker string, usage 
 // record persists one LLM call to PostgreSQL before the provider stream returns.
 // Keeping the write inside the owning task operation means task deletion can
 // drain calls and then remove records without a late async insert recreating one.
-func (r *Recorder) record(req llm.CompletionRequest, session, taskID, worker, reqBody string, capt *Capture, start time.Time, text, thinking string, usage llm.Usage, stopReason string, streamErr error) {
+func (r *Recorder) record(session, taskID, worker, reqBody string, capt *Capture, start time.Time, text, thinking string, usage llm.Usage, stopReason string, streamErr error) {
 	latency := int(time.Since(start).Milliseconds())
 	status := "ok"
 	errMsg := ""
@@ -318,17 +314,11 @@ func (r *Recorder) record(req llm.CompletionRequest, session, taskID, worker, re
 	}
 	respBody, _ := json.Marshal(resp)
 
-	model := ""
-	if len(req.System) > 0 {
-		// model is not in CompletionRequest; use the configured model name
-	}
-	model = r.model
-
 	rec := &db.LLMRecord{
 		SessionID:    session,
 		TaskID:       taskID,
 		Worker:       worker,
-		Model:        model,
+		Model:        r.model,
 		ProfileName:  r.prof,
 		LatencyMs:    latency,
 		InputTokens:  usage.InputTokens,

@@ -353,12 +353,8 @@ func (s *Server) agentRunSeconds(key string) int {
 	return a.RunSecs
 }
 
-// loadLLMConfig reads the active LLM profile from PG (llm_profiles).
-func (s *Server) loadLLMConfig() (agent.Config, bool) {
-	p, err := s.m.pg.ActiveProfile()
-	if err != nil || p == nil {
-		return agent.Config{}, false
-	}
+// configFromProfile converts a stored profile and resolves its retry overrides.
+func (s *Server) configFromProfile(p *db.LLMProfile) agent.Config {
 	cfg := agent.ConfigFrom(p.Format, p.Model, p.BaseURL, p.APIKey, p.Proxy)
 	cfg.RatePerSecond, cfg.RatePerMinute = p.RatePerSecond, p.RatePerMinute
 	cfg.ContextWindowK = p.ContextWindowK
@@ -368,6 +364,16 @@ func (s *Server) loadLLMConfig() (agent.Config, bool) {
 	cfg.MaxTokens, cfg.MaxTokensField = p.MaxTokens, p.MaxTokensField
 	cfg.SessionHeaderKey = p.SessionHeaderKey
 	s.applyProfileRetry(&cfg, p)
+	return cfg
+}
+
+// loadLLMConfig reads the active LLM profile from PG (llm_profiles).
+func (s *Server) loadLLMConfig() (agent.Config, bool) {
+	p, err := s.m.pg.ActiveProfile()
+	if err != nil || p == nil {
+		return agent.Config{}, false
+	}
+	cfg := s.configFromProfile(p)
 	if cfg.APIKey == "" {
 		return cfg, false
 	}
@@ -546,15 +552,7 @@ func (s *Server) loadProfileConfig(id int64) (agent.Config, bool) {
 	if err != nil || p == nil {
 		return agent.Config{}, false
 	}
-	cfg := agent.ConfigFrom(p.Format, p.Model, p.BaseURL, p.APIKey, p.Proxy)
-	cfg.RatePerSecond, cfg.RatePerMinute = p.RatePerSecond, p.RatePerMinute
-	cfg.ContextWindowK = p.ContextWindowK
-	cfg.ThinkingType = p.ThinkingType
-	cfg.ReasoningEffort = p.ReasoningEffort
-	cfg.Stream = p.Streaming
-	cfg.MaxTokens, cfg.MaxTokensField = p.MaxTokens, p.MaxTokensField
-	cfg.SessionHeaderKey = p.SessionHeaderKey
-	s.applyProfileRetry(&cfg, p)
+	cfg := s.configFromProfile(p)
 	if cfg.APIKey == "" {
 		return cfg, false
 	}
