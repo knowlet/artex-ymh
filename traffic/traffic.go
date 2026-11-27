@@ -2133,19 +2133,6 @@ func (t *Traffic) deleteArchivedHosts(hosts []string) error {
 	return tx.Commit()
 }
 
-func pathWithin(root, candidate string) bool {
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	candidateAbs, err := filepath.Abs(candidate)
-	if err != nil {
-		return false
-	}
-	relative, err := filepath.Rel(rootAbs, candidateAbs)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
-}
-
 // Rollback discards the staged deletion, leaving the traffic store untouched.
 func (s *HostDeleteStage) Rollback() error {
 	if s == nil || s.done {

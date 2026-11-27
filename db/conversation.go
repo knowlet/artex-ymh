@@ -304,15 +304,7 @@ ORDER BY id DESC LIMIT $3`, convID, before, limit+1)
 	if err := rows.Err(); err != nil {
 		return nil, false, err
 	}
-	hasMore := len(desc) > limit
-	if hasMore {
-		desc = desc[:limit]
-	}
-	// reverse the newest-first window into ascending id order for display.
-	out := make([]Activity, len(desc))
-	for i, a := range desc {
-		out[len(desc)-1-i] = a
-	}
+	out, hasMore := ascendingActivityPage(desc, limit)
 	return out, hasMore, nil
 }
 

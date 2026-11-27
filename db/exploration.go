@@ -1539,15 +1539,7 @@ ORDER BY id DESC LIMIT $%d`, cond, beforeArg, beforeArg, limitArg)
 	if err := rows.Err(); err != nil {
 		return nil, false, err
 	}
-	hasMore := len(desc) > limit
-	if hasMore {
-		desc = desc[:limit]
-	}
-	// reverse the newest-first window into ascending id order for display.
-	out := make([]Activity, len(desc))
-	for i, a := range desc {
-		out[len(desc)-1-i] = a
-	}
+	out, hasMore := ascendingActivityPage(desc, limit)
 	return out, hasMore, nil
 }
 
@@ -1584,14 +1576,7 @@ func (s *ExplorationStore) ActivityPageForTerminalIntent(nodeID, before int64, l
 	if err := rows.Err(); err != nil {
 		return nil, false, err
 	}
-	hasMore := len(desc) > limit
-	if hasMore {
-		desc = desc[:limit]
-	}
-	out := make([]Activity, len(desc))
-	for i, a := range desc {
-		out[len(desc)-1-i] = a
-	}
+	out, hasMore := ascendingActivityPage(desc, limit)
 	return out, hasMore, nil
 }
 
