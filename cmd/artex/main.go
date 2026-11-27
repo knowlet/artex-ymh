@@ -52,6 +52,10 @@ func main() {
 }
 
 func run() int {
+	// Evidence summaries are local-only and do not initialize the service.
+	if len(os.Args) > 1 && os.Args[1] == "evidence" {
+		return runEvidenceCLI(os.Args[2:])
+	}
 	// Explicit local scanning never starts the server, database, or agents.
 	if len(os.Args) > 1 && os.Args[1] == "scan" {
 		return runScanCLI(os.Args[2:])

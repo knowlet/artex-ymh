@@ -9,6 +9,8 @@ on:
       - 'skills/vulnerability-triage/**'
       - 'cmd/artex/discovery*'
       - 'cmd/artex/intel*'
+      - 'cmd/artex/evidence*'
+      - 'skills/evidence-privacy/**'
       - 'cmd/artex/main.go'
       - 'tools/**'
       - 'packaging/projectdiscovery-lock.json'
@@ -82,6 +84,7 @@ jobs:
         run: |
           go test -race ./cmd/artex/discovery.go ./cmd/artex/discovery_test.go -count=1
           go test -race ./cmd/artex/intel.go ./cmd/artex/intel_test.go -count=1
+          go test -race ./cmd/artex/evidence.go ./cmd/artex/evidence_test.go -count=1
       - name: Backend compilation
         run: |
           go build -o /tmp/artex-ci ./cmd/artex
