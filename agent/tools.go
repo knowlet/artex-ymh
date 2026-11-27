@@ -362,7 +362,7 @@ func (t *ToolSet) graphOverview() actool.CoreTool {
 // "" means the node has no standalone findings row (synthetic/legacy) — keep
 // legacy behavior and treat it as countable.
 func provenFinding(status string) bool {
-	return status == "" || status == db.FindingConfirmed
+	return db.FindingStatusProvesGoal(status)
 }
 
 // graphOverviewData computes the distilled situational snapshot shared by the
@@ -1279,7 +1279,7 @@ func (t *ToolSet) proveGoal() actool.CoreTool {
 			"evidence_id": idp("证明它的发现/事实节点 id"),
 			"reason":      str("为什么这个证据满足该目标"),
 		}, "goal_id", "evidence_id"),
-		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
 				GoalID     json.RawMessage `json:"goal_id"`
 				EvidenceID json.RawMessage `json:"evidence_id"`
@@ -1290,40 +1290,16 @@ func (t *ToolSet) proveGoal() actool.CoreTool {
 			if goal == 0 || ev == 0 {
 				return actool.Errorf("goal_id 和 evidence_id 必填"), nil
 			}
-			goalNode, err := t.ts.GetNode(goal)
-			if err != nil || goalNode == nil || goalNode.Kind != db.KindGoal {
-				return actool.Errorf("goal_id 必须是本任务的目标节点（关联任务目标只读）"), nil
+			proof, err := t.ts.ProveGoal(ctx, goal, ev)
+			if err != nil {
+				return actool.Errorf("prove_goal: " + err.Error()), nil
 			}
-			evidenceNode, err := t.ts.GetNodeWithSources(ev)
-			if err != nil || evidenceNode == nil || (evidenceNode.Kind != db.KindFact && evidenceNode.Kind != db.KindFinding) {
-				return actool.Errorf("evidence_id 必须是本任务或直接关联任务的事实/漏洞节点"), nil
-			}
-			// C4:待验证(pending)/误报(false_positive)的漏洞不算"已突破",不能作为
-			// 目标达成证据——反证验证(verifier)写回 confirmed 后才算数。节点 state 在
-			// 上报时即 'confirmed', triage 状态要查 findings 表;无独立行(合成/遗留
-			// 节点)保持原行为。
-			if evidenceNode.Kind == db.KindFinding && t.as != nil {
-				if st, serr := t.as.FindingStatusByNodeID(ev); serr == nil && !provenFinding(st) {
-					return actool.Errorf(fmt.Sprintf("该漏洞尚未验证通过(当前状态 %s),不能作为目标达成证据;待反证验证确认为 confirmed 后再试", st)), nil
-				}
-			}
-			_ = t.ts.Link(ev, db.RelProves, goal)
-			_ = t.ts.SetNodeState(goal, "met")
 			// 每标记一个目标 met，就检查本任务是否【所有目标】都已 met；若是，自动判定
 			// 任务完成（置 GoalMet），无需再依赖模型显式调 goal_met。
-			if goals, err := t.ts.ListByKind(db.KindGoal, 1000); err == nil && len(goals) > 0 {
-				allMet := true
-				for _, g := range goals {
-					if g.State != "met" {
-						allMet = false
-						break
-					}
-				}
-				if allMet {
-					t.GoalMet = true
-					t.Reason = fmt.Sprintf("所有 %d 个目标均已 met（最后由 goal %d 触发）", len(goals), goal)
-					return actool.Text(fmt.Sprintf("goal %d marked met；本任务所有目标均已达成，任务自动判定完成", goal)), nil
-				}
+			if proof.AllGoalsMet {
+				t.GoalMet = true
+				t.Reason = fmt.Sprintf("所有 %d 个目标均已 met（最后由 goal %d 触发）", proof.GoalCount, goal)
+				return actool.Text(fmt.Sprintf("goal %d marked met；本任务所有目标均已达成，任务自动判定完成", goal)), nil
 			}
 			return actool.Text(fmt.Sprintf("goal %d marked met", goal)), nil
 		})

@@ -241,6 +241,9 @@ func (d *DB) FinishFindingCheck(id int64, status, reason string) error {
 			return err
 		}
 		if nodeID != nil {
+			if err := discardGoalProofsTx(context.Background(), tx, []int64{*nodeID}); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(`UPDATE exploration_nodes SET state='dismissed' WHERE id=$1 AND kind='finding'`, *nodeID); err != nil {
 				return err
 			}

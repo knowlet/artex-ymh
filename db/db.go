@@ -170,6 +170,17 @@ func Open(dsn string) (*DB, error) {
 		if err := d.seedBuiltins(); err != nil {
 			return fmt.Errorf("seed builtins: %w", err)
 		}
+		tx, err := conn.BeginTx(context.Background(), nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := reconcileFindingGoalProofsTx(context.Background(), tx, 0); err != nil {
+			return fmt.Errorf("repair goal proofs: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {

@@ -600,6 +600,11 @@ func (s *ExplorationStore) CancelIntent(id int64) (IntentCleanup, error) {
 	}
 
 	// finding 节点删除前先删 findings 表行(否则留 node_id=NULL 的孤儿)。
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	sort.Slice(findingIDs, func(i, j int) bool { return findingIDs[i] < findingIDs[j] })
+	if err := discardDeletedNodeProofsTx(context.Background(), tx, ids); err != nil {
+		return out, err
+	}
 	for _, fid := range findingIDs {
 		if _, err := tx.Exec(`DELETE FROM findings WHERE node_id=$1`, fid); err != nil {
 			return out, err

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -627,6 +628,9 @@ DELETE FROM assets a USING deletable d WHERE a.id=d.id`, id, expID)
 			return result, err
 		}
 		result.AssetsDetached, _ = res.RowsAffected()
+	}
+	if err := discardExplorationGoalProofsTx(context.Background(), tx, expID); err != nil {
+		return result, err
 	}
 	if deleteFindings {
 		res, err := tx.Exec(`DELETE FROM findings WHERE task_id = $1`, id)
