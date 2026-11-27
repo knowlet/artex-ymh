@@ -378,6 +378,9 @@ func (s *ExplorationStore) AddFindingFollowUpIntent(findingID, findingNodeID int
 		return 0, Activity{}, err
 	}
 	defer tx.Rollback()
+	if err := lockActivityAppend(tx, s.expID); err != nil {
+		return 0, Activity{}, err
+	}
 
 	var liveNodeID int64
 	err = tx.QueryRow(`SELECT n.id
