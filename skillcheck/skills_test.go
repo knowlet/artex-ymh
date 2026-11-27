@@ -16,11 +16,12 @@ import (
 // Stage only the new skills so unrelated legacy parse failures cannot mask them.
 func TestDiscoverySkillsLoadAndInvoke(t *testing.T) {
 	root := t.TempDir()
-	names := []string{"projectdiscovery-recon", "vulnerability-triage", "one-day-validation", "dependency-cve-audit", "vulnerability-tooling-maintenance"}
+	names := []string{"projectdiscovery-recon", "vulnerability-triage", "one-day-validation", "dependency-cve-audit", "vulnerability-tooling-maintenance", "evidence-privacy"}
 	references := map[string]string{
 		"projectdiscovery-recon": "commands.md", "vulnerability-triage": "triage.md",
 		"one-day-validation": "validation.md", "dependency-cve-audit": "osv.md",
 		"vulnerability-tooling-maintenance": "ci.md",
+		"evidence-privacy":                  "share.md",
 	}
 	for _, name := range names {
 		source := filepath.Join("..", "skills", name)
