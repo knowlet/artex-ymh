@@ -419,6 +419,9 @@ ORDER BY context.inherited, intent.id DESC, asset.id`, taskID)
 			id := sourceNodeID.Int64
 			asset.SourceNodeID = &id
 		}
+		if asset.Type == "service" || asset.Type == "endpoint" {
+			asset.Label = assetURLLabelForDisplay(asset.Label)
+		}
 		out = append(out, asset)
 	}
 	return out, rows.Err()

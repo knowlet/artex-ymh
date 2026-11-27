@@ -471,6 +471,7 @@ ORDER BY a.id`, taskID)
 		n.Key = assetKey(n.AssetID)
 		n.CompanyID = companyID
 		n.InScope = true
+		n.URL = AssetURLForDisplay(n.URL)
 		n.Label = coverageNodeLabel(&n)
 		p := add(n)
 		switch n.Kind {
@@ -592,14 +593,14 @@ func coverageNodeLabel(n *CoverageGraphNode) string {
 	switch n.Kind {
 	case "endpoint", "service":
 		if n.URL != "" {
-			return n.URL
+			return AssetURLForDisplay(n.URL)
 		}
 	case "app":
 		if n.AppName != "" {
 			return n.AppName
 		}
 	}
-	for _, v := range []string{n.URL, n.Domain, n.IP, n.AppName, n.RootDomain} {
+	for _, v := range []string{AssetURLForDisplay(n.URL), n.Domain, n.IP, n.AppName, n.RootDomain} {
 		if v != "" {
 			return v
 		}
@@ -641,6 +642,9 @@ ORDER BY t.id LIMIT $`+limPos+` OFFSET $`+offPos, pageArgs...)
 		var a CoverageAsset
 		if err := rows.Scan(&a.ID, &a.Type, &a.Label); err != nil {
 			return nil, total, err
+		}
+		if a.Type == "service" || a.Type == "endpoint" {
+			a.Label = assetURLLabelForDisplay(a.Label)
 		}
 		out = append(out, a)
 	}

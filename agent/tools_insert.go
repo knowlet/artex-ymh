@@ -88,7 +88,7 @@ func assetInputLabel(item assetInputItem) string {
 	case strings.TrimSpace(item.Domain) != "":
 		target = strings.TrimSpace(item.Domain)
 	case strings.TrimSpace(item.URL) != "":
-		target = strings.TrimSpace(item.URL)
+		target = db.AssetURLForDisplay(strings.TrimSpace(item.URL))
 	case strings.TrimSpace(item.IP) != "":
 		target = strings.TrimSpace(item.IP)
 	case strings.TrimSpace(item.ServiceIP) != "":

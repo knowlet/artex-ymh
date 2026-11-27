@@ -97,7 +97,7 @@ LIMIT $2`, taskID, limit)
 		}
 		switch {
 		case urlv != "":
-			h.Label = urlv
+			h.Label = AssetURLForDisplay(urlv)
 		case port != nil:
 			host := domain
 			if host == "" {

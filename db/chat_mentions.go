@@ -67,7 +67,7 @@ func (d *DB) SearchChatMentionsPage(ctx context.Context, kind, query, cursor str
 	}
 	pattern := "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(query) + "%"
 	rows, err := d.QueryContext(ctx, `
-SELECT kind, id, left(label, 160), left(description, 240) FROM (
+SELECT kind, id, label, left(description, 240) FROM (
  (SELECT 'finding' AS kind, id, COALESCE(NULLIF(name,''), vulnclass) AS label,
          concat_ws(' · ', severity, status, left(summary, 160)) AS description
   FROM findings WHERE ($1='' OR $1='finding') AND
@@ -97,6 +97,12 @@ SELECT kind, id, left(label, 160), left(description, 240) FROM (
 		var item ChatMention
 		if err := rows.Scan(&item.Kind, &item.ID, &item.Label, &item.Description); err != nil {
 			return page, err
+		}
+		if item.Kind == "service" || item.Kind == "endpoint" {
+			item.Label = assetURLLabelForDisplay(item.Label)
+		}
+		if label := []rune(item.Label); len(label) > 160 {
+			item.Label = string(label[:160])
 		}
 		page.Items = append(page.Items, item)
 	}

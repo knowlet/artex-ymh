@@ -454,7 +454,10 @@ func restoreArchiveAssets(tx *sql.Tx, taskID int64, raw json.RawMessage) (map[in
 		}
 		// Validate before natural-key reuse as well as insertion: legacy unsafe
 		// URLs already present in the live store must not regain task ownership.
-		if archiveRowString(row, "type") == "service" && strings.EqualFold(archiveRowString(row, "service_type"), "http") {
+		assetType := archiveRowString(row, "type")
+		// Also validate optional URLs on other kinds so changing an archive's
+		// asset type cannot bypass the URL credential/scheme gate.
+		if archiveRowString(row, "url") != "" || assetType == "endpoint" || (assetType == "service" && strings.EqualFold(archiveRowString(row, "service_type"), "http")) {
 			if err := endpoint.ValidateAssetURL(archiveRowString(row, "url")); err != nil {
 				mapping[oldID] = 0
 				warnings = append(warnings, fmt.Sprintf("资产 %d 因无效 HTTP URL 已跳过: %v", oldID, err))

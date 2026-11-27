@@ -2,6 +2,7 @@ package endpoint
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -29,15 +30,36 @@ func TestValidateAssetURL(t *testing.T) {
 		"http://Example.COM/path",
 		"https://example.com/#/dashboard",
 		"https://example.com/path?q=1#frag",
-		"https://user:pass@example.com/", // scheme gate only; userinfo preserved for legacy rows
 		"http://localhost:8080/path",
 		"https://[::1]:8443/path#fragment",
 		"https://example.com/a%20b?q=two%20words#frag",
 		"https://example.com/中文?q=繁體#片段",
+		"https://example.com/user@example.test?q=user:pass@example.test#user@host",
 	} {
 		if err := ValidateAssetURL(raw); err != nil {
 			t.Fatalf("ValidateAssetURL(%q) should succeed: %v", raw, err)
 		}
+	}
+}
+
+func TestValidateAssetURLRejectsEmbeddedCredentials(t *testing.T) {
+	for _, raw := range []string{
+		"https://fixture-user:fixture-secret@example.com/",
+		"https://fixture-user@example.com/path",
+		"https://:fixture-secret@example.com/path",
+		"https://@example.com/path",
+		"HTTPS://fixture-user:fixture%2Dsecret@example.com:443/path?q=1#fragment",
+		"http://fixture-user:fixture-secret@[2001:db8::1]:8080/path",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			err := ValidateAssetURL(raw)
+			if err == nil {
+				t.Fatal("asset URLs must not persist userinfo")
+			}
+			if strings.Contains(err.Error(), "fixture-user") || strings.Contains(err.Error(), "fixture-secret") {
+				t.Fatalf("validation error exposes credentials: %v", err)
+			}
+		})
 	}
 }
 

@@ -275,7 +275,7 @@ func (a *Asset) InterceptLabel() string {
 	case a.Domain != "":
 		target = a.Domain
 	case a.URL != "":
-		target = a.URL
+		target = AssetURLForDisplay(a.URL)
 	case a.IP != "":
 		target = a.IP
 	default:

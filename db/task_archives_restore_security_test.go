@@ -32,6 +32,49 @@ func TestSecurityArchiveRejectsUnsafeURLBeforeLookup(t *testing.T) {
 	}
 }
 
+func TestSecurityArchiveRejectsEndpointURLsAndUserinfoBeforeLookup(t *testing.T) {
+	for _, kind := range []struct{ typ, serviceType string }{
+		{"service", "http"}, {"endpoint", ""}, {"service", "other"}, {"app", ""}, {"root_domain", ""},
+	} {
+		for _, rawURL := range []string{
+			"https://fixture-user:fixture-secret@example.test/path",
+			"https://fixture-user@example.test/path",
+			"https://@example.test/path",
+			"javascript:alert(1)",
+			"https://bad host.example/path",
+			"relative/path",
+			"",
+		} {
+			if rawURL == "" && (kind.typ != "endpoint" && kind.serviceType != "http") {
+				continue // These asset kinds do not require a URL.
+			}
+			t.Run(kind.typ+"/"+kind.serviceType+"/"+rawURL, func(t *testing.T) {
+				raw, err := json.Marshal([]map[string]any{{
+					"id": 42, "type": kind.typ, "service_type": kind.serviceType, "url": rawURL, "method": "GET",
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				// No transaction: unsafe URLs must be rejected even before reuse
+				// of a legacy row with the same natural key can be attempted.
+				mapping, warnings, err := restoreArchiveAssets(nil, 1, raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if id, exists := mapping[42]; !exists || id != 0 {
+					t.Errorf("rejected asset lacks explicit skipped mapping: %v", mapping)
+				}
+				if len(warnings) != 1 || !strings.Contains(warnings[0], "跳过") {
+					t.Errorf("expected one skip warning, got %v", warnings)
+				}
+				if strings.Contains(strings.Join(warnings, " "), "fixture-") {
+					t.Errorf("restore warning discloses URL credentials: %v", warnings)
+				}
+			})
+		}
+	}
+}
+
 func TestSecurityArchiveRemapDropsSkippedAssetReferences(t *testing.T) {
 	tables := map[string]json.RawMessage{
 		"exploration_anchors": json.RawMessage(`[{"node_id":1,"asset_id":10},{"node_id":1,"asset_id":20},{"node_id":1,"asset_id":30}]`),
