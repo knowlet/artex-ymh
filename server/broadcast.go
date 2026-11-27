@@ -9,7 +9,8 @@ import (
 // Broadcaster is a per-task in-process pub/sub for live activity events. The
 // engine publishes each appended activity at its single emit point; SSE handlers
 // subscribe per task. Storage (activity table) and the live stream come from the
-// same Publish call, so they never diverge.
+// same emit path. The database remains the replay source of truth; notifications
+// can arrive out of order when concurrent writers finish publishing.
 type Broadcaster struct {
 	mu   sync.Mutex
 	subs map[string]map[chan db.Activity]struct{} // task id -> set of subscriber channels
@@ -35,28 +36,38 @@ func (b *Broadcaster) Subscribe(task string) (<-chan db.Activity, func()) {
 		once.Do(func() {
 			b.mu.Lock()
 			if m := b.subs[task]; m != nil {
-				delete(m, ch)
+				if _, subscribed := m[ch]; subscribed {
+					delete(m, ch)
+					close(ch)
+				}
 				if len(m) == 0 {
 					delete(b.subs, task)
 				}
 			}
 			b.mu.Unlock()
-			close(ch)
 		})
 	}
 }
 
 // Publish fans an activity out to all subscribers of a task. Non-blocking: if a
-// subscriber's buffer is full the event is dropped — the client reconnects with
-// its last seq cursor and catches up the gap from the DB, so liveness never
-// stalls the engine.
+// subscriber's buffer is full, disconnect it before any later event can advance
+// its cursor past the missing row. The buffered prefix is still readable; after
+// draining it the SSE handler closes and the client replays from the DB. Closing
+// and removing the channel under the same lock as unsubscribe makes eviction and
+// handler cleanup safe to race, without letting slow clients stall the engine.
 func (b *Broadcaster) Publish(task string, a db.Activity) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for ch := range b.subs[task] {
+	subs := b.subs[task]
+	for ch := range subs {
 		select {
 		case ch <- a:
 		default:
+			delete(subs, ch)
+			close(ch)
 		}
+	}
+	if len(subs) == 0 {
+		delete(b.subs, task)
 	}
 }
