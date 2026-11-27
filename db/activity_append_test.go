@@ -1,9 +1,13 @@
 package db
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // A slow INSERT obtains its sequence ID before its trigger finishes. It must
@@ -148,5 +152,70 @@ WHERE locktype='advisory' AND classid=$1 AND objid=$2 AND objsubid=1 AND NOT gra
 				t.Fatalf("committed activity prefix = %+v, err=%v", rows, err)
 			}
 		})
+	}
+}
+
+func TestActivityFollowUpUsesTaskBeforeFindingLock(t *testing.T) {
+	d := openDisposableSchemaDB(t)
+	task, err := d.CreateTask("follow-up lock ordering", "fixture", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := d.Exploration(task.ExplorationID)
+	nodeID, err := store.AddNode(KindFinding, map[string]any{"summary": "fixture"}, 1, "confirmed", "fixture", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findingID, err := d.AddFinding(task.ID, nodeID, "fixture", "", "low", "fixture", "evidence", "fixture", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	followDB, followPID := openTaskDeleteTestDB(t, os.Getenv("ARTEX_AUTH_TEST_DSN"))
+	var schema string
+	if err := d.QueryRow(`SELECT current_schema()`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := followDB.Exec(`SET search_path TO ` + pgx.Identifier{schema}.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	evidenceTx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer evidenceTx.Rollback()
+	if err := LockTaskEvidenceTx(evidenceTx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	followDone := make(chan error, 1)
+	go func() {
+		_, _, err := followDB.Exploration(task.ExplorationID).AddFindingFollowUpIntent(
+			findingID, nodeID, "follow up", Activity{Worker: "system", Kind: "text"})
+		followDone <- err
+	}()
+	// The old joined FOR SHARE locked the finding before waiting on the task.
+	// Wait for that actual database wait, then complete the task-first evidence
+	// mutation. It must not deadlock with a follow-up retaining the finding lock.
+	if err := waitForTaskDeleteBlock(d, followPID, followDone); err != nil {
+		t.Fatal(err)
+	}
+	if err := LockFindingEvidenceTx(evidenceTx, findingID, nil); err != nil {
+		t.Fatalf("task-first evidence writer deadlocked with follow-up: %v", err)
+	}
+	if err := bumpEvidenceVersionTx(evidenceTx, findingID); err != nil {
+		t.Fatal(err)
+	}
+	if err := evidenceTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-followDone:
+		if err != nil {
+			t.Fatalf("follow-up failed during concurrent evidence mutation: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("follow-up did not finish after evidence mutation committed")
 	}
 }

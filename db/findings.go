@@ -381,6 +381,16 @@ func (s *ExplorationStore) AddFindingFollowUpIntent(findingID, findingNodeID int
 	if err := lockActivityAppend(tx, s.expID); err != nil {
 		return 0, Activity{}, err
 	}
+	// Evidence edits/deletion lock the task before the finding. The joined
+	// FOR SHARE below used to take the finding first, then wait on that task,
+	// deadlocking with a task-first writer waiting for the same finding. Pin
+	// the owning task explicitly before taking any finding/source-node lock.
+	if err := tx.QueryRow(`SELECT id FROM tasks WHERE exploration_id=$1 FOR SHARE`, s.expID).Scan(new(int64)); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, Activity{}, ErrFindingOriginUnavailable
+		}
+		return 0, Activity{}, err
+	}
 
 	var liveNodeID int64
 	err = tx.QueryRow(`SELECT n.id
@@ -388,7 +398,7 @@ func (s *ExplorationStore) AddFindingFollowUpIntent(findingID, findingNodeID int
 		JOIN tasks t ON t.id=f.task_id
 		JOIN exploration_nodes n ON n.id=f.node_id AND n.exploration_id=t.exploration_id
 		WHERE f.id=$1 AND f.node_id=$2 AND t.exploration_id=$3 AND n.kind='finding'
-		FOR SHARE OF f, t, n`, findingID, findingNodeID, s.expID).Scan(&liveNodeID)
+		FOR SHARE OF f, n`, findingID, findingNodeID, s.expID).Scan(&liveNodeID)
 	if err == sql.ErrNoRows {
 		return 0, Activity{}, ErrFindingOriginUnavailable
 	}
