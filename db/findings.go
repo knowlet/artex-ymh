@@ -693,6 +693,9 @@ func (d *DB) DeleteFinding(id int64) (n int64, err error) {
 			}
 			return err
 		}
+		if err := lockNodeDeletionAnchorsTx(context.Background(), tx); err != nil {
+			return err
+		}
 		var nodeID sql.NullInt64
 		if err := tx.QueryRow(`DELETE FROM findings WHERE id=$1 RETURNING node_id`, id).Scan(&nodeID); err != nil {
 			return err

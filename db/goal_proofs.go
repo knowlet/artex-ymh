@@ -164,6 +164,15 @@ func discardDeletedNodeProofsTx(ctx context.Context, tx *sql.Tx, sourceIDs []int
 	return discardGoalProofsTx(ctx, tx, sourceIDs)
 }
 
+// Node deletion's FK cascade needs an anchors mutation lock. Acquire it before
+// source/goal row locks: a dependent task's prepared deletion can otherwise hold
+// the anchors table while waiting for a goal whose proof we are invalidating.
+// Keep any existing task lock first, matching task deletion's established order.
+func lockNodeDeletionAnchorsTx(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `LOCK TABLE exploration_anchors IN ROW EXCLUSIVE MODE`)
+	return err
+}
+
 func proofIDsTx(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -182,6 +191,9 @@ func proofIDsTx(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]i
 }
 
 func discardExplorationGoalProofsTx(ctx context.Context, tx *sql.Tx, explorationID int64) error {
+	if err := lockNodeDeletionAnchorsTx(ctx, tx); err != nil {
+		return err
+	}
 	ids, err := proofIDsTx(ctx, tx, `SELECT id FROM exploration_nodes
 WHERE exploration_id=$1 AND kind IN ('fact','finding') ORDER BY id`, explorationID)
 	if err != nil {

@@ -593,6 +593,89 @@ func TestSecurityGoalProofAttachmentAndTaskDeletionLockOrder(t *testing.T) {
 	}
 }
 
+func TestSecurityGoalProofSourceDeletionAndDependentTaskDeletion(t *testing.T) {
+	for _, mode := range []string{"finding", "intent", "task"} {
+		t.Run(mode, func(t *testing.T) {
+			d, source, _, node, finding := goalProofFixture(t)
+			sourceTask, err := source.TaskID()
+			if err != nil {
+				t.Fatal(err)
+			}
+			child, err := d.CreateTaskWithOptions("dependent deletion", "inherited proof", TaskCreateOptions{SourceTaskIDs: []int64{sourceTask}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = d.DeleteTask(child.ID) })
+			goal, err := d.Exploration(child.ExplorationID).AddGoal(map[string]any{"text": "inherited proof"}, "human")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.Exploration(child.ExplorationID).ProveGoal(t.Context(), goal, node); err != nil {
+				t.Fatal(err)
+			}
+			intent, err := source.AddIntent(map[string]any{"summary": "source evidence"}, 1, nil, "planner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := source.Link(intent, RelYields, node); err != nil {
+				t.Fatal(err)
+			}
+			sourceDelete, sourcePID := goalProofConnection(t)
+			childDelete, _ := goalProofConnection(t)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			prepared, release := make(chan struct{}), make(chan struct{})
+			sourceDone, childDone := make(chan error, 1), make(chan error, 1)
+			go func() {
+				_, err := childDelete.DeleteTaskCascadePrepared(child.ID, false, false, false, func(TaskDeletePreparation) error {
+					close(prepared) // Task + assets/anchors table locks are held.
+					select {
+					case <-release:
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				})
+				childDone <- err
+			}()
+			select {
+			case <-prepared:
+			case err := <-childDone:
+				t.Fatalf("dependent deletion failed before barrier: %v", err)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			go func() {
+				var err error
+				if mode == "finding" {
+					_, err = sourceDelete.DeleteFinding(finding)
+				} else if mode == "intent" {
+					_, err = sourceDelete.Exploration(source.ID()).CancelIntent(intent)
+				} else {
+					err = sourceDelete.DeleteTask(sourceTask)
+				}
+				sourceDone <- err
+			}()
+			waitGoalProofLock(t, d, sourcePID, sourceDone)
+			close(release)
+			for _, done := range []<-chan error{sourceDone, childDone} {
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+			}
+			var remaining int
+			if err := d.QueryRow(`SELECT count(*) FROM exploration_nodes WHERE id=ANY($1::bigint[])`, []int64{node, goal}).Scan(&remaining); err != nil || remaining != 0 {
+				t.Fatalf("source/goal deletion incomplete: remaining=%d err=%v", remaining, err)
+			}
+		})
+	}
+}
+
 func goalProofConnection(t *testing.T) (*DB, int) {
 	t.Helper()
 	conn, err := sql.Open("pgx", testDSN(t))

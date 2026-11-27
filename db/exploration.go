@@ -465,6 +465,9 @@ func (s *ExplorationStore) CancelIntent(id int64) (IntentCleanup, error) {
 		return out, err
 	}
 	defer tx.Rollback()
+	if err := lockNodeDeletionAnchorsTx(context.Background(), tx); err != nil {
+		return out, err
+	}
 
 	// 锁定意图行确认存在(幂等:已删则 not found)。状态不校验——真删除对任何状态成立,
 	// running 的 worker 由调用方先停。
