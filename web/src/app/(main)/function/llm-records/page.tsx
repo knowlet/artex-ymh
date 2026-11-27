@@ -44,19 +44,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { formatTimestamp } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import type { LLMRecordItem, LLMRecordDetail, LLMTask } from "@/lib/types";
-
-function fmtTime(ts: string) {
-  return new Date(ts).toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
 
 function fmtLatency(ms: number) {
   if (ms < 1000) return `${ms}ms`;
@@ -414,7 +405,7 @@ export default function LLMRecordsPage() {
                       onClick={() => setSelected(rec)}
                     >
                       <TableCell className="text-xs text-muted-foreground tabular-nums">
-                        {fmtTime(rec.ts)}
+                        {formatTimestamp(rec.ts)}
                       </TableCell>
                       <TableCell className="text-xs font-mono text-muted-foreground">
                         {rec.task_id ? `#${rec.task_id}` : "-"}
@@ -475,7 +466,7 @@ export default function LLMRecordsPage() {
                 </Badge>
               )}
               <span className="text-xs text-muted-foreground">
-                {fmtTime(selected.ts)}
+                {formatTimestamp(selected.ts)}
               </span>
               <span className={cn("text-xs", selected.latency_ms > 30000 && "text-amber-500")}>
                 {fmtLatency(selected.latency_ms)}

@@ -36,14 +36,7 @@ func (dingTalkChannel) SecretKeys() []string { return []string{"webhook", "secre
 func (dingTalkChannel) DestinationKeys() []string { return []string{"webhook"} }
 
 func (dingTalkChannel) Validate(cfg map[string]any) error {
-	hook := cfgString(cfg, "webhook")
-	if hook == "" {
-		return errors.New("缺少 Webhook 地址")
-	}
-	if err := validateHTTPURL(hook); err != nil {
-		return fmt.Errorf("Webhook 地址无效: %w", err)
-	}
-	return nil
+	return validateWebhookConfig(cfg)
 }
 
 // Send 投递一次消息。有回链且是单条时用 ActionCard（带按钮），否则用 markdown。

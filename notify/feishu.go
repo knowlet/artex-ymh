@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -32,14 +31,7 @@ func (feishuChannel) SecretKeys() []string { return []string{"webhook", "secret"
 func (feishuChannel) DestinationKeys() []string { return []string{"webhook"} }
 
 func (feishuChannel) Validate(cfg map[string]any) error {
-	hook := cfgString(cfg, "webhook")
-	if hook == "" {
-		return errors.New("缺少 Webhook 地址")
-	}
-	if err := validateHTTPURL(hook); err != nil {
-		return fmt.Errorf("Webhook 地址无效: %w", err)
-	}
-	return nil
+	return validateWebhookConfig(cfg)
 }
 
 func (c feishuChannel) Send(ctx context.Context, cfg map[string]any, m Message) (int, error) {

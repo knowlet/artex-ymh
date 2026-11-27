@@ -16,6 +16,18 @@ import (
 	"time"
 )
 
+// validateWebhookConfig 校验使用 webhook 配置项的机器人渠道。
+func validateWebhookConfig(cfg map[string]any) error {
+	hook := cfgString(cfg, "webhook")
+	if hook == "" {
+		return errors.New("缺少 Webhook 地址")
+	}
+	if err := validateHTTPURL(hook); err != nil {
+		return fmt.Errorf("Webhook 地址无效: %w", err)
+	}
+	return nil
+}
+
 // allowLocalTargets 决定是否允许把消息投递到环回 / 链路本地地址。
 //
 // 默认拒绝。这几段地址不是 IM 机器人或公网邮件服务器会出现的地方，而它们能

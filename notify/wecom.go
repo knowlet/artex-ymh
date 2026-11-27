@@ -3,7 +3,6 @@ package notify
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 )
 
@@ -32,14 +31,7 @@ func (weComChannel) SecretKeys() []string { return []string{"webhook"} }
 func (weComChannel) DestinationKeys() []string { return []string{"webhook"} }
 
 func (weComChannel) Validate(cfg map[string]any) error {
-	hook := cfgString(cfg, "webhook")
-	if hook == "" {
-		return errors.New("缺少 Webhook 地址")
-	}
-	if err := validateHTTPURL(hook); err != nil {
-		return fmt.Errorf("Webhook 地址无效: %w", err)
-	}
-	return nil
+	return validateWebhookConfig(cfg)
 }
 
 func (c weComChannel) Send(ctx context.Context, cfg map[string]any, m Message) (int, error) {

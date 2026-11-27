@@ -30,6 +30,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
+import { formatCompactTokens } from "@/lib/format";
 import type {
   AssetInterceptKind,
   AssetInterceptRule,
@@ -43,13 +44,6 @@ import type {
   TaskNode,
   TaskScopeRow,
 } from "@/lib/types";
-
-// 紧凑格式化 token 数（12345 → 12.3k，2000000 → 2M）。
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + "M";
-  if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k";
-  return String(n);
-}
 
 // 缓存命中率 = 缓存读 / 输入（InputTokens 已含 cache_read 子集，故比值在 0–100%）。
 function cacheHitRate(cacheRead: number, input: number): string {
@@ -793,15 +787,15 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
                 <span className="tabular-nums">
                   <span className="text-muted-foreground">输入 </span>
-                  <span className="font-semibold">{fmtTokens(tokenTotals.input)}</span>
+                  <span className="font-semibold">{formatCompactTokens(tokenTotals.input)}</span>
                 </span>
                 <span className="tabular-nums">
                   <span className="text-muted-foreground">输出 </span>
-                  <span className="font-semibold">{fmtTokens(tokenTotals.output)}</span>
+                  <span className="font-semibold">{formatCompactTokens(tokenTotals.output)}</span>
                 </span>
                 <span className="tabular-nums">
                   <span className="text-muted-foreground">缓存读 </span>
-                  <span className="font-semibold">{fmtTokens(tokenTotals.cacheRead)}</span>
+                  <span className="font-semibold">{formatCompactTokens(tokenTotals.cacheRead)}</span>
                 </span>
                 <span className="tabular-nums">
                   <span className="text-muted-foreground">缓存命中率 </span>
@@ -830,9 +824,15 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                           {m.model}
                         </td>
                         <td className="py-1.5 pr-3 text-right tabular-nums">{m.calls}</td>
-                        <td className="py-1.5 pr-3 text-right tabular-nums">{fmtTokens(m.input_tokens)}</td>
-                        <td className="py-1.5 pr-3 text-right tabular-nums">{fmtTokens(m.output_tokens)}</td>
-                        <td className="py-1.5 pr-3 text-right tabular-nums">{fmtTokens(m.cache_read_tokens)}</td>
+                        <td className="py-1.5 pr-3 text-right tabular-nums">
+                          {formatCompactTokens(m.input_tokens)}
+                        </td>
+                        <td className="py-1.5 pr-3 text-right tabular-nums">
+                          {formatCompactTokens(m.output_tokens)}
+                        </td>
+                        <td className="py-1.5 pr-3 text-right tabular-nums">
+                          {formatCompactTokens(m.cache_read_tokens)}
+                        </td>
                         <td className="py-1.5 text-right tabular-nums text-emerald-500">
                           {cacheHitRate(m.cache_read_tokens, m.input_tokens)}
                         </td>
