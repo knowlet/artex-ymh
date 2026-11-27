@@ -3051,46 +3051,58 @@ func (s *Server) streamActivity(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering
 
-	// Subscribe BEFORE replaying history so events in between aren't lost; dedup the
-	// overlap by skipping channel events whose id was already replayed.
+	// Subscribe BEFORE replaying history so events in between wake the stream.
+	// Publications are only wakeups: concurrent publishers may deliver them out
+	// of ID order, so always read the committed database prefix before moving the
+	// SSE cursor. The store serializes ID allocation through commit per task.
 	ch, unsub := s.engine.Broadcaster().Subscribe(t.ID)
 	defer unsub()
+	ctx := r.Context()
 
 	// Emit a standard SSE id: line so the browser echoes it as Last-Event-ID on
 	// auto-reconnect (see cursor precedence above).
-	sendSSE := func(a db.Activity) {
+	sendSSE := func(a db.Activity) bool {
 		b, _ := json.Marshal(activityDTO(a))
-		fmt.Fprintf(w, "id: %d\ndata: %s\n\n", a.ID, b)
+		if _, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", a.ID, b); err != nil {
+			return false
+		}
 		flusher.Flush()
+		return true
 	}
 
 	// Compensate the DB backlog after `since` in batches until caught up. This is the
 	// gap between the history snapshot and the live tail — NOT the first-page history
 	// (that's the /activity/history endpoint). A long task can have far more than one
 	// batch, so loop instead of a single fixed read; on a query error log it and close
-	// so the client reconnects and retries from its last id (broadcast is lossy — the
-	// DB is the source of truth). The Broadcaster keeps buffering live events meanwhile;
-	// the id<=since skip below drops any that this replay already covered.
+	// so the client reconnects and retries from its last id. The same replay runs on
+	// live wakeups; it repairs reordered publications without skipping lower IDs.
 	const replayBatch = 500
-	for {
-		items, cursor, err := t.Store.ActivityList(intentPtr, since, replayBatch)
-		if err != nil {
-			log.Printf("[activity/stream] task=%s replay since=%d: %v", t.ID, since, err)
-			return
+	replay := func() bool {
+		for {
+			if ctx.Err() != nil {
+				return false
+			}
+			items, _, err := t.Store.ActivityList(intentPtr, since, replayBatch)
+			if err != nil {
+				log.Printf("[activity/stream] task=%s replay since=%d: %v", t.ID, since, err)
+				return false
+			}
+			for _, a := range items {
+				if !sendSSE(a) {
+					return false
+				}
+				since = a.ID
+			}
+			if len(items) < replayBatch {
+				return true
+			}
 		}
-		for _, a := range items {
-			sendSSE(a)
-		}
-		if cursor > since {
-			since = cursor
-		}
-		if len(items) < replayBatch {
-			break
-		}
+	}
+	if !replay() {
+		return
 	}
 	flusher.Flush()
 
-	ctx := r.Context()
 	ping := time.NewTicker(20 * time.Second)
 	defer ping.Stop()
 	for {
@@ -3107,9 +3119,15 @@ func (s *Server) streamActivity(w http.ResponseWriter, r *http.Request) {
 			if intentPtr != nil && (a.NodeID == nil || *a.NodeID != *intentPtr) {
 				continue // scoped session: only this intent's steps
 			}
-			since = a.ID
-			sendSSE(a)
+			if !replay() {
+				return
+			}
 		case <-ping.C:
+			// Some audit writers persist without publishing. Periodically query the
+			// same durable cursor so an otherwise quiet connection also catches up.
+			if !replay() {
+				return
+			}
 			fmt.Fprint(w, ": ping\n\n")
 			flusher.Flush()
 		}

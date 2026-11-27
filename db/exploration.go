@@ -465,6 +465,9 @@ func (s *ExplorationStore) CancelIntent(id int64) (IntentCleanup, error) {
 		return out, err
 	}
 	defer tx.Rollback()
+	if err := lockActivityAppend(tx, s.expID); err != nil {
+		return out, err
+	}
 	if err := lockNodeDeletionAnchorsTx(context.Background(), tx); err != nil {
 		return out, err
 	}
@@ -1130,17 +1133,31 @@ func (s *ExplorationStore) Stats() (map[string]int, error) {
 
 // AppendActivity records one worker step and returns its id.
 func (s *ExplorationStore) AppendActivity(a Activity) (int64, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if err := lockActivityAppend(tx, s.expID); err != nil {
+		return 0, err
+	}
 	metadata := a.Metadata
 	if len(metadata) == 0 {
 		metadata = json.RawMessage(`{}`)
 	}
 	var id int64
-	err := s.db.QueryRow(`
+	err = tx.QueryRow(`
 INSERT INTO activity(exploration_id, node_id, worker, kind, tool, tool_use_id, is_error, summary, detail, metadata, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, main_seg)
 VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),NULLIF($5,''),NULLIF($6,''),$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,$14,$15)
 RETURNING id`, s.expID, a.NodeID, utf8Clean(a.Worker), utf8Clean(a.Kind), utf8Clean(a.Tool), utf8Clean(a.ToolUseID), a.IsError, utf8Clean(a.Summary), utf8Clean(a.Detail),
 		metadata, a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens, a.MainSeg).Scan(&id)
-	return id, err
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // ExplorationDiag probes, at the moment of an activity FK violation (23503), why the
