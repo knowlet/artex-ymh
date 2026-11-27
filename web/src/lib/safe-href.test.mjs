@@ -28,3 +28,12 @@ test("safeHref rejects relative / protocol-relative / empty input", () => {
   assert.equal(safeHref(null), undefined);
   assert.equal(safeHref(undefined), undefined);
 });
+
+test("safeHref rejects credential-bearing and redacted legacy links", () => {
+  assert.equal(safeHref("https://fixture-user:fixture-secret@example.com/path"), undefined);
+  assert.equal(safeHref("https://fixture-user@example.com/path"), undefined);
+  assert.equal(safeHref("https://:fixture-secret@example.com/path"), undefined);
+  assert.equal(safeHref("https://@example.com/path"), undefined);
+  assert.equal(safeHref("https://REDACTED@example.com/path"), undefined);
+  assert.equal(safeHref("https://example.com/user@example.com?q=a@b#c@d"), "https://example.com/user@example.com?q=a@b#c@d");
+});

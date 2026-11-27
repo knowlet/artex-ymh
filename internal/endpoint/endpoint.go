@@ -77,7 +77,8 @@ func URL(raw string) (string, error) {
 // render as a clickable http(s) link. It does not rewrite the URL string, so
 // storage keys and operator-entered spelling stay stable (fragments and paths
 // are preserved; scheme/host sanity is enforced without sanitizing a separate
-// copy that could differ from what the caller stores).
+// copy that could differ from what the caller stores). Credentials belong in
+// the service's explicit auth fields, never in a URL used as an asset label.
 func ValidateAssetURL(raw string) error {
 	if raw == "" {
 		return errors.New("url is required")
@@ -97,6 +98,9 @@ func ValidateAssetURL(raw string) error {
 	scheme := strings.ToLower(u.Scheme)
 	if scheme != "http" && scheme != "https" {
 		return errors.New("资产 URL 仅支持 HTTP 或 HTTPS")
+	}
+	if u.User != nil {
+		return errors.New("资产 URL 不可嵌入凭据，请通过服务的 auth 字段配置认证")
 	}
 	return nil
 }

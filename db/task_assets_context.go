@@ -188,6 +188,9 @@ ORDER BY target.id LIMIT $`+limitPosition+` OFFSET $`+offsetPosition, pageArgs..
 		if err := rows.Scan(&asset.ID, &asset.Type, &asset.Label); err != nil {
 			return nil, total, err
 		}
+		if asset.Type == "service" || asset.Type == "endpoint" {
+			asset.Label = assetURLLabelForDisplay(asset.Label)
+		}
 		out = append(out, asset)
 	}
 	return out, total, rows.Err()

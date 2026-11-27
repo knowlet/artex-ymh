@@ -21,5 +21,8 @@ export function safeHref(raw: string | null | undefined): string | undefined {
     return undefined;
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+  // Userinfo belongs in explicit credential controls. Legacy asset labels may
+  // contain a REDACTED marker; those must not become authenticated navigation.
+  if (parsed.username || parsed.password || /^https?:\/\/[^/?#]*@/i.test(cleaned)) return undefined;
   return trimmed;
 }

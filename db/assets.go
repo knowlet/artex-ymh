@@ -969,8 +969,8 @@ type UpsertEndpointReq struct {
 // UpsertEndpoint inserts or merges an endpoint asset. Domain, port, root_domain
 // are auto-extracted from the URL.
 func (s *AssetStore) UpsertEndpoint(req UpsertEndpointReq) (int64, error) {
-	if req.URL == "" {
-		return 0, fmt.Errorf("url is required")
+	if err := endpoint.ValidateAssetURL(req.URL); err != nil {
+		return 0, err
 	}
 	if req.Method == "" {
 		return 0, fmt.Errorf("method is required")

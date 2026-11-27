@@ -428,6 +428,7 @@ func (d *DB) NotificationAssetNames(ctx context.Context, ids []int64) ([]string,
 // 兜底返回空串，由调用方决定怎么呈现「名字取不到的资产」——本函数不臆造占位符，
 // 否则「资产#42」这种噪音会混进推送消息里，读者还以为是真实域名。
 func assetDisplayName(typ, domain, ip, url, appName, bundleID string) string {
+	url = AssetURLForDisplay(url)
 	pick := func(vals ...string) string {
 		for _, v := range vals {
 			if strings.TrimSpace(v) != "" {

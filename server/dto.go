@@ -354,9 +354,9 @@ func assetLabel(a *db.Asset) string {
 	switch {
 	case a.URL != "":
 		if a.Method != "" {
-			return a.Method + " " + a.URL
+			return a.Method + " " + db.AssetURLForDisplay(a.URL)
 		}
-		return a.URL
+		return db.AssetURLForDisplay(a.URL)
 	case a.Domain != "":
 		if a.Port != nil && *a.Port > 0 {
 			return fmt.Sprintf("%s:%d", a.Domain, *a.Port)
