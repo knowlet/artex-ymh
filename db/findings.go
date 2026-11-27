@@ -81,6 +81,24 @@ func ValidSeverity(s string) bool {
 // nodeID may be 0 (stored as NULL). name may be "" (frontend falls back to
 // vulnclass). Returns the new finding id.
 func (d *DB) AddFinding(taskID, nodeID int64, vulnclass, name, severity, summary, evidence, worker string, assetIDs []int64) (int64, error) {
+	tx, err := d.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	// Match task deletion/archive lock order before taking a source-node lock;
+	// the later INSERT otherwise acquires this task's FK lock in reverse order.
+	if err := LockTaskEvidenceTx(tx, taskID); err != nil {
+		return 0, err
+	}
+	// Attaching a pending standalone row removes the legacy node's eligibility
+	// as proof. Lock its source node before INSERT (whose FK takes a key-share
+	// lock), so a concurrent proof or attachment cannot slip through.
+	if nodeID > 0 {
+		if err := discardGoalProofsTx(context.Background(), tx, []int64{nodeID}); err != nil {
+			return 0, err
+		}
+	}
 	aidsJSON, _ := json.Marshal(assetIDs)
 	if assetIDs == nil {
 		aidsJSON = []byte("[]")
@@ -93,12 +111,15 @@ func (d *DB) AddFinding(taskID, nodeID int64, vulnclass, name, severity, summary
 		nid = &nodeID
 	}
 	var id int64
-	err := d.QueryRow(
+	err = tx.QueryRow(
 		`INSERT INTO findings (task_id, node_id, vulnclass, name, severity, summary, evidence, worker, asset_ids)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
 		tid, nid, vulnclass, name, severity, summary, evidence, worker, string(aidsJSON),
 	).Scan(&id)
-	return id, err
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
 }
 
 // findingSelectCols is the column list (with task_description join) every finding
@@ -685,12 +706,22 @@ func (d *DB) DeleteFinding(id int64) (n int64, err error) {
 			}
 			return err
 		}
+		if err := lockNodeDeletionAnchorsTx(context.Background(), tx); err != nil {
+			return err
+		}
 		var nodeID sql.NullInt64
 		if err := tx.QueryRow(`DELETE FROM findings WHERE id=$1 RETURNING node_id`, id).Scan(&nodeID); err != nil {
 			return err
 		}
 		if nodeID.Valid {
-			if _, err := tx.Exec(`DELETE FROM exploration_nodes WHERE id=$1 AND kind='finding'`, nodeID.Int64); err != nil {
+			if err := discardGoalProofsTx(context.Background(), tx, []int64{nodeID.Int64}); err != nil {
+				return err
+			}
+			// Legacy data can have multiple rows for one node. Preserve the node
+			// while another finding still references it; deleting it would also
+			// acquire sibling row locks after the source lock (opposite triage).
+			if _, err := tx.Exec(`DELETE FROM exploration_nodes WHERE id=$1 AND kind='finding'
+AND NOT EXISTS (SELECT 1 FROM findings WHERE node_id=$1)`, nodeID.Int64); err != nil {
 				return err
 			}
 		}
@@ -704,11 +735,34 @@ func (d *DB) DeleteFinding(id int64) (n int64, err error) {
 // exploration finding nodes are cascade-deleted separately when the task's
 // exploration subgraph is dropped. Returns rows deleted.
 func (d *DB) DeleteFindingsByTask(taskID int64) (int64, error) {
-	res, err := d.Exec(`DELETE FROM findings WHERE task_id=$1`, taskID)
+	tx, err := d.Begin()
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	defer tx.Rollback()
+	nodes, err := proofIDsTx(context.Background(), tx, `SELECT node_id FROM findings
+WHERE task_id=$1 AND node_id IS NOT NULL ORDER BY id FOR UPDATE`, taskID)
+	if err != nil {
+		return 0, err
+	}
+	if err := discardGoalProofsTx(context.Background(), tx, nodes); err != nil {
+		return 0, err
+	}
+	// The bulk API leaves graph cleanup to its caller. Retained nodes must not
+	// become eligible synthetic evidence merely because their triage row vanished.
+	if _, err := tx.Exec(`UPDATE exploration_nodes SET state='dismissed',content_version=content_version+1
+WHERE id=ANY($1::bigint[]) AND kind='finding'`, nodes); err != nil {
+		return 0, err
+	}
+	res, err := tx.Exec(`DELETE FROM findings WHERE task_id=$1`, taskID)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return n, tx.Commit()
 }
 
 // SetFindingStatus updates one finding's triage state. Returns rows affected.
@@ -717,11 +771,27 @@ func (d *DB) DeleteFindingsByTask(taskID int64) (int64, error) {
 // SetFindingStatusWithNotify —— 直接调本函数会让「状态变更推送」静默失效。
 // 保留它是为了让不关心通知的用例（参数校验、复测流程）能单独驱动状态。
 func (d *DB) SetFindingStatus(id int64, status string) (int64, error) {
-	res, err := d.Exec(`UPDATE findings SET status=$1 WHERE id=$2`, status, id)
+	tx, err := d.Begin()
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	defer tx.Rollback()
+	var nodeID sql.NullInt64
+	if err := tx.QueryRow(`UPDATE findings SET status=$1 WHERE id=$2 RETURNING node_id`, status, id).Scan(&nodeID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if nodeID.Valid && !FindingStatusProvesGoal(status) {
+		if err := discardGoalProofsTx(context.Background(), tx, []int64{nodeID.Int64}); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return 1, nil
 }
 
 // FindingStatusByNodeID returns the triage status of the standalone finding row
