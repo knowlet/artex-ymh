@@ -145,17 +145,17 @@
     {
       "name": "nuclei-templates",
       "repository": "projectdiscovery/nuclei-templates",
-      "version": "v10.5.2",
-      "commit": "5442582a875f96887bfe403c6de562de460897e7",
+      "version": "v10.5.3",
+      "commit": "06e2a782a9a17331248f1d5b970e155b825213df",
       "license": "MIT",
-      "release_url": "https://github.com/projectdiscovery/nuclei-templates/releases/tag/v10.5.2",
-      "release_published_at": "2026-11-12T05:28:27Z",
-      "source_url": "https://github.com/projectdiscovery/nuclei-templates/tree/5442582a875f96887bfe403c6de562de460897e7",
+      "release_url": "https://github.com/projectdiscovery/nuclei-templates/releases/tag/v10.5.3",
+      "release_published_at": "2026-11-27T05:32:38Z",
+      "source_url": "https://github.com/projectdiscovery/nuclei-templates/tree/06e2a782a9a17331248f1d5b970e155b825213df",
       "assets": [
         {
-          "name": "nuclei-templates-10.5.2_checksums.txt",
-          "url": "https://github.com/projectdiscovery/nuclei-templates/releases/download/v10.5.2/nuclei-templates-10.5.2_checksums.txt",
-          "sha256": "8f3ac30e7d10a21f47ee492183a842523b4f78a93d70a52e100afeb862f79579"
+          "name": "nuclei-templates-10.5.3_checksums.txt",
+          "url": "https://github.com/projectdiscovery/nuclei-templates/releases/download/v10.5.3/nuclei-templates-10.5.3_checksums.txt",
+          "sha256": "5804db574fd9cad76f57d710552fd60371d40f112fed3ad9f9849519d69d8546"
         }
       ],
       "artifact_note": "This release publishes a checksums file only; source content is pinned by Git commit, not by an unverified archive SHA-256."

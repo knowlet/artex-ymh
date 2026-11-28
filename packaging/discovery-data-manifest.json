@@ -1,28 +1,28 @@
 {
   "files": [
     {
-      "bytes": 1668462,
+      "bytes": 1714541,
       "license": "CC0-1.0",
       "name": "cisa-kev",
       "path": "vulnerability-intel.json",
-      "sha256": "1676bb0c130d8c6382a57f556318277bf27bfd7ab39149352505e1b1ddaa349c",
-      "source_date": "2026-11-13T20:24:18.3008Z"
+      "sha256": "20a678a300597e8f1331c7602d4e6cd2edbe6480f5710e1a5892425d2f932c9d",
+      "source_date": "2026-11-27T18:03:12.5733Z"
     },
     {
       "bytes": 8120,
       "license": "MIT",
       "name": "projectdiscovery-releases",
       "path": "projectdiscovery-lock.json",
-      "sha256": "aeccd457a35a6e110376fe6e19502cb18c5e4d13aa8f460e478e79701b7b2f9f",
-      "source_date": "2026-11-12T05:28:27Z"
+      "sha256": "823fd391708f6e3e83d0c4208e6ee3660d7192ad328cfe37ab1f721a7b2d762f",
+      "source_date": "2026-11-27T05:32:38Z"
     },
     {
-      "bytes": 1302014,
+      "bytes": 1364063,
       "license": "MIT",
       "name": "nuclei-cve-index",
       "path": "nuclei-cve-index.json",
-      "sha256": "19c340d5ee9bc4b57f656f0be0abbc5c4b4d5d1253748e95c8cc3f187732727c",
-      "source_date": "2026-11-12T05:28:27Z"
+      "sha256": "5de9ca69771142a72929f95d2e22507cc76594430f41b9ec5180ecf058835c42",
+      "source_date": "2026-11-27T05:32:38Z"
     }
   ],
   "kind": "artex-discovery-intelligence",
